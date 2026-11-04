@@ -1,4 +1,4 @@
-"""AIHawk in the terminal: give it a resume, get the jobs that fit best, select them, apply."""
+"""AIHawk in the terminal: give it your resume, get the jobs that fit, select them and apply."""
 
 from __future__ import annotations
 
@@ -304,7 +304,7 @@ class AIHawk(App[None]):
             if self.resume or session.needs_resume():
                 path = self.resume
                 while path is None:
-                    answer = await self.push_screen_wait(TextPrompt("Where is your resume? PDF, Word or text.", placeholder="C:/Users/you/resume.pdf"))
+                    answer = await self.push_screen_wait(TextPrompt("Where is your resume? PDF, .docx or text.", placeholder="C:/Users/you/resume.pdf"))
                     if not answer:
                         self.say("Press r when you have a resume to give me.")
                         return
@@ -395,7 +395,7 @@ class AIHawk(App[None]):
 
     @work(exclusive=True, group="flow")
     async def new_resume(self) -> None:
-        answer = await self.push_screen_wait(TextPrompt("Where is your resume? PDF, Word or text.", placeholder="C:/Users/you/resume.pdf"))
+        answer = await self.push_screen_wait(TextPrompt("Where is your resume? PDF, .docx or text.", placeholder="C:/Users/you/resume.pdf"))
         if answer:
             self.resume = Path(answer.strip("\"' ")).expanduser()
             self.start()

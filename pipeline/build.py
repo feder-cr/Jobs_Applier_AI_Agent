@@ -3,7 +3,7 @@
     python pipeline/build.py --out work                 # everything
     python pipeline/build.py --out work --only riley    # only these sources
 
-Runs daily in .github/workflows/jobs-database.yml, which publishes work/out as a release. Each source is read into
+Scheduled daily in .github/workflows/jobs-database.yml, which publishes work/out as a release. Each source is read into
 work/sources/<name>.parquet in the columns of COMMON. A source that fails is left out of the day's database and named in
 the manifest; publish.py refuses a database that lost too much of itself. Postings are the same posting when their links
 are the same after `KEY`, and of those the row with the longest description is kept, the other rows adding their source's
@@ -31,10 +31,8 @@ import duckdb
 HF = "https://huggingface.co/datasets"
 HF_API = "https://huggingface.co/api/datasets"
 RAW = "https://raw.githubusercontent.com"
-# Files of about 128 MB and row groups of 2048 rows, measured on 100 postings of a 1.8 GB file read over HTTP through one
-# connection per search: 111 MB per search, against 231 MB with 5000-row groups and 470 MB with one connection per posting.
-# Any file size gives the same reads; 128 MB keeps the release at about 40 files. A group is a whole description column
-# chunk, which DuckDB cannot write below 2048 rows.
+# Files of about 128 MB and row groups of 2048 rows: small row groups let a search read only the rows it needs over HTTP.
+# A group is a whole description column chunk, which DuckDB cannot write below 2048 rows.
 MAX_FILE = "128MB"
 ROW_GROUP = 2048
 INDEX = "index.parquet"
@@ -178,8 +176,8 @@ def _rolebase(work: Path) -> str:
         WHEN 'lever' THEN 'https://jobs.lever.co/' || split_part(id, ':', 2) || '/' || split_part(id, ':', 3)
         WHEN 'ashby' THEN 'https://jobs.ashbyhq.com/' || split_part(id, ':', 2) || '/' || split_part(id, ':', 3)
         END)"""
-    # Links ending in a 12-character hex code are not the board's own ids: measured on 40 at random, 20 answered 404 and
-    # 6 answered 403, against none of 40 of its other links. A posting with no working link is of no use to anyone.
+    # Links ending in a 12-character hex code are not the board's own ids, and many of them answer 404 or 403 when checked.
+    # A posting with no working link is of no use to anyone.
     usable = r"closed_at IS NULL AND NOT regexp_matches(coalesce(url, ''), '/job/[0-9a-f]{12}$')"
     return select(source, url=url, ats="split_part(id, ':', 1)", remote="remote", posted_at="posted", where=usable)
 

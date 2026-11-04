@@ -28,7 +28,7 @@ AIHawk reads job pages written by strangers, fills their forms, and sends applic
 
 ## Known and accepted
 
-- **A script can send a form.** As a last resort, the model may run a script in the page (`browser_evaluate`). The refusal in `apply.py` does not check a script, so a script can send a form without the person's yes. This is accepted on purpose: a script is the last rung, offered only when the other browser tools cannot do the job. The script is watched after each call. Report a case where a script sends something the person did not select as a vulnerability.
+- **A script can send a form.** As a last resort, the model may run a script in the page (`browser_evaluate`). The refusal in `apply.py` does not check a script, so a script can send a form without the person's yes. This is accepted on purpose: a script is the last rung, offered only when the other browser tools cannot do the job. After each call that changes the page, AIHawk checks whether the page left the form's site; it cannot tell a send on the same site. Report a case where a script sends something the person did not select as a vulnerability.
 - **The mail plugins read the mailbox that the browser is signed into.** That is how a code or a link is taken from the mail. It is limited by the rules in those plugins, not by the browser.
 - **A captcha or a sign-in is not bypassed.** The model reports the form as blocked, and the person deals with it.
 - **The model is a third-party service.** Everything sent to it, including the CV and what the pages say, leaves the machine. The model's output is not trusted: the person selects, and the send is checked by AIHawk.

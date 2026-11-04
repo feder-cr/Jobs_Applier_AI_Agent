@@ -1,4 +1,4 @@
-"""The job database AIHawk publishes every day: read in place, so a search downloads only what it needs."""
+"""The job database AIHawk reads, as published in a release: read in place, so a search downloads only what it needs."""
 
 from __future__ import annotations
 
@@ -79,8 +79,8 @@ def page_text(markup: str) -> str:
 def stored_descriptions(refs: list[str], done: Callable[[int], None] = lambda _: None) -> list[str]:
     """The descriptions the database holds for these postings, in order; empty where its sources published none.
 
-    One connection, and one query per file: a file's footer is fetched once for the search, not once per posting. Measured
-    over HTTP on 100 postings of one 1.8 GB file: 470 MB with a connection per posting, 231 MB this way.
+    One connection, and one query per file: a file's footer is fetched once for the search, not once per posting, which
+    downloads far less over HTTP.
     `done` is told how many have been read, as each file is.
     """
     texts = [""] * len(refs)

@@ -10,5 +10,5 @@ src/aihawk/profile.py, src/aihawk/database.py
 
 The published job database
   Is merged from the public sources named in pipeline/build.py, each with its home and licence as far as
-  it states one; each release's manifest.json lists them and which were read that day, and every row
-  names the sources that carried it. Each posting belongs to its employer and links back to the original.
+  it states one; each release's manifest.json lists them, with the rows each gave or the error that left
+  it out that day, and every row names the sources that carried it. Each posting belongs to its employer and links back to the original.

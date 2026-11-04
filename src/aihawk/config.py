@@ -12,16 +12,15 @@ import yaml
 CONFIG_FILE = "aihawk.yaml"
 KEY_FILE = "key"
 DEFAULT_BASE_URL = "https://api.orcarouter.ai/v1"
-# Fills the forms and reads their screenshots. Measured on 11 real sites: about 3 minutes and 1.5 US cents a form; on hard local
-# forms 85 of 100, level with the best within noise. z-ai/glm-5.3-flash took twice as long at three times the cost.
+# Fills the forms and reads their screenshots. Chosen over z-ai/glm-5.3-flash, which was slower and dearer on the same forms.
 DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash"
-# For the plan and the other short calls of a search. Measured on OrcaRouter on five CVs: 10 s a plan, with valid graphs, where
-# deepseek-v4.1-flash broke the nested schema and glm-5.3-flash took minutes.
+# For the plan and the other short calls of a search. deepseek-v4.1-flash did not keep the plan's nested schema, and
+# z-ai/glm-5.3-flash was too slow for a search.
 DEFAULT_QUICK_MODEL = "google/gemini-3.5-flash"
-# Scores the postings the funnel picks. Measured against the title's fit on five people's searches: see judge.py.
+# Scores the postings the funnel picks. Chosen against the title's fit on five people's searches: see judge.py.
 DEFAULT_JUDGE_MODEL = "deepseek/deepseek-v4.1-flash"
-# Answers the six questions that shortlist the postings. Pinned, unlike the other models: the thresholds of judge.evidence() were measured
-# on this model's answers, and another model answers differently, so a change needs those thresholds measured again.
+# Answers the six questions that shortlist the postings. Kept as the default because the thresholds of judge.evidence() were set on this
+# model's answers, and another model answers differently, so a change needs those thresholds set again.
 DEFAULT_DECISION_MODEL = "typesafe/jev-1.14"
 DEFAULT_THRESHOLD = 4.0
 DEFAULT_DATABASE = "https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk/releases/download/jobs-latest/manifest.json"

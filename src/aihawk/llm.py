@@ -1,4 +1,4 @@
-"""The one model gateway: OrcaRouter, or any endpoint compatible with OpenAI's API that the settings name."""
+"""The one model gateway: OrcaRouter, or another endpoint that the settings name. It must serve OpenAI's chat API, and the decision model's /systemone call."""
 
 from __future__ import annotations
 

@@ -4,8 +4,15 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aihawk"
-description = "Find the jobs that fit your CV and apply to them, on a model through OrcaRouter and an undetected browser."
+description = "Give it your resume, get the jobs that fit, select them and apply. Runs in your terminal, with a browser you can watch."
 readme = "README.md"
+keywords = ["jobs", "job-search", "resume", "job-applications", "browser-automation"]
+classifiers = [
+    "Environment :: Console",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
 requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE", "NOTICE"]
@@ -31,6 +38,8 @@ aihawk = "aihawk.cli:run"
 
 [project.urls]
 Homepage = "https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk"
+Issues = "https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk/issues"
+Changelog = "https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk/blob/main/CHANGELOG.md"
 
 [tool.hatch.version]
 path = "src/aihawk/__init__.py"
