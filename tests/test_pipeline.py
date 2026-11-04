@@ -103,6 +103,12 @@ def test_a_healthy_database_is_published(rows: int, previous: int | None) -> Non
     publish.check(rows, previous)
 
 
+def test_a_release_interrupted_uploads_only_what_it_does_not_hold_whole() -> None:
+    local = {"a": 10, "b": 20, "c": 30}
+    assert publish.still_to_upload(local, {"a": 10, "b": 5}) == ["b", "c"]
+    assert publish.still_to_upload(local, local) == []
+
+
 def test_every_source_names_its_home_and_licence() -> None:
     names = [source.name for source in build.SOURCES]
     assert len(names) == len(set(names))

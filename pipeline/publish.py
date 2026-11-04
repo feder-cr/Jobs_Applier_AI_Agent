@@ -22,7 +22,34 @@ MIN_SHARE_OF_PREVIOUS = 0.7
 
 
 def gh(*arguments: str) -> str:
-    return subprocess.run(["gh", *arguments], check=True, capture_output=True, text=True).stdout
+    done = subprocess.run(["gh", *arguments], capture_output=True, text=True)
+    if done.returncode:
+        raise GhError(f"gh {arguments[0]} {arguments[1]}: {done.stderr.strip()}")
+    return done.stdout
+
+
+class GhError(Exception):
+    """A gh command failed; its message says why."""
+
+
+def still_to_upload(local: dict[str, int], uploaded: dict[str, int]) -> list[str]:
+    """The files a release does not hold whole yet."""
+    return [name for name, size in local.items() if uploaded.get(name) != size]
+
+
+def publish_files(repo: str, tag: str, folder: Path, names: list[str], notes: str) -> None:
+    """The release of the day. One an earlier attempt left as a draft is finished, not uploaded again: these are gigabytes."""
+    local = {name: (folder / name).stat().st_size for name in names}
+    try:
+        listed = json.loads(gh("release", "view", tag, "--repo", repo, "--json", "assets"))
+    except GhError:
+        gh("release", "create", tag, *(str(folder / name) for name in names), "--repo", repo, "--title", f"Job database {tag}", "--notes", notes, "--latest=false")
+        return
+    uploaded = {asset["name"]: asset["size"] for asset in listed["assets"] if asset["state"] == "uploaded"}
+    missing = still_to_upload(local, uploaded)
+    if missing:
+        gh("release", "upload", tag, *(str(folder / name) for name in missing), "--clobber", "--repo", repo)
+    gh("release", "edit", tag, "--draft=false", "--latest=false", "--repo", repo)
 
 
 def previous_rows(repo: str) -> int | None:
@@ -55,9 +82,9 @@ def main() -> None:
     check(manifest["rows_out"], None if arguments.allow_shrink else previous_rows(arguments.repo))
 
     tag = "jobs-" + manifest["built_at"][:19].replace(":", "").replace("-", "").replace("T", "-")
-    files = [str(arguments.out / item["name"]) for item in manifest["files"]]
+    names = [item["name"] for item in manifest["files"]]
     notes = f"{manifest['rows_out']} job postings. See {LATEST} for the current database."
-    gh("release", "create", tag, *files, "--repo", arguments.repo, "--title", f"Job database {tag}", "--notes", notes, "--latest=false")
+    publish_files(arguments.repo, tag, arguments.out, names, notes)
 
     manifest["base_url"] = f"https://github.com/{arguments.repo}/releases/download/{tag}"
     with tempfile.TemporaryDirectory() as folder:
@@ -66,14 +93,14 @@ def main() -> None:
         try:
             gh("release", "view", LATEST, "--repo", arguments.repo)
             gh("release", "upload", LATEST, str(latest), "--clobber", "--repo", arguments.repo)
-        except subprocess.CalledProcessError:
+        except GhError:
             gh("release", "create", LATEST, str(latest), "--repo", arguments.repo, "--title", "Job database: current", "--notes", "The manifest of the current job database.", "--latest=false")
 
     tags = gh("release", "list", "--repo", arguments.repo, "--limit", "200", "--json", "tagName", "--jq", ".[].tagName").split()
     dated = sorted(name for name in tags if name.startswith("jobs-") and name != LATEST)
     for old in dated[:-KEEP]:
         gh("release", "delete", old, "--repo", arguments.repo, "--yes", "--cleanup-tag")
-    print(f"published {tag}: {manifest['rows_out']} postings in {len(files)} files")
+    print(f"published {tag}: {manifest['rows_out']} postings in {len(names)} files")
 
 
 if __name__ == "__main__":
