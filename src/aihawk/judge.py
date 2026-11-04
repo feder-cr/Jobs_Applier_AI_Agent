@@ -12,6 +12,7 @@ from typing import Any
 from openai import AsyncOpenAI
 
 from aihawk.database import Job
+from aihawk.llm import refused
 
 DESCRIPTION_CHARS = 24000
 DECISION_ENDPOINT = "/systemone"
@@ -72,7 +73,11 @@ async def _read(client: AsyncOpenAI, model: str, cv: str, jobs: list[Job], asked
     """One request's values. A request that fails is split in two and each half tried again; a posting that fails alone is a failed verdict."""
     try:
         reply = await client.post(DECISION_ENDPOINT, body=request_body(model, cv, jobs, asked), cast_to=dict)
-    except Exception:  # noqa: BLE001  Whatever the failure, one bad posting must not cost the others their verdicts.
+    except Exception as error:
+        # Whatever the failure, one bad posting must not cost the others their verdicts. A refused key fails every request
+        # alike: splitting would only ask again, so it is raised for the screen.
+        if refused(error):
+            raise
         if len(jobs) == 1:
             return [None]
         middle = len(jobs) // 2

@@ -78,7 +78,7 @@ def parse_plugin(name: str, text: str) -> Plugin:
 
 
 def _files(folder: Traversable | Path) -> dict[str, str]:
-    return {item.name: item.read_text(encoding="utf-8") for item in folder.iterdir() if item.name.endswith(".md")}
+    return {item.name: item.read_text(encoding="utf-8-sig") for item in folder.iterdir() if item.name.endswith(".md")}
 
 
 def load_plugins(workspace: Path | None = None) -> tuple[Plugin, ...]:

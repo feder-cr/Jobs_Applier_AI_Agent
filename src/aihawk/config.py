@@ -120,7 +120,10 @@ class Config:
         from_environment = os.environ.get(self.api_key_env, "").strip()
         if from_environment:
             return from_environment
-        return self.key_file.read_text(encoding="utf-8").strip() if self.key_file.is_file() else ""
+        return self.key_file.read_text(encoding="utf-8-sig").strip() if self.key_file.is_file() else ""
+
+    def key_from_environment(self) -> bool:
+        return bool(os.environ.get(self.api_key_env, "").strip())
 
     def save_key(self, key: str) -> None:
         self.workspace.mkdir(parents=True, exist_ok=True)
@@ -215,7 +218,7 @@ def load_config(workspace: Path) -> Config:
     if not path.is_file():
         return Config(workspace=workspace)
     try:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        raw = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
     except yaml.YAMLError as error:
         raise ConfigError(f"{path} is not valid YAML: {error}") from error
     if not isinstance(raw, dict):
