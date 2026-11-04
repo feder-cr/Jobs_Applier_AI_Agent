@@ -15,7 +15,7 @@ from aihawk.config import Config, ConfigError, load_config
 from aihawk.database import search, stored_descriptions, with_description
 from aihawk.documents import score_job, tailor_cv, write_cv_pdf
 from aihawk.judge import evidence, fuse, questions
-from aihawk.llm import make_client
+from aihawk.llm import explain, make_client, refused
 from aihawk.plugins import Plugin, always_plugins, load_plugins, plugin_for
 from aihawk.profile import answer_question, install_resume
 from aihawk.store import SUBMITTED, Store, Stored, safe_name, write_applied
@@ -56,6 +56,14 @@ class Session:
         self.config.save_key(key)
         self._client = None
 
+    def refuse_key(self) -> str:
+        """OrcaRouter refused the key. One typed in is forgotten, so the next question asks for another; one from the environment is named."""
+        self._client = None
+        if self.config.key_from_environment():
+            return f"OrcaRouter refused the key in the {self.config.api_key_env} variable. Set it to a key from https://orcarouter.ai, then start AIHawk again."
+        self.config.key_file.unlink(missing_ok=True)
+        return "OrcaRouter refused the key, so AIHawk forgot it. Get one at https://orcarouter.ai and type it in again."
+
     def needs_resume(self) -> bool:
         return not self.config.cv.is_file() or not self.config.filters.include
 
@@ -91,7 +99,7 @@ class Session:
         for item, text in zip(batch, texts, strict=True):
             self.store.set_description(item.job.id, text)
         jobs = [replace(item.job, description=text) for item, text in zip(batch, texts, strict=True)]
-        cv = self.config.cv.read_text(encoding="utf-8")
+        cv = self.config.cv.read_text(encoding="utf-8-sig")
         asked = questions(self.config.goals, _places(self.config))
         def shown(done: int) -> None:
             status(f"Jev reads {done}/{len(jobs)}")
@@ -99,7 +107,10 @@ class Session:
         try:
             # The client is read here: with no key every verdict fails, the title alone decides, and the log says so once.
             values = await evidence(self.client, self.config.decision_model, cv, jobs, asked, shown)
-        except Exception:  # noqa: BLE001  Only the client can fail here; a batch that fails is a failed verdict inside evidence.
+        except Exception as error:
+            # Only the client can fail here; a batch that fails is a failed verdict inside evidence.
+            if refused(error):
+                raise
             values = [None] * len(jobs)
         failed = sum(value is None for value in values)
         if failed:
@@ -114,20 +125,26 @@ class Session:
         return len(best)
 
     async def score(self, items: list[Stored], on_scored: Callable[[], None], log: Log) -> None:
-        cv = self.config.cv.read_text(encoding="utf-8")
+        cv = self.config.cv.read_text(encoding="utf-8-sig")
         limit = asyncio.Semaphore(SCORING_AT_ONCE)
 
         async def one(item: Stored) -> None:
             async with limit:
                 try:
                     report = await score_job(self.client, self.config.judge_model, item.job, cv, self.config.goals)
-                except Exception as error:  # noqa: BLE001  One posting that cannot be judged must not stop the others.
-                    log(f"{item.job.company}: not judged: {error}")
+                except Exception as error:
+                    # One posting that cannot be judged must not stop the others.
+                    if refused(error):
+                        raise
+                    log(f"{item.job.company}: not judged: {explain(error)}")
                     return
             self.store.set_score(item.job.id, report["score"], report)
             on_scored()
 
-        await asyncio.gather(*(one(item) for item in items))
+        # A refused key is raised after the others, so the screen can ask for another one.
+        for result in await asyncio.gather(*(one(item) for item in items), return_exceptions=True):
+            if isinstance(result, Exception):
+                raise result
 
     async def _cv_for(self, item: Stored, cv: str, log: Log) -> Path:
         if item.cv_path and Path(item.cv_path).is_file():
@@ -177,18 +194,21 @@ class Session:
         plugin = self.plugin(item)
         if plugin is None:
             raise ConfigError(f"no plugin knows this site. Apply by hand: {item.job.url}")
-        cv = self.config.cv.read_text(encoding="utf-8")
+        cv = self.config.cv.read_text(encoding="utf-8-sig")
         cv_file = await self._cv_for(item, cv, log)
         job = replace(item.job, apply_url=plugin.form_url(item.job.url))
-        answers = self.config.answers.read_text(encoding="utf-8") if self.config.answers.is_file() else ""
+        answers = self.config.answers.read_text(encoding="utf-8-sig") if self.config.answers.is_file() else ""
         log(f"filling the form on {plugin.name}")
         extras = always_plugins(self.plugins)
         guidance = "\n\n".join([plugin.instructions, *(extra.instructions for extra in extras)])
         reaches = frozenset(host for extra in extras for host in extra.reaches)
         try:
             outcome = await apply_to_job(self.client, self.config.model, job, cv, answers, cv_file, self.config.data_dir, self.config.browser_profile, guidance, reaches)
-        except Exception as error:  # noqa: BLE001  One job's failure is reported and recorded; the next job still runs.
-            outcome = Outcome("failed", str(error) or type(error).__name__)
+        except Exception as error:
+            # One job's failure is reported and recorded; the next job still runs.
+            if refused(error):
+                raise
+            outcome = Outcome("failed", explain(error))
         self.store.set_status(item.job.id, outcome.status, outcome.summary)
         self.store.set_proof(item.job.id, outcome.proof)
         # The file for the person outside the app. One that another program holds open must not stop the next send.

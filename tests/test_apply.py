@@ -66,6 +66,10 @@ def ready(selector: str = "#send") -> list[Any]:
         ({"tag": "button", "type": "", "in_form": True, "text": "Submit Application"}, True, True),
         ({"tag": "button", "type": "button", "in_form": True, "text": "Add another"}, True, False),
         ({"tag": "input", "type": "checkbox", "in_form": True, "text": ""}, True, False),
+        # A captcha's box is an iframe in the page: its own words are not the page's, and nothing in it is a send.
+        ({"tag": "iframe", "type": "", "in_form": True, "text": ""}, True, False),
+        ({"tag": "iframe", "type": "", "in_form": False, "text": "Widget containing a Cloudflare security challenge"}, True, False),
+        ({"tag": "iframe", "type": "", "in_form": True, "text": "reCAPTCHA"}, False, False),
     ],
 )
 def test_sends_form(element: dict[str, Any], touched: bool, sends: bool) -> None:
@@ -213,6 +217,36 @@ def test_a_click_at_a_point_on_anything_else_passes() -> None:
     assert asyncio.run(refusal(PageAtAPoint(field), "browser_click_at", {"x": 10, "y": 20}, True)) is None
 
 
+def test_a_click_at_a_captcha_box_in_its_frame_passes() -> None:
+    frame = {"tag": "iframe", "type": "", "in_form": True, "text": ""}
+    assert asyncio.run(refusal(PageAtAPoint(frame), "browser_click_at", {"x": 10, "y": 20}, True)) is None
+
+
+class CaptchaPage(ScriptedBrowser):
+    """A form with a captcha box in a frame at one point, and a send control; the page stays on the form's address."""
+
+    def __init__(self) -> None:
+        super().__init__({"#send": SUBMIT, "#apply": {"tag": "button", "type": "button", "in_form": False, "text": "Apply"}}, page={"url": "https://u/apply", "text": "Form"})
+
+    async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> SimpleNamespace:
+        if name == "browser_evaluate" and "elementFromPoint" in (arguments or {}).get("expression", ""):
+            self.calls.append((name, arguments or {}))
+            frame = {"tag": "iframe", "type": "", "in_form": True, "text": ""}
+            return SimpleNamespace(isError=False, content=[SimpleNamespace(text=json.dumps(frame))])
+        return await super().call_tool(name, arguments)
+
+
+def test_a_captcha_box_is_clicked_twice_at_most_and_the_form_is_still_sent_after_it(tmp_path: Path) -> None:
+    browser = CaptchaPage()
+    captcha = tool_call("browser_click_at", x=40, y=50)
+    model = ScriptedModel([captcha], [tool_call("browser_click_at", call_id="again", x=40, y=50)], [tool_call("browser_click", selector="#apply")], ready(), VERIFIED)
+    outcome = run(model, browser, tmp_path / "proof.png")
+    assert outcome.status == "submitted"
+    assert [name for name, _ in browser.calls].count("browser_click_at") == 2
+    # The box is not typed text: it does not count as touching the form, so an Apply outside it stays a link.
+    assert browser.clicks() == ["#apply", "#send"]
+
+
 def test_script_is_offered_as_the_last_rung_and_refusal_does_not_check_it() -> None:
     tool = SimpleNamespace(name="browser_evaluate", annotations=SimpleNamespace(readOnlyHint=True))
     assert offered(tool)
@@ -236,6 +270,59 @@ def test_space_on_a_checkbox_passes() -> None:
 
 def test_enter_is_refused_whatever_the_argument_is_called() -> None:
     assert asyncio.run(refusal(ScriptedBrowser(), "browser_press_key", {"renamed": "Enter"}, True))
+
+
+def tag_field(placeholder: str = "", aria_label: str = "", tag: str = "input", kind: str = "text") -> dict[str, Any]:
+    return {"tag": tag, "type": kind, "in_form": True, "text": "", "placeholder": placeholder, "aria_label": aria_label}
+
+
+@pytest.mark.parametrize(
+    "placeholder",
+    [
+        "Type a skill and press enter",
+        "Premi invio dopo ogni competenza",
+        "Drücke Enter nach jeder Fähigkeit",
+        "Appuyez sur Entrée pour ajouter",
+        "Pulsa Intro tras cada habilidad",
+    ],
+)
+def test_enter_is_allowed_in_a_field_whose_own_placeholder_asks_for_it(placeholder: str) -> None:
+    browser = PageAtAPoint(tag_field(placeholder))
+    assert asyncio.run(refusal(browser, "browser_press_key", {"key": "Enter"}, True)) is None
+    assert "activeElement" in browser.calls[0][1]["expression"]
+
+
+def test_enter_is_allowed_when_the_aria_label_asks_for_it() -> None:
+    assert asyncio.run(refusal(PageAtAPoint(tag_field(aria_label="Skills, press enter to add")), "browser_press_key", {"key": "Enter"}, True)) is None
+
+
+@pytest.mark.parametrize(
+    "element",
+    [
+        tag_field("Search jobs"),
+        tag_field(""),
+        tag_field("press enter", tag="button", kind="button"),
+        tag_field("press enter", kind="submit"),
+        tag_field("press enter", kind="checkbox"),
+        tag_field("press enter", tag="div", kind=""),
+    ],
+)
+def test_enter_is_refused_unless_the_focused_field_is_a_text_input_that_asks_for_it(element: dict[str, Any]) -> None:
+    assert asyncio.run(refusal(PageAtAPoint(element), "browser_press_key", {"key": "Enter"}, True))
+
+
+def test_enter_is_refused_when_the_focus_cannot_be_told() -> None:
+    assert asyncio.run(refusal(ScriptedBrowser(), "browser_press_key", {"key": "Enter"}, True))
+
+
+@pytest.mark.parametrize("key", ["Control+Enter", "Shift+Enter", "Enter+Control", "NumpadEnter", "Return"])
+def test_a_combination_with_enter_is_refused_even_in_the_tag_field(key: str) -> None:
+    assert asyncio.run(refusal(PageAtAPoint(tag_field("Type a skill and press enter")), "browser_press_key", {"key": key}, True))
+
+
+def test_a_textarea_that_asks_for_enter_is_allowed() -> None:
+    area = tag_field("press enter to add", tag="textarea", kind="")
+    assert asyncio.run(refusal(PageAtAPoint(area), "browser_press_key", {"key": "Enter"}, True)) is None
 
 
 def test_a_new_line_is_refused_except_in_a_text_area() -> None:

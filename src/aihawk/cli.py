@@ -19,7 +19,7 @@ from aihawk.plugins import PluginError
 @click.argument("resume", required=False, type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--home", type=click.Path(file_okay=False, path_type=Path), help="Folder for this search. Default: ~/.aihawk")
 def main(resume: Path | None, home: Path | None) -> None:
-    """Find the jobs that fit your resume and apply to them."""
+    """Give it your resume, get the jobs that fit, select them and apply."""
     # Imported here: the interface takes a moment to load, and --help should not wait for it.
     from aihawk.tui import AIHawk
 

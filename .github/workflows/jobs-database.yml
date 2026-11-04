@@ -1,6 +1,6 @@
 name: job database
 
-# Every day: read the public job databases, merge them and publish the result as a release, which `aihawk scan` reads.
+# Every day: read the public job databases, merge them and publish the result as a release, which AIHawk reads when it searches.
 # Users never scrape anything.
 on:
   schedule:

@@ -1,16 +1,41 @@
-"""The one model gateway: OrcaRouter, or any endpoint compatible with OpenAI's API that the settings name."""
+"""The one model gateway: OrcaRouter, or another endpoint that the settings name. It must serve OpenAI's chat API, and the decision model's /systemone call."""
 
 from __future__ import annotations
 
 import json
 from typing import Any
 
-from openai import AsyncOpenAI
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    AsyncOpenAI,
+    AuthenticationError,
+    InternalServerError,
+    RateLimitError,
+)
 
 from aihawk.config import Config, ConfigError
 
 # The SDK's own default is ten minutes a try, and a model that hangs would hold a judgment that long.
 TIMEOUT = 180.0
+
+
+def refused(error: BaseException) -> bool:
+    """Whether OrcaRouter refused the key: the one failure that the person must fix before anything can work."""
+    return isinstance(error, AuthenticationError)
+
+
+def explain(error: Exception) -> str:
+    """What a failed model call says in plain words. The detail stays after it, and the key is never in it."""
+    if isinstance(error, APITimeoutError):
+        return f"OrcaRouter did not answer in time. Try again in a moment. ({error})"
+    if isinstance(error, APIConnectionError):
+        return f"OrcaRouter cannot be reached: check your internet connection and try again. ({error})"
+    if isinstance(error, RateLimitError):
+        return f"OrcaRouter is asking AIHawk to slow down: wait a few minutes and try again. ({error})"
+    if isinstance(error, InternalServerError):
+        return f"OrcaRouter failed on its side: try again in a few minutes. ({error})"
+    return f"Something failed: {error}"
 
 
 def make_client(config: Config) -> AsyncOpenAI:

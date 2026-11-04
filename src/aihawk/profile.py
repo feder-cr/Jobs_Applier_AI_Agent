@@ -152,7 +152,7 @@ def read_resume(path: Path) -> str:
         elif suffix == ".doc":
             raise ConfigError(f"{path.name}: save it as PDF or .docx first")
         else:
-            text = path.read_text(encoding="utf-8", errors="replace")
+            text = path.read_text(encoding="utf-8-sig", errors="replace")
     except (OSError, PyPdfError, zipfile.BadZipFile, KeyError, ElementTree.ParseError) as error:
         raise ConfigError(f"{path.name} cannot be read: {error}") from error
     text = re.sub(r"\n\s*\n+", "\n\n", text).strip()
@@ -169,7 +169,7 @@ async def install_resume(client: AsyncOpenAI, config: Config, path: Path) -> dic
     config.cv.write_text(cv, encoding="utf-8")
 
     settings_path = config.workspace / CONFIG_FILE
-    settings = (yaml.safe_load(settings_path.read_text(encoding="utf-8")) or {}) if settings_path.is_file() else {}
+    settings = (yaml.safe_load(settings_path.read_text(encoding="utf-8-sig")) or {}) if settings_path.is_file() else {}
     settings.update({
         "name": profile["name"],
         "goals": profile["goals"],
@@ -192,7 +192,7 @@ async def install_resume(client: AsyncOpenAI, config: Config, path: Path) -> dic
 def read_answers(config: Config) -> dict[str, str]:
     if not config.answers.is_file():
         return {}
-    data = yaml.safe_load(config.answers.read_text(encoding="utf-8"))
+    data = yaml.safe_load(config.answers.read_text(encoding="utf-8-sig"))
     return data if isinstance(data, dict) else {}
 
 

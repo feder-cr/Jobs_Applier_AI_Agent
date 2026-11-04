@@ -11,16 +11,19 @@ from types import SimpleNamespace
 from typing import Any
 
 import duckdb
+import httpx
 import pytest
 from click.testing import CliRunner
+from openai import APIConnectionError, APITimeoutError, AuthenticationError, InternalServerError, RateLimitError
 from pypdf import PdfWriter
-from textual.widgets import DataTable, Input
+from textual.widgets import DataTable, Input, RichLog, Static
 
 from aihawk import apply as apply_module
 from aihawk.apply import Outcome
 from aihawk.cli import main as cli_main
 from aihawk.config import ConfigError, load_config
 from aihawk.database import Job
+from aihawk.llm import explain
 from aihawk.profile import add_answers, answer_question, install_resume, read_answers, read_resume
 from aihawk.store import Proof, Stored
 from aihawk.tui import AIHawk, JobDetails, SendBatch, SentDetails, SentList, SignIn, TextPrompt
@@ -457,6 +460,21 @@ def test_a_text_resume_is_read(tmp_path: Path, name: str) -> None:
     assert read_resume(path).startswith("# Ada")
 
 
+def test_a_resume_and_the_files_beside_it_saved_with_a_byte_order_mark_are_read(home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Windows editors write a byte-order mark at the start of a text file: it is not part of what the file says.
+    bom = b"\xef\xbb\xbf"
+    path = tmp_path / "cv.txt"
+    path.write_bytes(bom + CV_TEXT.encode("utf-8"))
+    assert read_resume(path).startswith("# Ada")
+    (home / "answers.yaml").write_bytes(bom + b"email: ada@example.com\n")
+    (home / "aihawk.yaml").write_bytes(bom + f"database: {published(tmp_path)}\n".encode())
+    monkeypatch.delenv("ORCAROUTER_API_KEY")
+    (home / "key").write_bytes(bom + b"sk-orca-typed\n")
+    config = load_config(home)
+    assert read_answers(config) == {"email": "ada@example.com"}
+    assert config.api_key() == "sk-orca-typed"
+
+
 def test_a_pdf_with_no_text_says_what_to_do(tmp_path: Path) -> None:
     path = tmp_path / "scan.pdf"
     writer = PdfWriter()
@@ -588,5 +606,119 @@ def test_the_sign_in_key_is_refused_while_an_application_runs(home: Path, resume
             assert not any(name == "browser_open" for name, _ in server.calls)
             release.set()
             await wait_for_apply(pilot, app)
+
+    asyncio.run(run())
+
+
+REQUEST = httpx.Request("POST", "https://api.orcarouter.ai/v1/chat/completions")
+
+
+def status_error(kind: type, code: int) -> Exception:
+    return kind(f"Error code: {code}", response=httpx.Response(code, request=REQUEST), body=None)
+
+
+class RefusingModel:
+    """Every call is refused for its key, as OrcaRouter refuses a wrong one."""
+
+    def __init__(self) -> None:
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+
+    async def _create(self, **request: Any) -> Any:
+        raise status_error(AuthenticationError, 401)
+
+
+def log_text(app: AIHawk) -> str:
+    return "\n".join(line.text for line in app.query_one(RichLog).lines)
+
+
+def test_a_key_from_the_file_that_orcarouter_refuses_is_forgotten_and_asked_for_again(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ORCAROUTER_API_KEY")
+    (home / "key").write_text("sk-orca-wrong", encoding="utf-8")
+
+    async def run() -> None:
+        app = AIHawk(home, resume)
+        app.session._client = RefusingModel()  # type: ignore[assignment]
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
+            assert isinstance(app.screen, TextPrompt)
+            assert "forgot it" in log_text(app) and "orcarouter.ai" in log_text(app)
+            assert "sk-orca-wrong" not in log_text(app)
+            await pilot.press("escape")
+
+    asyncio.run(run())
+    assert not (home / "key").exists()
+
+
+def test_a_key_from_the_environment_that_orcarouter_refuses_is_named_and_not_asked_for(home: Path, resume: Path) -> None:
+    async def run() -> None:
+        app = AIHawk(home, resume)
+        app.session._client = RefusingModel()  # type: ignore[assignment]
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
+            assert not isinstance(app.screen, TextPrompt)
+            assert "ORCAROUTER_API_KEY variable" in log_text(app)
+            assert "test-key" not in log_text(app)
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    ("error", "words"),
+    [
+        (APIConnectionError(request=REQUEST), "cannot be reached"),
+        (APITimeoutError(request=REQUEST), "did not answer in time"),
+        (status_error(RateLimitError, 429), "slow down"),
+        (status_error(InternalServerError, 503), "failed on its side"),
+    ],
+)
+def test_a_failed_model_call_says_in_plain_words_what_happened_and_keeps_the_detail(error: Exception, words: str) -> None:
+    text = explain(error)
+    assert words in text
+    assert text.endswith(f"({error})")
+
+
+def test_ctrl_c_at_the_key_prompt_leaves_and_the_prompt_says_how(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ORCAROUTER_API_KEY")
+
+    async def run() -> None:
+        app = AIHawk(home, None)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            assert isinstance(app.screen, TextPrompt)
+            assert "Ctrl+C quits" in str(app.screen.query_one(".hint", Static).content)
+            await pilot.press("ctrl+c")
+            await pilot.pause(0.1)
+            assert not app.is_running
+
+    asyncio.run(run())
+
+
+def test_leaving_while_a_prompt_is_open_raises_nothing(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ORCAROUTER_API_KEY")
+
+    async def run() -> None:
+        app = AIHawk(home, None)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            assert isinstance(app.screen, TextPrompt)
+
+    asyncio.run(run())
+
+
+def test_at_80_columns_a_message_wraps_whole_and_quit_is_on_the_footer(home: Path, tmp_path: Path) -> None:
+    scan = tmp_path / "scanned.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(100, 100)
+    with scan.open("wb") as out:
+        writer.write(out)
+
+    async def run() -> None:
+        app = scripted_app(home, scan)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            await pilot.pause(0.3)  # settle waits for the flow, not for the first paint of the footer
+            assert "exported with text, or saved as .docx." in " ".join(line.text.strip() for line in app.query_one(RichLog).lines)
+            rows = ["".join(segment.text for segment in strip) for strip in app.screen._compositor.render_strips()]
+            assert any("q Quit" in row for row in rows)
 
     asyncio.run(run())

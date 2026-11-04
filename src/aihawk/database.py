@@ -1,4 +1,4 @@
-"""The job database AIHawk publishes every day: read in place, so a search downloads only what it needs."""
+"""The job database AIHawk reads, as published in a release: read in place, so a search downloads only what it needs."""
 
 from __future__ import annotations
 
@@ -79,8 +79,8 @@ def page_text(markup: str) -> str:
 def stored_descriptions(refs: list[str], done: Callable[[int], None] = lambda _: None) -> list[str]:
     """The descriptions the database holds for these postings, in order; empty where its sources published none.
 
-    One connection, and one query per file: a file's footer is fetched once for the search, not once per posting. Measured
-    over HTTP on 100 postings of one 1.8 GB file: 470 MB with a connection per posting, 231 MB this way.
+    One connection, and one query per file: a file's footer is fetched once for the search, not once per posting, which
+    downloads far less over HTTP.
     `done` is told how many have been read, as each file is.
     """
     texts = [""] * len(refs)
@@ -137,13 +137,20 @@ def with_description(job: Job, timeout: float = 30.0) -> Job:
         return job
 
 
+def unreachable(error: BaseException) -> str:
+    """What a database that cannot be downloaded says: in plain words, the detail kept after them."""
+    return f"The job database cannot be reached: check your internet connection, then start AIHawk again. ({error})"
+
+
 def load_manifest(location: str) -> dict[str, Any]:
     try:
         if location.startswith(("http://", "https://")):
             with urllib.request.urlopen(location, timeout=60) as response:
                 return json.load(response)
-        return json.loads(Path(location).read_text(encoding="utf-8"))
+        return json.loads(Path(location).read_text(encoding="utf-8-sig"))
     except (OSError, ValueError) as error:
+        if isinstance(error, OSError) and location.startswith(("http://", "https://")):
+            raise DatabaseError(unreachable(error)) from error
         raise DatabaseError(f"the job database's manifest at {location} cannot be read: {error}") from error
 
 
@@ -169,7 +176,7 @@ def local_index(manifest: dict[str, Any], location: str, cache: Path, log: Calla
             shutil.copyfileobj(response, out, 1 << 20)
     except OSError as error:
         partial.unlink(missing_ok=True)
-        raise DatabaseError(f"the job index at {source} cannot be downloaded: {error}") from error
+        raise DatabaseError(unreachable(error)) from error
     partial.replace(path)
     for old in cache.glob("index-*.parquet"):
         if old != path:

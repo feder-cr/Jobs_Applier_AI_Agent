@@ -12,15 +12,15 @@ import yaml
 CONFIG_FILE = "aihawk.yaml"
 KEY_FILE = "key"
 DEFAULT_BASE_URL = "https://api.orcarouter.ai/v1"
-# The model invisible_dots gives a new Dot, for the long work on a form. It reads screenshots.
-DEFAULT_MODEL = "z-ai/glm-5.3-flash"
-# For the plan and the other short calls of a search. Measured on OrcaRouter on five CVs: 10 s a plan, with valid graphs, where
-# deepseek-v4.1-flash broke the nested schema and glm-5.3-flash took minutes.
+# Fills the forms and reads their screenshots. Chosen over z-ai/glm-5.3-flash, which was slower and dearer on the same forms.
+DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash"
+# For the plan and the other short calls of a search. deepseek-v4.1-flash did not keep the plan's nested schema, and
+# z-ai/glm-5.3-flash was too slow for a search.
 DEFAULT_QUICK_MODEL = "google/gemini-3.5-flash"
-# Scores the postings the funnel picks. Measured against the title's fit on five people's searches: see judge.py.
+# Scores the postings the funnel picks. Chosen against the title's fit on five people's searches: see judge.py.
 DEFAULT_JUDGE_MODEL = "deepseek/deepseek-v4.1-flash"
-# Answers the six questions that shortlist the postings. Pinned, unlike the other models: the thresholds of judge.evidence() were measured
-# on this model's answers, and another model answers differently, so a change needs those thresholds measured again.
+# Answers the six questions that shortlist the postings. Kept as the default because the thresholds of judge.evidence() were set on this
+# model's answers, and another model answers differently, so a change needs those thresholds set again.
 DEFAULT_DECISION_MODEL = "typesafe/jev-1.14"
 DEFAULT_THRESHOLD = 4.0
 DEFAULT_DATABASE = "https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk/releases/download/jobs-latest/manifest.json"
@@ -120,7 +120,10 @@ class Config:
         from_environment = os.environ.get(self.api_key_env, "").strip()
         if from_environment:
             return from_environment
-        return self.key_file.read_text(encoding="utf-8").strip() if self.key_file.is_file() else ""
+        return self.key_file.read_text(encoding="utf-8-sig").strip() if self.key_file.is_file() else ""
+
+    def key_from_environment(self) -> bool:
+        return bool(os.environ.get(self.api_key_env, "").strip())
 
     def save_key(self, key: str) -> None:
         self.workspace.mkdir(parents=True, exist_ok=True)
@@ -215,7 +218,7 @@ def load_config(workspace: Path) -> Config:
     if not path.is_file():
         return Config(workspace=workspace)
     try:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        raw = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
     except yaml.YAMLError as error:
         raise ConfigError(f"{path} is not valid YAML: {error}") from error
     if not isinstance(raw, dict):

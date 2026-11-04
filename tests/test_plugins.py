@@ -105,6 +105,12 @@ def test_your_own_mail_plugin_wins_over_the_bundled_one(tmp_path: Path) -> None:
     assert set(always) == {"gmail", "outlook"}
 
 
+def test_a_plugin_saved_with_a_byte_order_mark_is_read(tmp_path: Path) -> None:
+    (tmp_path / "plugins").mkdir()
+    (tmp_path / "plugins" / "mysite.md").write_bytes(b"\xef\xbb\xbf---\nhosts: [my.example]\n---\nMine.")
+    assert plugin_for("https://my.example/1", load_plugins(tmp_path)).instructions == "Mine."
+
+
 def test_a_site_no_plugin_knows_has_no_plugin() -> None:
     assert plugin_for("https://nobody.example/1", load_plugins()) is None
 

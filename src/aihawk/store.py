@@ -139,7 +139,7 @@ class Store:
         self._db.close()
 
     def add(self, job: Job) -> bool:
-        """Record a job seen in a scan; True when it is new. A known job keeps its status and score."""
+        """Record a job seen in a search; True when it is new. A known job keeps its status and score."""
         now = _now()
         cursor = self._db.execute(
             "INSERT OR IGNORE INTO jobs (id, company, title, location, url, apply_url, description, ref, lexical, first_seen, updated)"

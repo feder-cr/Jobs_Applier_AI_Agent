@@ -10,7 +10,7 @@ site's own plugin, and it never makes a site count as one AIHawk can apply to. T
 
 A plugin only explains a site. What protects the person stays in apply.py, out of any plugin's reach: the model is told
 not to send the form and clicks on what would send it are refused (a last-resort script could still get around that),
-it writes nothing that the CV and the answers do not say, and it does not get around a captcha or a login.
+it writes nothing that the CV and the answers do not say, and no captcha is solved: a box to tick is clicked once, as a person would, and a puzzle or a login is blocked.
 """
 
 from __future__ import annotations
@@ -78,7 +78,7 @@ def parse_plugin(name: str, text: str) -> Plugin:
 
 
 def _files(folder: Traversable | Path) -> dict[str, str]:
-    return {item.name: item.read_text(encoding="utf-8") for item in folder.iterdir() if item.name.endswith(".md")}
+    return {item.name: item.read_text(encoding="utf-8-sig") for item in folder.iterdir() if item.name.endswith(".md")}
 
 
 def load_plugins(workspace: Path | None = None) -> tuple[Plugin, ...]:

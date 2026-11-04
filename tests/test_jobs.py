@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import csv
 import json
+import socket
 import textwrap
+import urllib.error
 from pathlib import Path
 
 import duckdb
@@ -271,6 +273,16 @@ def test_a_database_that_cannot_be_read_says_so(tmp_path: Path) -> None:
         search(str(tmp_path / "none.json"), Filters(include=("x",)), 60, tmp_path)
 
 
+def test_a_database_that_cannot_be_reached_says_so_in_plain_words_and_keeps_the_detail(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def no_network(*args: object, **kwargs: object) -> None:
+        raise urllib.error.URLError(socket.gaierror(11001, "getaddrinfo failed"))
+
+    monkeypatch.setattr("aihawk.database.urllib.request.urlopen", no_network)
+    with pytest.raises(DatabaseError, match="cannot be reached: check your internet connection") as error:
+        search("https://example.test/manifest.json", Filters(include=("x",)), 60, tmp_path)
+    assert "<urlopen error [Errno 11001] getaddrinfo failed>" in str(error.value)
+
+
 def test_page_text_keeps_the_words_and_drops_scripts() -> None:
     text = page_text("<html><head><title>x</title><style>a{}</style></head><body><nav>menu</nav><p>Build &amp; ship</p><script>evil()</script><li>Python</li></body></html>")
     assert text.split() == ["Build", "&", "ship", "Python"]
@@ -397,7 +409,7 @@ def test_the_list_weighs_the_judgment_and_the_title_together_and_keeps_what_jev_
 
 def test_a_new_folder_defaults_to_orcarouter_and_the_published_database(tmp_path: Path) -> None:
     config = load_config(tmp_path)
-    assert (config.base_url, config.model, config.api_key_env) == ("https://api.orcarouter.ai/v1", "z-ai/glm-5.3-flash", "ORCAROUTER_API_KEY")
+    assert (config.base_url, config.model, config.api_key_env) == ("https://api.orcarouter.ai/v1", "deepseek/deepseek-v4.1-flash", "ORCAROUTER_API_KEY")
     assert config.judge_model == "deepseek/deepseek-v4.1-flash"
     assert config.database.endswith("/releases/download/jobs-latest/manifest.json")
     assert not config.filters.include
