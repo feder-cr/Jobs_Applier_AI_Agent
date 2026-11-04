@@ -66,6 +66,10 @@ def ready(selector: str = "#send") -> list[Any]:
         ({"tag": "button", "type": "", "in_form": True, "text": "Submit Application"}, True, True),
         ({"tag": "button", "type": "button", "in_form": True, "text": "Add another"}, True, False),
         ({"tag": "input", "type": "checkbox", "in_form": True, "text": ""}, True, False),
+        # A captcha's box is an iframe in the page: its own words are not the page's, and nothing in it is a send.
+        ({"tag": "iframe", "type": "", "in_form": True, "text": ""}, True, False),
+        ({"tag": "iframe", "type": "", "in_form": False, "text": "Widget containing a Cloudflare security challenge"}, True, False),
+        ({"tag": "iframe", "type": "", "in_form": True, "text": "reCAPTCHA"}, False, False),
     ],
 )
 def test_sends_form(element: dict[str, Any], touched: bool, sends: bool) -> None:
@@ -211,6 +215,36 @@ def test_a_click_at_a_point_on_the_submit_control_is_refused_and_it_asks_about_t
 def test_a_click_at_a_point_on_anything_else_passes() -> None:
     field = {"tag": "input", "type": "text", "in_form": True, "text": ""}
     assert asyncio.run(refusal(PageAtAPoint(field), "browser_click_at", {"x": 10, "y": 20}, True)) is None
+
+
+def test_a_click_at_a_captcha_box_in_its_frame_passes() -> None:
+    frame = {"tag": "iframe", "type": "", "in_form": True, "text": ""}
+    assert asyncio.run(refusal(PageAtAPoint(frame), "browser_click_at", {"x": 10, "y": 20}, True)) is None
+
+
+class CaptchaPage(ScriptedBrowser):
+    """A form with a captcha box in a frame at one point, and a send control; the page stays on the form's address."""
+
+    def __init__(self) -> None:
+        super().__init__({"#send": SUBMIT, "#apply": {"tag": "button", "type": "button", "in_form": False, "text": "Apply"}}, page={"url": "https://u/apply", "text": "Form"})
+
+    async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> SimpleNamespace:
+        if name == "browser_evaluate" and "elementFromPoint" in (arguments or {}).get("expression", ""):
+            self.calls.append((name, arguments or {}))
+            frame = {"tag": "iframe", "type": "", "in_form": True, "text": ""}
+            return SimpleNamespace(isError=False, content=[SimpleNamespace(text=json.dumps(frame))])
+        return await super().call_tool(name, arguments)
+
+
+def test_a_captcha_box_is_clicked_twice_at_most_and_the_form_is_still_sent_after_it(tmp_path: Path) -> None:
+    browser = CaptchaPage()
+    captcha = tool_call("browser_click_at", x=40, y=50)
+    model = ScriptedModel([captcha], [tool_call("browser_click_at", call_id="again", x=40, y=50)], [tool_call("browser_click", selector="#apply")], ready(), VERIFIED)
+    outcome = run(model, browser, tmp_path / "proof.png")
+    assert outcome.status == "submitted"
+    assert [name for name, _ in browser.calls].count("browser_click_at") == 2
+    # The box is not typed text: it does not count as touching the form, so an Apply outside it stays a link.
+    assert browser.clicks() == ["#apply", "#send"]
 
 
 def test_script_is_offered_as_the_last_rung_and_refusal_does_not_check_it() -> None:
