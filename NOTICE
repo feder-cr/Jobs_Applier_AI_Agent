@@ -1,0 +1,14 @@
+AIHawk includes or adapts work from these projects.
+
+src/aihawk/documents.py
+  The shape of the job report (dimensions weighed by judgment, a score from 1 to 5, posting legitimacy
+  judged apart from the score) is adapted from career-ops (https://github.com/santifer/career-ops),
+  MIT License, Copyright (c) 2026 Santiago Fernandez de Valderrama. No file was copied.
+
+src/aihawk/profile.py, src/aihawk/database.py
+  The search plan's rules and the rarity weight follow the planner of the LLDB engine by the same author.
+
+The published job database
+  Is merged from the public sources named in pipeline/build.py, each with its home and licence as far as
+  it states one; each release's manifest.json lists them and which were read that day, and every row
+  names the sources that carried it. Each posting belongs to its employer and links back to the original.
