@@ -296,7 +296,7 @@ def test_a_model_that_never_finishes_fails() -> None:
         ({"role": "yes", "must_haves": "unclear", "level": "unclear", "location": "unclear"}, 3.5),
         ({"role": "unclear", "must_haves": "unclear", "level": "unclear", "location": "unclear"}, 2.5),
         ({"role": "yes", "must_haves": "no", "level": "yes", "location": "yes"}, 2.5),
-        ({"role": "yes", "must_haves": "yes", "level": "yes", "location": "no"}, 3.0),
+        ({"role": "yes", "must_haves": "yes", "level": "yes", "location": "no"}, 1.0),
         ({"role": "no", "must_haves": "yes", "level": "yes", "location": "yes"}, 2.5),
         ({"role": "no", "must_haves": "no", "level": "no", "location": "no"}, 1.0),
     ],

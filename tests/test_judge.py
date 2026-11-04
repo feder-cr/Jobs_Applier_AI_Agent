@@ -119,10 +119,13 @@ def test_a_system_with_no_build_uses_the_cloud_model_and_says_so_once(tmp_path: 
     monkeypatch.setattr(judge_module, "current_platform", lambda: ("Darwin", "x86_64"))
     judge = Judge(load_config(tmp_path))
     lines: list[str] = []
-    asyncio.run(judge.start(lines.append, lambda text: None))
+    statuses: list[str] = []
+    asyncio.run(judge.start(lines.append, statuses.append))
     assert judge.url == "https://api.orcarouter.ai/v1/systemone"
     assert (judge.model, judge.headers) == ("typesafe/jev-1.14", {"Authorization": "Bearer sk-test"})
     assert len(lines) == 1 and "typesafe/jev-1.14" in lines[0]
+    # No build means no download and no start: neither is said.
+    assert statuses == []
 
 
 def test_a_wrong_download_is_never_used_and_the_cloud_model_takes_over(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -131,8 +134,11 @@ def test_a_wrong_download_is_never_used_and_the_cloud_model_takes_over(tmp_path:
     serve_downloads(monkeypatch, Download([b"tampered"]))
     judge = Judge(load_config(tmp_path))
     lines: list[str] = []
-    asyncio.run(judge.start(lines.append, lambda text: None))
+    statuses: list[str] = []
+    asyncio.run(judge.start(lines.append, statuses.append))
     assert judge.model == "typesafe/jev-1.14" and "SHA-256" in lines[-1]
+    # A download was tried, so it is said; jevos never started, so that is not.
+    assert statuses == ["downloading jevos, about 650 MB, once"]
     assert not (tmp_path / "jevos" / "jev-linux-x64.tar.gz.part").exists()
     assert not (tmp_path / "jevos" / "READY").exists()
 
@@ -167,7 +173,7 @@ def test_the_log_odds_are_clamped_and_the_middle_is_no_evidence() -> None:
 
 
 @pytest.mark.parametrize("failure", [OSError("HTTP 500"), ValueError("not JSON")])
-def test_a_failed_verdict_is_zero_and_the_others_are_unchanged(monkeypatch: pytest.MonkeyPatch, failure: Exception) -> None:
+def test_a_failed_verdict_raises_so_it_is_never_taken_for_no_opinion(monkeypatch: pytest.MonkeyPatch, failure: Exception) -> None:
     def fake_post(url: str, body: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
         if "Broken" in body["state"]["job_posting"]:
             raise failure
@@ -175,7 +181,8 @@ def test_a_failed_verdict_is_zero_and_the_others_are_unchanged(monkeypatch: pyte
 
     monkeypatch.setattr(judge_module, "_post", fake_post)
     broken = Job("b", "Acme", "Broken Engineer", "Rome", "u", "a", "")
-    assert evidence("http://x", "jev-latest", {}, "cv", broken, ASKED) == 0.0
+    with pytest.raises(type(failure)):
+        evidence("http://x", "jev-latest", {}, "cv", broken, ASKED)
     # Four answers add, two subtract: 0.9 is the same log-odds each time.
     assert evidence("http://x", "jev-latest", {}, "cv", JOB, ASKED) == pytest.approx(2 * math.log(9))
 

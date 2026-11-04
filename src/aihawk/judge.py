@@ -184,14 +184,11 @@ def _post(url: str, body: dict[str, Any], headers: dict[str, str]) -> dict[str, 
 
 
 def evidence(url: str, model: str, headers: dict[str, str], cv: str, job: Job, asked: dict[str, tuple[str, int]]) -> float:
-    """The posting's evidence: each answer's log-odds, signed as its question says, added up. A failed call adds nothing."""
+    """The posting's evidence: each answer's log-odds, signed as its question says, added up. A failed call raises: the caller counts it."""
     state = {"candidate_cv": cv, "job_posting": f"{job.title} at {job.company}. Location: {job.location}\n\n{job.description[:DESCRIPTION_CHARS]}"}
     body = {"model": model, "state": state, "questions": {name: {"type": "noul", "instructions": text} for name, (text, _) in asked.items()}}
-    try:
-        answers = _post(url, body, headers)["answers"]
-        return sum(sign * logit(answers[name]["noul"]) for name, (_, sign) in asked.items())
-    except (OSError, KeyError, ValueError, TypeError):
-        return 0.0
+    answers = _post(url, body, headers)["answers"]
+    return sum(sign * logit(answers[name]["noul"]) for name, (_, sign) in asked.items())
 
 
 def fuse(lexical: list[float], evidence_of: list[float]) -> list[float]:
@@ -214,13 +211,14 @@ class Judge:
 
     async def start(self, log: Log, status: Log) -> None:
         root = self.config.workspace / "jevos"
-        if not (root / READY).is_file():
-            status("downloading jevos, about 650 MB, once")
-        status("starting jevos")
         loop = asyncio.get_running_loop()
         try:
             system, machine = current_platform()
+            # Said only when a download will really run: a system with no build, or an install already there, downloads nothing.
+            if not (root / READY).is_file() and archive_for(system, machine):
+                status("downloading jevos, about 650 MB, once")
             binary = await asyncio.to_thread(install, root, system, machine, lambda line: loop.call_soon_threadsafe(log, line))
+            status("starting jevos")
             self.process, port = await asyncio.to_thread(serve, binary, root / "serve.log")
         except Exception as error:  # noqa: BLE001  Whatever keeps jevos from running, the search goes on with the cloud model.
             self._cloud(log, str(error) or type(error).__name__)

@@ -69,6 +69,8 @@ def describe(job: Job) -> str:
 
 def score_from(answers: dict[str, str]) -> float:
     """The score, from 1 to 5: the middle, moved by what the answers show."""
+    if answers.get("location") == "no":
+        return 1.0
     moved = 2.5
     for name, (_, if_yes, if_no) in QUESTIONS.items():
         moved += if_yes if answers.get(name) == "yes" else if_no if answers.get(name) == "no" else 0.0

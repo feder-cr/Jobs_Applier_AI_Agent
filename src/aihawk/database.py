@@ -159,6 +159,11 @@ def _any_word(column: str, words: tuple[str, ...]) -> tuple[str, list[str]]:
     return f"regexp_matches({column}, ?)", [_word_pattern(words)]
 
 
+def _place_pattern(words: tuple[str, ...]) -> str:
+    """A place is a whole part of the location, between its separators: `Wales` is not in "New South Wales"."""
+    return "(?i)(?:^|[,;/|(])\\s*(?:" + "|".join(re.escape(word) for word in words) + ")\\s*(?:$|[,;/|)])"
+
+
 def rarity(postings: int, holding: int) -> float:
     """How telling a word is, from 0.05 to 1: a word in one posting of 50 or fewer counts in full."""
     return min(1.0, max(0.05, math.log(1 + postings / (1 + holding)) / math.log(51)))
@@ -195,7 +200,7 @@ def _place_and_age(filters: Filters, max_age_days: int) -> tuple[list[str], list
     names = [*filters.countries, *(place.upper() for place in filters.locations)] if filters.countries else []
     marks = ", ".join("?" for _ in names)
     if filters.locations:
-        clause, words = _any_word("coalesce(location, '')", filters.locations)
+        clause, words = "regexp_matches(coalesce(location, ''), ?)", [_place_pattern(filters.locations)]
         # A town's name is not enough where the country says otherwise: Richmond, Virginia is not the one near London.
         if names:
             clause = f"({clause} AND (coalesce(country, '') = '' OR upper(country) IN ({marks})))"

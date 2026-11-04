@@ -18,8 +18,10 @@ from textual.widgets import DataTable, Input
 from aihawk import apply as apply_module
 from aihawk.apply import Outcome
 from aihawk.config import ConfigError, load_config
+from aihawk.database import Job
 from aihawk.judge import Judge
 from aihawk.profile import add_answers, answer_question, install_resume, read_answers, read_resume
+from aihawk.store import Stored
 from aihawk.tui import AIHawk, ConfirmSend, JobDetails, SignIn, TextPrompt
 from fakes import ScriptedBrowser
 
@@ -122,6 +124,14 @@ async def settle(pilot: Any, app: AIHawk) -> None:
         if not running or isinstance(app.screen, (TextPrompt, ConfirmSend)):
             return
     raise AssertionError("the flow never settled")
+
+
+def test_a_judged_posting_with_no_text_says_so_in_its_status_and_keeps_its_score(home: Path) -> None:
+    app = AIHawk(home)
+    judged = Stored(Job("x", "Co", "Engineer", "Milan", "u", "u", ""), "scored", 3.0, None, None, None)
+    read = Stored(Job("y", "Co", "Engineer", "Milan", "u", "u", "A posting."), "scored", 3.0, None, None, None)
+    assert app.row(judged)[1] == "3.0" and app.row(judged)[-1] == "no text"
+    assert app.row(read)[-1] == ""
 
 
 def companies(app: AIHawk) -> list[str]:

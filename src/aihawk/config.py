@@ -69,6 +69,11 @@ class Filters:
     countries: tuple[str, ...] = ()
     plan: Plan = field(default_factory=Plan)
 
+    def titles(self) -> str:
+        """What a person reads as the job titles searched: the first wording of each of the plan's first nodes, not their ids."""
+        nodes = [node for node in self.plan.nodes if node.forms][:3]
+        return ", ".join(node.forms[0].text for node in nodes) or ", ".join(self.include[:3])
+
 
 @dataclass(frozen=True)
 class Config:

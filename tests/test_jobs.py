@@ -193,6 +193,20 @@ def test_a_place_is_found_by_its_word_by_its_country_code_or_by_a_remote_posting
     assert {job.id for job in jobs} == {"word", "code", "spelled", "open-remote"}
 
 
+def test_the_titles_a_person_reads_are_the_first_wordings_not_the_ids() -> None:
+    plan = Plan((Node("role", 1.0, (Form("Electrician"), Form("Approved Electrician"))), Node("testing", 1.5, (Form("EICR Tester"),))))
+    assert Filters(include=("role", "testing"), plan=plan).titles() == "Electrician, EICR Tester"
+    # Without a plan the ids are the words searched, and they are what is shown.
+    assert Filters(include=("python", "java")).titles() == "python, java"
+
+
+def test_a_place_word_is_a_whole_part_of_the_location_not_a_word_inside_a_longer_name(tmp_path: Path) -> None:
+    # The Australian posting has no country, so only its location can keep it out of a search for Wales.
+    path = catalogue(tmp_path, [("au", "Engineer", "Firm", "Moorebank, New South Wales, Australia"), ("uk", "Engineer", "Firm", "Cardiff, Wales, GB")])
+    _, jobs = search(path, Filters(include=("Engineer",), locations=("Wales",)), 60, tmp_path)
+    assert [job.id for job in jobs] == ["uk"]
+
+
 def test_the_own_city_comes_first_and_a_job_posted_once_per_place_is_one_job(tmp_path: Path) -> None:
     connection = duckdb.connect()
     connection.execute("CREATE TABLE t (key VARCHAR, url VARCHAR, title VARCHAR, company VARCHAR, location VARCHAR, description VARCHAR, posted_at VARCHAR)")

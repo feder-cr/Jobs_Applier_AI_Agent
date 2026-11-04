@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import re
 from collections.abc import Awaitable, Callable
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
@@ -76,7 +75,11 @@ class Session:
 
     async def find(self, log: Log) -> int:
         """Bring today's postings for this search into the store; how many are new."""
-        manifest, jobs = await asyncio.to_thread(search, self.config.database, self.config.filters, self.config.max_age_days, self.config.data_dir / "index", log)
+        loop = asyncio.get_running_loop()
+        # search runs in a thread, and the screen may be touched only from the loop: its lines are handed over to it.
+        manifest, jobs = await asyncio.to_thread(
+            search, self.config.database, self.config.filters, self.config.max_age_days, self.config.data_dir / "index", lambda line: loop.call_soon_threadsafe(log, line)
+        )
         new = sum(self.store.add(job) for job in jobs)
         log(f"{len(jobs)} postings fit your search, of {manifest['rows_out']:,} in today's database; {new} new")
         return new
@@ -87,7 +90,7 @@ class Session:
         batch = self.store.with_status("new")[:WIDE]
         if not batch:
             return 0
-        texts = await asyncio.to_thread(_descriptions, [item.job.ref for item in batch])
+        texts = await _read_descriptions([item.job.ref for item in batch], status)
         for item, text in zip(batch, texts, strict=True):
             self.store.set_description(item.job.id, text)
         jobs = [replace(item.job, description=text) for item, text in zip(batch, texts, strict=True)]
@@ -95,16 +98,27 @@ class Session:
         cv = self.config.cv.read_text(encoding="utf-8")
         asked = questions(self.config.goals, _places(self.config))
         limit = asyncio.Semaphore(JUDGE_AT_ONCE)
+        done = 0
 
-        async def weigh(job: Job) -> float:
+        async def weigh(job: Job) -> float | None:
+            nonlocal done
             async with limit:
-                return await judge.read(cv, job, asked)
+                try:
+                    value = await judge.read(cv, job, asked)
+                except Exception:  # noqa: BLE001  One posting jevos cannot read must not stop the others; it is counted below.
+                    value = None
+            done += 1
+            status(f"jevos reads {done}/{len(jobs)}")
+            return value
 
-        status(f"jevos reads {len(jobs)} postings")
-        values = list(await asyncio.gather(*(weigh(job) for job in jobs)))
+        values = await asyncio.gather(*(weigh(job) for job in jobs))
+        failed = sum(value is None for value in values)
+        if failed:
+            log(f"jevos could not read {failed} of {len(jobs)} postings: they are ranked by their title alone")
         for job, value in zip(jobs, values, strict=True):
-            self.store.set_evidence(job.id, value)
-        order = fuse([job.lexical for job in jobs], values)
+            if value is not None:
+                self.store.set_evidence(job.id, value)
+        order = fuse([job.lexical for job in jobs], [value or 0.0 for value in values])
         best = {jobs[index].id for index in sorted(range(len(jobs)), key=lambda index: -order[index])[:JUDGED]}
         self.store.set_statuses([job.id for job in jobs if job.id in best], "shortlisted")
         self.store.set_statuses([job.id for job in jobs if job.id not in best], "passed_over")
@@ -181,10 +195,20 @@ class Session:
         return outcome
 
 
-def _descriptions(refs: list[str]) -> list[str]:
-    """The descriptions the database holds, read eight at a time."""
-    with ThreadPoolExecutor(8) as pool:
-        return list(pool.map(stored_description, refs))
+async def _read_descriptions(refs: list[str], status: Log) -> list[str]:
+    """The descriptions the database holds, eight at a time, each count said as it finishes."""
+    limit = asyncio.Semaphore(8)
+    done = 0
+
+    async def one(ref: str) -> str:
+        nonlocal done
+        async with limit:
+            text = await asyncio.to_thread(stored_description, ref)
+        done += 1
+        status(f"reading descriptions {done}/{len(refs)}")
+        return text
+
+    return list(await asyncio.gather(*(one(ref) for ref in refs)))
 
 
 def _places(config: Config) -> str:

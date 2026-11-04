@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -96,10 +97,35 @@ def test_a_failed_verdict_leaves_the_others_as_they_were(tmp_path: Path, monkeyp
     live = Judge(session.config)
     live.url, live.model = "http://127.0.0.1:1/v1/systemone", "jev-latest"
     session._judge = live
-    funnel(session)
+    said: list[str] = []
+    asyncio.run(session.funnel(said.append, lambda line: None))
     evidence = {item.job.id: item.evidence for item in session.store.all()}
-    assert evidence["p007"] == 0.0
+    assert evidence["p007"] is None
     assert evidence["p008"] == pytest.approx(2 * math.log(9))
+    assert said == ["jevos could not read 1 of 100 postings: they are ranked by their title alone"]
+    assert len(session.store.with_status("shortlisted")) == JUDGED
+
+
+def test_the_funnel_says_how_many_descriptions_and_postings_it_has_read(tmp_path: Path) -> None:
+    session = session_with(tmp_path, 30)
+    heard: list[str] = []
+    asyncio.run(session.funnel(lambda line: None, heard.append))
+    assert heard[0] == "reading descriptions 1/30" and "reading descriptions 30/30" in heard
+    assert heard[-1] == "jevos reads 30/30"
+
+
+def test_a_scan_that_logs_from_its_thread_says_it_on_the_loop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[tuple[str, int]] = []
+
+    def searching(*args: Any) -> tuple[dict[str, Any], list[Job]]:
+        args[-1]("from the thread")
+        return {"rows_out": 0}, []
+
+    monkeypatch.setattr(session_module, "search", searching)
+    session = Session(tmp_path)
+    loop_thread = threading.get_ident()
+    asyncio.run(session.find(lambda line: seen.append((line, threading.get_ident()))))
+    assert seen == [("from the thread", loop_thread), ("0 postings fit your search, of 0 in today's database; 0 new", loop_thread)]
 
 
 def test_with_no_postings_left_the_funnel_does_nothing(tmp_path: Path) -> None:

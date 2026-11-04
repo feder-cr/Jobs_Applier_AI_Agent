@@ -177,7 +177,7 @@ class AIHawk(App[None]):
 
     def show_heading(self, progress: str = "") -> None:
         config = self.session.config
-        wanted = ", ".join(config.filters.include[:3]) or "no resume yet"
+        wanted = config.filters.titles() or "no resume yet"
         place = ", ".join(config.filters.locations[:3])
         left = " · ".join(part for part in (config.name, wanted, place) if part)
         self.query_one("#heading", Static).update(f"AIHawk  {left}" + (f"   [{progress}]" if progress else ""))
@@ -187,6 +187,9 @@ class AIHawk(App[None]):
         score = f"{item.score:.1f}" if item.score is not None else "-"
         can_apply = "auto" if self.session.plugin(item) else "link"
         status = STATUS_TEXT.get(item.status, item.status)
+        # A score from the title and the place alone: the person should know the posting's text was not read.
+        if item.score is not None and not item.job.description.strip():
+            status = ", ".join(part for part in (status, "no text") if part)
         return (Text(mark, style="bold green"), score, can_apply, item.job.company, item.job.title, item.job.location, status)
 
     def refresh_jobs(self) -> None:
@@ -238,7 +241,7 @@ class AIHawk(App[None]):
                 self.show_heading("reading your resume")
                 await session.load_resume(path)
                 self.show_heading()
-                self.say(f"Looking for: {', '.join(session.config.filters.include)}")
+                self.say(f"Looking for: {session.config.filters.titles()}")
                 self.say(f"In: {', '.join(session.config.filters.locations)}")
             self.show_heading("searching")
             await session.find(self.say)
