@@ -11,7 +11,7 @@ Fields are named: `name`, `email`, `phone`, `location`, `org` for the current co
 
 The location field, `#location-input`, suggests places as you type: pick one of the suggestions.
 
-Some forms show a captcha when sending: if the page asks for one, report the form as blocked.
+Some forms show a captcha when sending: a box to tick is handled as the rules say; a puzzle means the form is blocked.
 
 The submit control is `#btn-submit`, "Submit application".
 
