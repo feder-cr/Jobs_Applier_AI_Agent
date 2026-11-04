@@ -14,7 +14,7 @@ Dropdowns are `div[role="combobox"]` showing "--" until a choice is made, such a
 
 `#info\.dateAvailableToStart` takes MM/DD/YYYY and has a picker button beside it; work history dates take MM/YYYY.
 
-`#info\.skills` is a tag field ("Type a skill and press enter"). The Enter key is refused here, so leave it empty unless required; a required one goes back to the person.
+`#info\.skills` is a tag field ("Type a skill and press enter"). Leave it empty unless the form requires a skill. To add one, type one value from the CV or the answers, then press Enter, which makes it a tag; repeat for each. Enter is allowed only in this field, anywhere else it is refused. A required skill the files do not say goes back to the person.
 
 "Add Work History" and "Add Education" add rows, with the same fields numbered `.0`, `.1`. "Select Cover Letter" is a file: leave it empty unless required.
 

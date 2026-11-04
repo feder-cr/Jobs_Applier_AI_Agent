@@ -14,7 +14,7 @@ import pytest
 from mcp import ClientSession
 from mcp.client.stdio import stdio_client
 
-from aihawk.apply import MODEL_TOOLS, _open_browser, _server, apply_to_job, offered, server_parameters
+from aihawk.apply import MODEL_TOOLS, _open_browser, _server, apply_to_job, fill_form, offered, server_parameters, tool_text
 from aihawk.database import Job
 from aihawk.documents import write_cv_pdf
 from fakes import ScriptedModel, tool_call
@@ -35,6 +35,22 @@ FORM = b"""<!doctype html><title>Apply</title>
 SELECT_FORM = b"""<!doctype html><title>Pick</title>
 <form method="post" action="%s"><select id="pick" name="pick" onchange="this.form.submit()">
 <option value="">Choose</option><option value="a">A</option></select></form>"""
+# A tag field like Paylocity's skills: its Enter adds a tag and stops there, as a page's script does. The form has a submit
+# button, so an Enter that reached the form would send it: the POST count shows that it did not.
+TAG_FORM = b"""<!doctype html><title>Skills</title>
+<form method="post" action="/sent">
+<input id="skill" type="text" placeholder="Type a skill and press enter">
+<ul id="tags"></ul>
+<button id="send">Submit application</button>
+</form>
+<script>
+const field = document.getElementById('skill');
+field.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter') return;
+  event.preventDefault();
+  if (field.value) { const tag = document.createElement('li'); tag.textContent = field.value; document.getElementById('tags').append(tag); field.value = ''; }
+});
+</script>"""
 # The same send on the same site, by a script: the page stays where it is and only its text changes.
 SAME_SITE_SELECT = b"""<!doctype html><title>Pick</title>
 <select id="pick" name="pick" onchange="fetch('/sent', {method: 'POST', body: new URLSearchParams({pick: this.value})}).then(() => { document.body.innerHTML = '<h1>Thank you, your application was received</h1>'; })">
@@ -75,6 +91,8 @@ class Site(BaseHTTPRequestHandler):
             self._page(SAME_SITE_SELECT)
         elif self.path == "/leave":
             self._page(SELECT_FORM % Site.leave_to.encode())
+        elif self.path == "/skills":
+            self._page(TAG_FORM)
         else:
             self._page(FORM)
 
@@ -127,6 +145,29 @@ def test_the_form_is_sent_once_with_the_name_and_the_cv_and_what_the_page_said_i
     assert b"harmless-click-reached-the-page" in Site.posts[0]
     assert outcome.proof.verdict == "submitted" and "Thank you" in outcome.proof.text
     assert Path(outcome.proof.screenshot).read_bytes().startswith(b"\x89PNG")
+
+
+def test_enter_in_a_tag_field_adds_the_tag_and_the_form_is_not_posted(site: str, tmp_path: Path) -> None:
+    async def fill() -> int:
+        async with _server(tmp_path, tmp_path / "browser") as (session, _):
+            await _open_browser(session, tmp_path / "browser-profile")
+            try:
+                await session.call_tool("browser_navigate", {"url": site + "skills"})
+                model = ScriptedModel(
+                    [tool_call("browser_click", selector="#skill")],
+                    [tool_call("browser_type", selector="#skill", text="Python")],
+                    [tool_call("browser_press_key", key="Enter")],
+                    [tool_call("finish_form", status="blocked", summary="checked the tag", submit_selector="", questions=[])],
+                )
+                report = await fill_form(session, [], model, "m", "brief", form_url=site)
+                assert report["status"] == "blocked"
+                tags = await session.call_tool("browser_evaluate", {"expression": "document.querySelectorAll('#tags li').length"})
+                return int(tool_text(tags))
+            finally:
+                await session.call_tool("browser_close", {})
+
+    assert asyncio.run(fill()) == 1
+    assert Site.posts == []
 
 
 @pytest.fixture

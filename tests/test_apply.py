@@ -238,6 +238,59 @@ def test_enter_is_refused_whatever_the_argument_is_called() -> None:
     assert asyncio.run(refusal(ScriptedBrowser(), "browser_press_key", {"renamed": "Enter"}, True))
 
 
+def tag_field(placeholder: str = "", aria_label: str = "", tag: str = "input", kind: str = "text") -> dict[str, Any]:
+    return {"tag": tag, "type": kind, "in_form": True, "text": "", "placeholder": placeholder, "aria_label": aria_label}
+
+
+@pytest.mark.parametrize(
+    "placeholder",
+    [
+        "Type a skill and press enter",
+        "Premi invio dopo ogni competenza",
+        "Drücke Enter nach jeder Fähigkeit",
+        "Appuyez sur Entrée pour ajouter",
+        "Pulsa Intro tras cada habilidad",
+    ],
+)
+def test_enter_is_allowed_in_a_field_whose_own_placeholder_asks_for_it(placeholder: str) -> None:
+    browser = PageAtAPoint(tag_field(placeholder))
+    assert asyncio.run(refusal(browser, "browser_press_key", {"key": "Enter"}, True)) is None
+    assert "activeElement" in browser.calls[0][1]["expression"]
+
+
+def test_enter_is_allowed_when_the_aria_label_asks_for_it() -> None:
+    assert asyncio.run(refusal(PageAtAPoint(tag_field(aria_label="Skills, press enter to add")), "browser_press_key", {"key": "Enter"}, True)) is None
+
+
+@pytest.mark.parametrize(
+    "element",
+    [
+        tag_field("Search jobs"),
+        tag_field(""),
+        tag_field("press enter", tag="button", kind="button"),
+        tag_field("press enter", kind="submit"),
+        tag_field("press enter", kind="checkbox"),
+        tag_field("press enter", tag="div", kind=""),
+    ],
+)
+def test_enter_is_refused_unless_the_focused_field_is_a_text_input_that_asks_for_it(element: dict[str, Any]) -> None:
+    assert asyncio.run(refusal(PageAtAPoint(element), "browser_press_key", {"key": "Enter"}, True))
+
+
+def test_enter_is_refused_when_the_focus_cannot_be_told() -> None:
+    assert asyncio.run(refusal(ScriptedBrowser(), "browser_press_key", {"key": "Enter"}, True))
+
+
+@pytest.mark.parametrize("key", ["Control+Enter", "Shift+Enter", "Enter+Control", "NumpadEnter", "Return"])
+def test_a_combination_with_enter_is_refused_even_in_the_tag_field(key: str) -> None:
+    assert asyncio.run(refusal(PageAtAPoint(tag_field("Type a skill and press enter")), "browser_press_key", {"key": key}, True))
+
+
+def test_a_textarea_that_asks_for_enter_is_allowed() -> None:
+    area = tag_field("press enter to add", tag="textarea", kind="")
+    assert asyncio.run(refusal(PageAtAPoint(area), "browser_press_key", {"key": "Enter"}, True)) is None
+
+
 def test_a_new_line_is_refused_except_in_a_text_area() -> None:
     field = {"tag": "input", "type": "text", "in_form": True, "text": ""}
     area = {"tag": "textarea", "type": "", "in_form": True, "text": ""}

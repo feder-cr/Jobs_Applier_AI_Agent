@@ -397,7 +397,7 @@ def test_the_list_weighs_the_judgment_and_the_title_together_and_keeps_what_jev_
 
 def test_a_new_folder_defaults_to_orcarouter_and_the_published_database(tmp_path: Path) -> None:
     config = load_config(tmp_path)
-    assert (config.base_url, config.model, config.api_key_env) == ("https://api.orcarouter.ai/v1", "z-ai/glm-5.3-flash", "ORCAROUTER_API_KEY")
+    assert (config.base_url, config.model, config.api_key_env) == ("https://api.orcarouter.ai/v1", "deepseek/deepseek-v4.1-flash", "ORCAROUTER_API_KEY")
     assert config.judge_model == "deepseek/deepseek-v4.1-flash"
     assert config.database.endswith("/releases/download/jobs-latest/manifest.json")
     assert not config.filters.include

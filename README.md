@@ -57,7 +57,7 @@ A plugin is a Markdown file in [`src/aihawk/plugins/`](src/aihawk/plugins): a pr
 
 The search plan is an editable graph in `filters.plan` of `~/.aihawk/aihawk.yaml`; restart `aihawk` after editing it.
 
-Models go through OrcaRouter: `model` (default `z-ai/glm-5.3-flash`) writes the CV and fills forms; `quick_model` (default `google/gemini-3.5-flash`) writes the plan; `decision_model` (default `typesafe/jev-1.14`) shortlists the jobs; `judge_model` (default `deepseek/deepseek-v4.1-flash`) scores them. Any OpenAI-compatible endpoint with tool calling and structured output can replace OrcaRouter through `base_url`.
+Models go through OrcaRouter: `model` (default `deepseek/deepseek-v4.1-flash`) writes the CV and fills forms; `quick_model` (default `google/gemini-3.5-flash`) writes the plan; `decision_model` (default `typesafe/jev-1.14`) shortlists the jobs; `judge_model` (default `deepseek/deepseek-v4.1-flash`) scores them. Any OpenAI-compatible endpoint with tool calling and structured output can replace OrcaRouter through `base_url`.
 
 ## Thanks
 

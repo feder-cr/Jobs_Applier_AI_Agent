@@ -12,8 +12,9 @@ import yaml
 CONFIG_FILE = "aihawk.yaml"
 KEY_FILE = "key"
 DEFAULT_BASE_URL = "https://api.orcarouter.ai/v1"
-# The model invisible_dots gives a new Dot, for the long work on a form. It reads screenshots.
-DEFAULT_MODEL = "z-ai/glm-5.3-flash"
+# Fills the forms and reads their screenshots. Measured on 11 real sites: about 3 minutes and 1.5 US cents a form; on hard local
+# forms 85 of 100, level with the best within noise. z-ai/glm-5.3-flash took twice as long at three times the cost.
+DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash"
 # For the plan and the other short calls of a search. Measured on OrcaRouter on five CVs: 10 s a plan, with valid graphs, where
 # deepseek-v4.1-flash broke the nested schema and glm-5.3-flash took minutes.
 DEFAULT_QUICK_MODEL = "google/gemini-3.5-flash"
