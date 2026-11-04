@@ -13,7 +13,7 @@ from openai import AsyncOpenAI
 from aihawk.apply import Confirm, Outcome, apply_to_job
 from aihawk.apply import sign_in as sign_in_browser
 from aihawk.config import Config, ConfigError, load_config
-from aihawk.database import Job, search, stored_description, with_description
+from aihawk.database import search, stored_description, with_description
 from aihawk.documents import score_job, tailor_cv, write_cv_pdf
 from aihawk.judge import evidence, fuse, questions
 from aihawk.llm import make_client
@@ -24,7 +24,6 @@ from aihawk.store import SUBMITTED, Store, Stored
 # The funnel: the next WIDE postings by title are weighed by the decision model, and the best JUDGED of them are scored by the judge model.
 WIDE = 100
 JUDGED = 25
-JUDGE_AT_ONCE = 4
 SCORING_AT_ONCE = 5
 MAX_ROUNDS = 3
 
@@ -93,22 +92,14 @@ class Session:
         jobs = [replace(item.job, description=text) for item, text in zip(batch, texts, strict=True)]
         cv = self.config.cv.read_text(encoding="utf-8")
         asked = questions(self.config.goals, _places(self.config))
-        limit = asyncio.Semaphore(JUDGE_AT_ONCE)
-        done = 0
-
-        async def weigh(job: Job) -> float | None:
-            nonlocal done
-            async with limit:
-                try:
-                    # The client is read here, so a missing key is one more failed verdict: the title alone decides, and the log says so once.
-                    value = await evidence(self.client, self.config.decision_model, cv, job, asked)
-                except Exception:  # noqa: BLE001  One posting the model cannot read must not stop the others; it is counted below.
-                    value = None
-            done += 1
+        def shown(done: int) -> None:
             status(f"Jev reads {done}/{len(jobs)}")
-            return value
 
-        values = await asyncio.gather(*(weigh(job) for job in jobs))
+        try:
+            # The client is read here: with no key every verdict fails, the title alone decides, and the log says so once.
+            values = await evidence(self.client, self.config.decision_model, cv, jobs, asked, shown)
+        except Exception:  # noqa: BLE001  Only the client can fail here; a batch that fails is a failed verdict inside evidence.
+            values = [None] * len(jobs)
         failed = sum(value is None for value in values)
         if failed:
             log(f"Jev could not read {failed} of {len(jobs)} postings: they are ranked by their title alone")

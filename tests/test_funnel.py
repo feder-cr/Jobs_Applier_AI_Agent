@@ -27,8 +27,9 @@ def values(monkeypatch: pytest.MonkeyPatch) -> dict[str, float]:
     """The evidence per posting, as the decision model would have said it: none, unless a test gives some."""
     given: dict[str, float] = {}
 
-    async def scripted(client: Any, model: str, cv: str, job: Job, asked: dict[str, Any]) -> float:
-        return given.get(job.id, 0.0)
+    async def scripted(client: Any, model: str, cv: str, jobs: list[Job], asked: dict[str, Any], progress: Any) -> list[float]:
+        progress(len(jobs))
+        return [given.get(job.id, 0.0) for job in jobs]
 
     monkeypatch.setattr(session_module, "evidence", scripted)
     return given
@@ -94,9 +95,9 @@ def test_the_passed_over_postings_are_kept_and_listed_below_the_judged(tmp_path:
 
 def test_a_failed_verdict_is_counted_once_and_the_others_are_as_they_were(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def scripted_endpoint(request: httpx.Request) -> httpx.Response:
-        body = json.loads(request.content)
-        if "Engineer 7 at" in body["state"]["job_posting"]:
+        if b"Engineer 7 at" in request.content:
             return httpx.Response(400, json={"error": "the request is wrong"})
+        body = json.loads(request.content)
         return httpx.Response(200, json={"answers": {name: {"type": "noul", "noul": 0.9} for name in body["questions"]}})
 
     # The real evidence, over a scripted endpoint: a refused posting is one failed verdict, not a crash.
