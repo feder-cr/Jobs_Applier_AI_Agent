@@ -5,11 +5,6 @@ src/aihawk/documents.py
   judged apart from the score) is adapted from career-ops (https://github.com/santifer/career-ops),
   MIT License, Copyright (c) 2026 Santiago Fernandez de Valderrama. No file was copied.
 
-src/aihawk/judge.py
-  jevos, the local judge of a posting's fit, is downloaded at first use from its release and never copied here.
-  Its binary and model are MIT License, Copyright (c) 2026 Loris Salsi, Federico Elia, built by Federico Elia
-  (https://github.com/feder-cr/jev), with OpenVINO's libraries under their own licences, shipped in its archive.
-
 src/aihawk/profile.py, src/aihawk/database.py
   The search plan's rules and the rarity weight follow the planner of the LLDB engine by the same author.
 

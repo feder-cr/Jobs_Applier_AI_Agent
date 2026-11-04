@@ -312,7 +312,7 @@ def test_only_what_is_good_enough_and_not_sent_is_applied_to_best_first(tmp_path
     assert [item.job.id for item in store.to_apply(4.0, 1)] == ["j2"]
 
 
-def test_the_list_weighs_the_judgment_and_the_title_together_and_keeps_what_jevos_passed_over_below(tmp_path: Path) -> None:
+def test_the_list_weighs_the_judgment_and_the_title_together_and_keeps_what_jev_passed_over_below(tmp_path: Path) -> None:
     store = Store(tmp_path / "jobs.db")
     for name, lexical in (("judged-fit", 0.2), ("same-score-better-title", 1.0), ("unjudged", 0.9), ("passed", 1.0)):
         store.add(Job(name, "A", "T", "L", "u", "a", "d", "", lexical))

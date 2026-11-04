@@ -271,7 +271,7 @@ class AIHawk(App[None]):
             self.refresh_jobs()
 
         self.show_heading(f"scoring 0/{len(items)}")
-        self.say(f"jevos picked {len(items)} postings to score. Press m for the next batch when they are done.")
+        self.say(f"Jev picked {len(items)} postings to score. Press m for the next batch when they are done.")
         await session.score(items, scored, self.say)
 
     # The keys.
