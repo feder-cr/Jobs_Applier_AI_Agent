@@ -1,6 +1,7 @@
 ---
 name: outlook
 when: always
+reaches: [outlook.live.com]
 ---
 Use this only when the form, or the site it belongs to, asks for a code or a confirmation link that it sent by email.
 

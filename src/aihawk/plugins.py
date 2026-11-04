@@ -34,6 +34,7 @@ class Plugin:
     instructions: str
     apply_path: str = ""
     always: bool = False
+    reaches: tuple[str, ...] = ()  # the mailboxes an always-plugin takes the model to; the only other sites it may visit
 
     def matches(self, url: str) -> bool:
         host = (urlsplit(url).hostname or "").lower()
@@ -69,7 +70,10 @@ def parse_plugin(name: str, text: str) -> Plugin:
     if not body.strip():
         raise PluginError(f"plugin {name}: it has no instructions")
     names = tuple(host.lower() for host in hosts or ())
-    return Plugin(str(meta.get("name") or name), names, body.strip(), str(meta.get("apply_path") or ""), always)
+    reaches = meta.get("reaches") or []
+    if not isinstance(reaches, list) or not all(isinstance(host, str) for host in reaches):
+        raise PluginError(f"plugin {name}: `reaches` lists the sites its mailbox is on")
+    return Plugin(str(meta.get("name") or name), names, body.strip(), str(meta.get("apply_path") or ""), always, tuple(reaches))
 
 
 def _files(folder: Traversable | Path) -> dict[str, str]:

@@ -1,6 +1,7 @@
 ---
 name: gmail
 when: always
+reaches: [mail.google.com]
 ---
 Use this only when the form, or the site it belongs to, asks for a code or a confirmation link that it sent by email.
 

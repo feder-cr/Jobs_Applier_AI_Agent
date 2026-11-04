@@ -30,9 +30,38 @@ FORM = b"""<!doctype html><title>Apply</title>
 <button id="send">Submit application</button>
 </form>"""
 
+# A form that sends itself when its select changes: the change is the send, and no button is pressed. It leaves for
+# another host (a second loopback address) by a form submit, which navigates the page.
+SELECT_FORM = b"""<!doctype html><title>Pick</title>
+<form method="post" action="%s"><select id="pick" name="pick" onchange="this.form.submit()">
+<option value="">Choose</option><option value="a">A</option></select></form>"""
+# The same send on the same site, by a script: the page stays where it is and only its text changes.
+SAME_SITE_SELECT = b"""<!doctype html><title>Pick</title>
+<select id="pick" name="pick" onchange="fetch('/sent', {method: 'POST', body: new URLSearchParams({pick: this.value})}).then(() => { document.body.innerHTML = '<h1>Thank you, your application was received</h1>'; })">
+<option value="">Choose</option><option value="a">A</option></select>"""
+
+
+class Elsewhere(BaseHTTPRequestHandler):
+    """Another host of the loopback: a form that leaves the site lands here."""
+
+    posts: ClassVar[list[bytes]] = []
+
+    def do_POST(self) -> None:
+        Elsewhere.posts.append(self.rfile.read(int(self.headers["Content-Length"])))
+        body = b"<title>Thanks</title><h1>Thank you, your application was received</h1>"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args: Any) -> None:
+        pass
+
 
 class Site(BaseHTTPRequestHandler):
     posts: ClassVar[list[bytes]] = []
+    leave_to: ClassVar[str] = ""  # where the /leave form posts: another host
 
     def _page(self, body: bytes) -> None:
         self.send_response(200)
@@ -42,7 +71,12 @@ class Site(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:
-        self._page(FORM)
+        if self.path == "/select":
+            self._page(SAME_SITE_SELECT)
+        elif self.path == "/leave":
+            self._page(SELECT_FORM % Site.leave_to.encode())
+        else:
+            self._page(FORM)
 
     def do_POST(self) -> None:
         Site.posts.append(self.rfile.read(int(self.headers["Content-Length"])))
@@ -108,6 +142,50 @@ def test_a_yes_sends_the_form_with_the_name_and_the_cv(site: str, tmp_path: Path
     assert b"Ada Rossi" in Site.posts[0]
     assert b"%PDF" in Site.posts[0]
     assert b"harmless-click-reached-the-page" in Site.posts[0]
+
+
+@pytest.fixture
+def elsewhere() -> Any:
+    Elsewhere.posts = []
+    server = ThreadingHTTPServer(("127.0.0.2", 0), Elsewhere)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.2:{server.server_port}/"
+    server.shutdown()
+
+
+def run_select(site: str, path: str, tmp_path: Path, model: ScriptedModel) -> Any:
+    cv = tmp_path / "cvs" / "cv.pdf"
+    write_cv_pdf("# Ada Rossi", cv)
+    job = Job("t:2", "Acme", "Engineer", "Rome", site, site + path, "d")
+    return asyncio.run(apply_to_job(model, "m", job, "cv", "answers", cv, tmp_path, tmp_path / "browser-profile", None))  # type: ignore[arg-type]
+
+
+def test_a_select_whose_form_leaves_for_another_host_is_unconfirmed_and_the_post_is_counted(site: str, elsewhere: str, tmp_path: Path) -> None:
+    Site.leave_to = elsewhere + "sent"
+    # The change submits the form, and the page navigates away. The address cannot be read while it loads, so the
+    # check stops it as unconfirmed on that read failure; the host check itself is not what fires here.
+    model = ScriptedModel([tool_call("browser_select_option", selector="#pick", value="a")])
+    outcome = run_select(site, "leave", tmp_path, model)
+    assert outcome.status == "unconfirmed", outcome.summary
+    assert "not known whether the application went out" in outcome.summary
+    assert len(model.requests) == 1  # asked for the select, and never again
+    assert len(Elsewhere.posts) == 1
+    assert b"pick=a" in Elsewhere.posts[0]
+    assert Site.posts == []
+
+
+def test_a_select_that_sends_on_the_same_site_is_not_detected_and_the_model_goes_on(site: str, tmp_path: Path) -> None:
+    # Known gap, written down: a send that stays on the site is not seen. The script posts and rewrites the page to say it
+    # was received, the address does not change, and the model is asked for its next step as if nothing had been sent.
+    model = ScriptedModel(
+        [tool_call("browser_select_option", selector="#pick", value="a")],
+        [tool_call("finish_form", status="blocked", summary="sent already", submit_selector="", questions=[])],
+    )
+    outcome = run_select(site, "select", tmp_path, model)
+    assert outcome.status == "blocked"
+    assert len(Site.posts) == 1
+    assert b"pick=a" in Site.posts[0]
+    assert len(model.requests) == 2
 
 
 def test_the_newest_server_still_has_what_aihawk_relies_on(tmp_path: Path) -> None:
