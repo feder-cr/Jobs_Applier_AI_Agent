@@ -1,10 +1,11 @@
 """Filling a job's application form with the model, through invisible-playwright-mcp.
 
-The model never sends an application. It fills the form and names the submit control when it is done; this program
-clicks that control, after the person's yes, or by itself when they asked for it with --auto-submit. While the model
-works, a click on anything that would send the form and the Enter key are refused (`refusal`), so the one way an
-application leaves is the click below. What the model writes comes from the CV and the answers file; what they do not
-say comes back as a question for the person, never as a guess.
+The model is told never to send an application. It fills the form and names the submit control when it is done; this
+program clicks that control, after the person's yes, or by itself when they asked for it with --auto-submit. While the
+model works, a click on anything that would send the form and the Enter key are refused (`refusal`), and the person's
+yes guards that control. The model may run script in the page as a last resort, and that script could get around the
+check on rare occasions and send a form without asking. What the model writes comes from the CV and the answers file;
+what they do not say comes back as a question for the person, never as a guess.
 """
 
 from __future__ import annotations
@@ -38,7 +39,8 @@ READ_WAIT_S = 1.0
 
 # The server's tools that act and that `refusal` checks against the rule that the model does not send the form. A tool
 # the server says only reads is offered as well, so one it adds tomorrow just works; one it adds that acts stays out
-# until it is checked here. The server's own instructions say in which order to reach for them.
+# until it is checked here. The server's own instructions say in which order to reach for them. browser_evaluate is the
+# last rung, a script: `refusal` does not check it, and `_after` watches what it does.
 MODEL_TOOLS = {
     "browser_click_at",
     "browser_take_screenshot",
@@ -51,6 +53,7 @@ MODEL_TOOLS = {
     "browser_select_option",
     "browser_upload_files",
     "browser_press_key",
+    "browser_evaluate",
 }
 
 FINISH_TOOL = {
@@ -94,6 +97,8 @@ You fill in one job application form in a browser, for the candidate, using only
 - You cannot send the application, and clicks on what would send it are refused. When every required field is filled,
   call finish_form with status ready and the CSS selector of the submit control. If that control is disabled, the form
   is not complete: find what it still wants, and if you cannot, call finish_form with status blocked and say so.
+- Run script in the page (browser_evaluate) only after selectors, coordinates and a screenshot have failed, and never to
+  send the application.
 - A captcha, a login wall or a closed posting: call finish_form with status blocked. Do not try to get around them.
 - A code or confirmation link sent by email may be fetched as the instructions for that site say; a login wall on a site
   where the person has not signed in is still blocked.
@@ -232,15 +237,8 @@ def instructions(guidance: str, page_rules: str = "") -> str:
     return f"{text}\n\nAbout this site. Where this differs from the rules above, the rules above win:\n\n{guidance}"
 
 
-# The server marks it as reading, and its refusal is narrow by its own account: `requestSubmit?.()` passes and sends the
-# form. No check can tell what a script will do, and the other tools already read everything the model needs.
-NEVER_OFFERED = {"browser_evaluate"}
-
-
 def offered(tool: Any) -> bool:
     """Whether the model gets this tool of the server's."""
-    if tool.name in NEVER_OFFERED:
-        return False
     return tool.name in MODEL_TOOLS or bool(tool.annotations and tool.annotations.readOnlyHint)
 
 
@@ -257,8 +255,8 @@ class LeftForm(Exception):
     """A call of the model's moved the page to another site: it may have sent the form."""
 
 
-# The calls that can change the page. A navigation is the model's own choice, so it is not checked after: `refusal` judges it.
-ACTING = {"browser_click", "browser_click_at", "browser_type", "browser_select_option", "browser_upload_files", "browser_press_key"}
+# The calls that can change the page, a script included. A navigation is the model's own choice, so it is not checked after: `refusal` judges it.
+ACTING = {"browser_click", "browser_click_at", "browser_type", "browser_select_option", "browser_upload_files", "browser_press_key", "browser_evaluate"}
 PAGE = "({url: location.href, text: document.body ? document.body.innerText : ''})"
 
 

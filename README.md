@@ -37,26 +37,26 @@ The first time, it asks for an [OrcaRouter](https://orcarouter.ai) key and keeps
 ## What it does
 
 - **Reads** your resume and writes a search plan from it, and takes your contact details.
-- **Finds** postings in a job database published as a release: `jobs-latest` points at a build with 10,223,753 postings (built once by hand on 2026-11-04). The daily refresh starts once the workflow is merged to main. Postings older than 60 days are left out by default.
+- **Finds** postings in a job database published as a release: `jobs-latest` points at a build with 10,223,753 postings (built once by hand on 2026-11-04). The daily refresh starts once its workflow is on main. Postings older than 60 days are left out by default.
 - **Judges** the postings that fit best, six questions each, with Jev through OrcaRouter.
 - **Scores** each job from 1 to 5 against your resume, with its gaps.
 - **Applies**: writes a CV for the job and fills the form in a visible browser through [invisible-playwright-mcp](https://github.com/feder-cr/invisible_playwright_mcp). What a form asks and your files do not say, it asks you, and remembers.
 
 ## Sending
 
-The model never sends an application. It fills the form and names the submit button; AIHawk clicks it only after you press `y`.
+The model fills the form and names the submit button; AIHawk clicks it only after you press `y`. As a last resort the model can run script, which could send a form without asking.
 
-`aihawk --auto-submit` sends without asking. An application sent in your name can be wrong, and sites can close accounts over it: read the forms first.
+`aihawk --auto-submit` sends without asking. A wrong application sent in your name can get an account closed: read the forms first.
 
 ## Sites
 
 Plugins cover Ashby, BambooHR, Breezy, Greenhouse, JazzHR, Lever, Paylocity, Personio, Recruitee, SmartRecruiters, Teamtailor and Workable. Other postings are listed for applying by hand.
 
-A plugin is a Markdown file in [`src/aihawk/plugins/`](src/aihawk/plugins): a prompt that explains one site's form. Anyone can add a site by adding a file, with no code. Your own go in `~/.aihawk/plugins/`.
+A plugin is a Markdown file in [`src/aihawk/plugins/`](src/aihawk/plugins): a prompt that explains one site's form. Anyone can add a site with a file and no code. Your own go in `~/.aihawk/plugins/`.
 
 ## Plan and models
 
-The search plan is an editable graph in `filters.plan` of `~/.aihawk/aihawk.yaml`; restart `aihawk` after you change it.
+The search plan is an editable graph in `filters.plan` of `~/.aihawk/aihawk.yaml`; restart `aihawk` after editing it.
 
 Models go through OrcaRouter: `model` (default `z-ai/glm-5.3-flash`) writes the CV and fills forms; `quick_model` (default `google/gemini-3.5-flash`) writes the plan; `decision_model` (default `typesafe/jev-1.14`) shortlists the jobs; `judge_model` (default `deepseek/deepseek-v4.1-flash`) scores them. Any OpenAI-compatible endpoint with tool calling and structured output can replace OrcaRouter through `base_url`.
 
@@ -64,7 +64,7 @@ Models go through OrcaRouter: `model` (default `z-ai/glm-5.3-flash`) writes the 
 
 The job database merges public job databases. Their sources, licences and the postings' links are in [NOTICE](NOTICE); each posting belongs to its employer. The job report's shape is adapted from [career-ops](https://github.com/santifer/career-ops) (MIT).
 
-The Dots project that used to live here is at [feder-cr/invisible_dots](https://github.com/feder-cr/invisible_dots).
+The former Dots project is at [feder-cr/invisible_dots](https://github.com/feder-cr/invisible_dots).
 
 ## License
 
