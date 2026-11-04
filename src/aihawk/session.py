@@ -13,7 +13,7 @@ from openai import AsyncOpenAI
 from aihawk.apply import Confirm, Outcome, apply_to_job
 from aihawk.apply import sign_in as sign_in_browser
 from aihawk.config import Config, ConfigError, load_config
-from aihawk.database import search, stored_description, with_description
+from aihawk.database import search, stored_descriptions, with_description
 from aihawk.documents import score_job, tailor_cv, write_cv_pdf
 from aihawk.judge import evidence, fuse, questions
 from aihawk.llm import make_client
@@ -178,19 +178,14 @@ class Session:
 
 
 async def _read_descriptions(refs: list[str], status: Log) -> list[str]:
-    """The descriptions the database holds, eight at a time, each count said as it finishes."""
-    limit = asyncio.Semaphore(8)
-    done = 0
+    """The descriptions the database holds; the count of those read is said as each file is read."""
+    loop = asyncio.get_running_loop()
 
-    async def one(ref: str) -> str:
-        nonlocal done
-        async with limit:
-            text = await asyncio.to_thread(stored_description, ref)
-        done += 1
-        status(f"reading descriptions {done}/{len(refs)}")
-        return text
+    def shown(done: int) -> None:
+        # The read runs in a thread: its count is handed to the loop, which alone touches the screen.
+        loop.call_soon_threadsafe(status, f"reading descriptions {done}/{len(refs)}")
 
-    return list(await asyncio.gather(*(one(ref) for ref in refs)))
+    return await asyncio.to_thread(stored_descriptions, refs, shown)
 
 
 def _places(config: Config) -> str:

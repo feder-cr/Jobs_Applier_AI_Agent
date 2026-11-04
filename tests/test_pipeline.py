@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import uuid
 from pathlib import Path
 
 import duckdb
@@ -33,8 +34,7 @@ def write_source(work: Path, name: str, rows: list[tuple]) -> None:
         ("salary_currency", "VARCHAR"), ("description", "VARCHAR"), ("posted_at", "VARCHAR"),
     ))
     connection.execute(f"CREATE TABLE t ({columns})")
-    for row in rows:
-        connection.execute("INSERT INTO t (url, title, description) VALUES (?, ?, ?)", row)
+    connection.executemany("INSERT INTO t (url, title, description) VALUES (?, ?, ?)", rows)
     (work / "sources").mkdir(parents=True, exist_ok=True)
     connection.execute(f"COPY t TO '{(work / 'sources' / (name + '.parquet')).as_posix()}' (FORMAT parquet)")
 
@@ -86,6 +86,17 @@ def test_the_index_points_at_each_description_without_holding_it(tmp_path: Path)
     for title, part, row in connection.execute(f"SELECT title, part, row_number FROM read_parquet('{out}/index.parquet')").fetchall():
         text = connection.execute(f"SELECT description FROM read_parquet('{out}/{part}', file_row_number = true) WHERE file_row_number = {row}").fetchone()[0]
         assert text == {"One": "First text", "Two": "Second text"}[title]
+
+
+def test_row_groups_stay_at_the_measured_size_and_the_files_stay_small(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(build, "MAX_FILE", "100KB")
+    write_source(tmp_path, "s", [(f"https://a.example/{number}", f"Job {number}", uuid.uuid4().hex + uuid.uuid4().hex) for number in range(20000)])
+    merged(tmp_path)
+    files = sorted((tmp_path / "out").glob("jobs_*.parquet"))
+    assert len(files) > 1
+    for file in files:
+        largest = duckdb.connect().execute("SELECT max(row_group_num_rows) FROM parquet_metadata(?)", [file.as_posix()]).fetchone()[0]
+        assert largest <= build.ROW_GROUP
 
 
 def test_rows_without_a_link_or_a_title_are_left_out(tmp_path: Path) -> None:
