@@ -1,4 +1,4 @@
-"""The rule that matters: the model cannot send an application, and only a yes (or --auto-submit) does."""
+"""The rule that matters: the model is held from sending an application, and only a yes (or --auto-submit) clicks the send control."""
 
 from __future__ import annotations
 
@@ -214,10 +214,13 @@ def test_a_click_at_a_point_on_anything_else_passes() -> None:
     assert asyncio.run(refusal(PageAtAPoint(field), "browser_click_at", {"x": 10, "y": 20}, True)) is None
 
 
-def test_script_is_never_offered_because_no_check_can_tell_what_it_does() -> None:
+def test_script_is_offered_as_the_last_rung_and_refusal_does_not_check_it() -> None:
     tool = SimpleNamespace(name="browser_evaluate", annotations=SimpleNamespace(readOnlyHint=True))
-    assert not offered(tool)
-    assert "browser_evaluate" not in MODEL_TOOLS
+    assert offered(tool)
+    assert "browser_evaluate" in MODEL_TOOLS
+    # Known gap, written down: a script that sends the form is not refused, by design of the server's own check.
+    send = {"expression": "document.querySelector('#send').requestSubmit?.()"}
+    assert asyncio.run(refusal(PageAtAPoint(SUBMIT), "browser_evaluate", send, True)) is None
 
 
 @pytest.mark.parametrize("arguments", [{"key": " "}, {"key": "Space"}, {"renamed": "space"}])
@@ -425,6 +428,31 @@ def test_a_navigation_by_the_model_to_another_site_is_refused_and_never_reaches_
 def test_a_change_event_that_moves_the_page_off_the_form_stops_as_unconfirmed_and_nothing_is_retried() -> None:
     browser = Moves(after={"url": "https://thanks.example/ok", "text": "Thanks"})
     model = ScriptedModel(SELECT, ready(), VERIFIED)
+    outcome = run_with(model, browser)
+    assert outcome.status == "unconfirmed"
+    assert "thanks.example" in outcome.summary
+    assert browser.clicks() == []
+    assert len(model.requests) == 1
+
+
+class ScriptMoves(ScriptedBrowser):
+    """A page whose script, when it runs `location.href = ...`, leaves for another site."""
+
+    def __init__(self, after: dict[str, str]) -> None:
+        super().__init__({"#send": SUBMIT}, page=FORM_PAGE)
+        self.after = after
+
+    async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
+        if name == "browser_evaluate" and str((arguments or {}).get("expression", "")).startswith("location.href ="):
+            self.calls.append((name, arguments or {}))
+            self.page = self.after
+            return SimpleNamespace(isError=False, content=[SimpleNamespace(text="ok")])
+        return await super().call_tool(name, arguments)
+
+
+def test_a_script_that_moves_the_page_off_the_form_stops_as_unconfirmed_and_nothing_is_retried() -> None:
+    browser = ScriptMoves(after={"url": "https://thanks.example/ok", "text": "Thanks"})
+    model = ScriptedModel([tool_call("browser_evaluate", expression="location.href = 'https://thanks.example/ok'")], ready(), VERIFIED)
     outcome = run_with(model, browser)
     assert outcome.status == "unconfirmed"
     assert "thanks.example" in outcome.summary
