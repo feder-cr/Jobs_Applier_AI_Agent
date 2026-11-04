@@ -18,6 +18,7 @@ from textual.widgets import DataTable, Input
 from aihawk import apply as apply_module
 from aihawk.apply import Outcome
 from aihawk.config import ConfigError, load_config
+from aihawk.judge import Judge
 from aihawk.profile import add_answers, answer_question, install_resume, read_answers, read_resume
 from aihawk.tui import AIHawk, ConfirmSend, JobDetails, SignIn, TextPrompt
 from fakes import ScriptedBrowser
@@ -84,6 +85,8 @@ def scripted_app(home: Path, resume: Path | None, **options: Any) -> AIHawk:
     app = AIHawk(home, resume, **options)
     model = ScriptedModelForApp()
     app.session._client = model  # noqa: SLF001
+    # No jevos in these tests: a judge with no endpoint gives evidence 0, and nothing is downloaded.
+    app.session._judge = Judge(app.session.config)  # noqa: SLF001
     return app
 
 
@@ -106,9 +109,6 @@ class ScriptedModelForApp:
         elif name == "job_report":
             text = request["messages"][1]["content"]
             content = report("yes", "yes") if "Bestco" in text else report("yes", "unclear") if "Lowly" in text else report("no", "unclear")
-        elif name == "title_ratings":
-            count = request["messages"][1]["content"].count("\n") - 1
-            content = json.dumps({"ratings": [2] * count})
         else:
             content = "# Ada Rossi"
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content, tool_calls=None))])
@@ -173,6 +173,7 @@ def test_no_key_asks_for_one_and_keeps_it_on_this_computer(home: Path, resume: P
 
     async def run() -> None:
         app = AIHawk(home, resume)
+        app.session._judge = Judge(app.session.config)  # noqa: SLF001  No jevos here: nothing is downloaded.
         async with app.run_test(size=(140, 40)) as pilot:
             await settle(pilot, app)
             assert isinstance(app.screen, TextPrompt)

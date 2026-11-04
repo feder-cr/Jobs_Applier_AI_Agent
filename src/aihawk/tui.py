@@ -17,13 +17,14 @@ from textual.widgets import DataTable, Footer, Input, RichLog, Static
 from aihawk.config import ConfigError
 from aihawk.database import DatabaseError
 from aihawk.documents import QUESTIONS
-from aihawk.session import BATCH, Session
+from aihawk.session import Session
 from aihawk.store import SUBMITTED, Stored
 
 STATUS_TEXT = {
     "new": "",
     "scored": "",
     "shortlisted": "",
+    "passed_over": "passed over",
     "submitted": "sent",
     "unconfirmed": "clicked, not confirmed",
     "declined": "not sent",
@@ -251,24 +252,24 @@ class AIHawk(App[None]):
             self.show_heading()
 
     async def judge(self) -> None:
-        self.show_heading("reading titles")
-        await self.session.shortlist(BATCH, self.say)
+        session = self.session
+        await session.funnel(self.say, self.show_heading)
         self.refresh_jobs()
-        items = self.session.next_to_score(BATCH)
+        items = session.store.with_status("shortlisted")
         if not items:
-            self.say("Every posting found so far has been judged.")
+            self.say("Every posting found so far has been read.")
             return
         done = 0
 
         def scored() -> None:
             nonlocal done
             done += 1
-            self.show_heading(f"judging {done}/{len(items)}")
+            self.show_heading(f"scoring {done}/{len(items)}")
             self.refresh_jobs()
 
-        self.show_heading(f"judging 0/{len(items)}")
-        self.say(f"Judging the first {len(items)} against your resume. Press m for more when they are done.")
-        await self.session.score(items, scored, self.say)
+        self.show_heading(f"scoring 0/{len(items)}")
+        self.say(f"jevos picked {len(items)} postings to score. Press m for the next batch when they are done.")
+        await session.score(items, scored, self.say)
 
     # The keys.
 

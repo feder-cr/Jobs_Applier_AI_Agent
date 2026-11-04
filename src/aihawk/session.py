@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 from collections.abc import Awaitable, Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
@@ -12,16 +13,19 @@ from openai import AsyncOpenAI
 
 from aihawk.apply import Confirm, Outcome, apply_to_job
 from aihawk.apply import sign_in as sign_in_browser
-from aihawk.config import ConfigError, load_config
-from aihawk.database import search, with_description
-from aihawk.documents import score_job, screen_titles, tailor_cv, write_cv_pdf
+from aihawk.config import Config, ConfigError, load_config
+from aihawk.database import Job, search, stored_description, with_description
+from aihawk.documents import score_job, tailor_cv, write_cv_pdf
+from aihawk.judge import Judge, fuse, questions
 from aihawk.llm import make_client
 from aihawk.plugins import Plugin, always_plugins, load_plugins, plugin_for
 from aihawk.profile import answer_question, install_resume
 from aihawk.store import SUBMITTED, Store, Stored
 
-BATCH = 40
-SCREEN_BATCH = 40
+# The funnel: the next WIDE postings by title are weighed by jevos, and the best JUDGED of them are scored by the judge model.
+WIDE = 100
+JUDGED = 25
+JUDGE_AT_ONCE = 4
 SCORING_AT_ONCE = 5
 MAX_ROUNDS = 3
 
@@ -36,8 +40,11 @@ class Session:
         self.plugins: tuple[Plugin, ...] = load_plugins(workspace)
         self.store = Store(self.config.data_dir / "jobs.db")
         self._client: AsyncOpenAI | None = None
+        self._judge: Judge | None = None
 
     def close(self) -> None:
+        if self._judge is not None:
+            self._judge.close()
         self.store.close()
 
     @property
@@ -74,26 +81,40 @@ class Session:
         log(f"{len(jobs)} postings fit your search, of {manifest['rows_out']:,} in today's database; {new} new")
         return new
 
-    async def shortlist(self, wanted: int, log: Log) -> None:
-        """Rate titles, the best fit first, until `wanted` jobs are worth judging or none is left. Costs little: many titles to a call."""
-        while len(self.store.with_status("shortlisted")) < wanted:
-            batch = self.store.with_status("new")[:SCREEN_BATCH]
-            if not batch:
-                return
-            try:
-                candidate = f"{self.config.goals} They live in: {', '.join(self.config.filters.locations)}."
-                kept = await screen_titles(self.client, self.config.quick_model, [item.job for item in batch], candidate)
-            except Exception as error:  # noqa: BLE001  With no rating nothing is dropped: no evidence is not a no.
-                log(f"titles not rated: {error}")
-                kept = [item.job for item in batch]
-            kept_ids = {job.id for job in kept}
-            self.store.set_statuses([item.job.id for item in batch if item.job.id in kept_ids], "shortlisted")
-            self.store.set_statuses([item.job.id for item in batch if item.job.id not in kept_ids], "screened_out")
+    async def funnel(self, log: Log, status: Log) -> int:
+        """Weigh the next WIDE postings by title with jevos, and shortlist the best JUDGED by the title's fit and that evidence.
+        The others of the batch are passed over: kept, and listed below the judged ones. Returns how many are shortlisted."""
+        batch = self.store.with_status("new")[:WIDE]
+        if not batch:
+            return 0
+        texts = await asyncio.to_thread(_descriptions, [item.job.ref for item in batch])
+        for item, text in zip(batch, texts, strict=True):
+            self.store.set_description(item.job.id, text)
+        jobs = [replace(item.job, description=text) for item, text in zip(batch, texts, strict=True)]
+        judge = await self._judge_for(log, status)
+        cv = self.config.cv.read_text(encoding="utf-8")
+        asked = questions(self.config.goals, _places(self.config))
+        limit = asyncio.Semaphore(JUDGE_AT_ONCE)
 
-    def next_to_score(self, count: int = BATCH) -> list[Stored]:
-        """The postings to judge next: where AIHawk can apply first, the best fit first. Judging costs model calls."""
-        waiting = self.store.with_status("shortlisted")
-        return sorted(waiting, key=lambda item: self.plugin(item) is None)[:count]
+        async def weigh(job: Job) -> float:
+            async with limit:
+                return await judge.read(cv, job, asked)
+
+        status(f"jevos reads {len(jobs)} postings")
+        values = list(await asyncio.gather(*(weigh(job) for job in jobs)))
+        for job, value in zip(jobs, values, strict=True):
+            self.store.set_evidence(job.id, value)
+        order = fuse([job.lexical for job in jobs], values)
+        best = {jobs[index].id for index in sorted(range(len(jobs)), key=lambda index: -order[index])[:JUDGED]}
+        self.store.set_statuses([job.id for job in jobs if job.id in best], "shortlisted")
+        self.store.set_statuses([job.id for job in jobs if job.id not in best], "passed_over")
+        return len(best)
+
+    async def _judge_for(self, log: Log, status: Log) -> Judge:
+        if self._judge is None:
+            self._judge = Judge(self.config)
+            await self._judge.start(log, status)
+        return self._judge
 
     async def score(self, items: list[Stored], on_scored: Callable[[], None], log: Log) -> None:
         cv = self.config.cv.read_text(encoding="utf-8")
@@ -102,12 +123,10 @@ class Session:
         async def one(item: Stored) -> None:
             async with limit:
                 try:
-                    job = await asyncio.to_thread(with_description, item.job)
-                    report = await score_job(self.client, self.config.quick_model, job, cv, self.config.goals)
+                    report = await score_job(self.client, self.config.judge_model, item.job, cv, self.config.goals)
                 except Exception as error:  # noqa: BLE001  One posting that cannot be judged must not stop the others.
                     log(f"{item.job.company}: not judged: {error}")
                     return
-            self.store.set_description(item.job.id, job.description)
             self.store.set_score(item.job.id, report["score"], report)
             on_scored()
 
@@ -158,3 +177,13 @@ class Session:
                 break
         self.store.set_status(item.job.id, outcome.status, outcome.summary)
         return outcome
+
+
+def _descriptions(refs: list[str]) -> list[str]:
+    """The descriptions the database holds, read eight at a time."""
+    with ThreadPoolExecutor(8) as pool:
+        return list(pool.map(stored_description, refs))
+
+
+def _places(config: Config) -> str:
+    return " or ".join(config.filters.cities[:3]) + ", " + (config.filters.locations or [""])[-1]

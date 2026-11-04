@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from aihawk.database import Job
+from aihawk.judge import fuse
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -26,13 +27,14 @@ CREATE TABLE IF NOT EXISTS jobs (
     cv_path TEXT,
     ref TEXT,
     lexical REAL NOT NULL DEFAULT 0,
+    evidence REAL,
     note TEXT,
     first_seen TEXT NOT NULL,
     updated TEXT NOT NULL
 )
 """
 
-# new -> shortlisted | screened_out; shortlisted -> scored -> needs_input | blocked | declined | failed | submitted | unconfirmed
+# new -> shortlisted | passed_over; shortlisted -> scored -> needs_input | blocked | declined | failed | submitted | unconfirmed
 SUBMITTED = ("submitted", "unconfirmed")
 LEXICAL_SHARE = 0.5
 
@@ -45,6 +47,7 @@ class Stored:
     report: dict[str, Any] | None
     cv_path: str | None
     note: str | None
+    evidence: float | None = None
 
 
 def _now() -> str:
@@ -76,7 +79,7 @@ class Store:
     def _stored(row: sqlite3.Row) -> Stored:
         job = Job(row["id"], row["company"], row["title"], row["location"], row["url"], row["apply_url"], row["description"], row["ref"] or "", row["lexical"])
         report = json.loads(row["report"]) if row["report"] else None
-        return Stored(job, row["status"], row["score"], report, row["cv_path"], row["note"])
+        return Stored(job, row["status"], row["score"], report, row["cv_path"], row["note"], row["evidence"])
 
     def get(self, job_id: str) -> Stored | None:
         row = self._db.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
@@ -88,12 +91,16 @@ class Store:
         return [self._stored(row) for row in rows]
 
     def all(self) -> list[Stored]:
-        """What the person sees, the best first: the judgment and the title's fit together, never the judgment alone."""
-        rows = self._db.execute(
-            f"""SELECT * FROM jobs WHERE status <> 'screened_out'
-                ORDER BY score IS NULL, score + {LEXICAL_SHARE} * lexical DESC, lexical DESC, id"""
-        ).fetchall()
-        return [self._stored(row) for row in rows]
+        """What the person sees, the best first: the judged by the judgment and the title's fit together, then the rest by the title's fit and jevos's evidence."""
+        items = [self._stored(row) for row in self._db.execute("SELECT * FROM jobs").fetchall()]
+        judged = sorted(
+            (item for item in items if item.score is not None),
+            key=lambda item: (-(item.score + LEXICAL_SHARE * item.job.lexical), -item.job.lexical, item.job.id),
+        )
+        rest = [item for item in items if item.score is None]
+        order = fuse([item.job.lexical for item in rest], [item.evidence or 0.0 for item in rest])
+        rest = [item for _, item in sorted(zip(order, rest, strict=True), key=lambda pair: (-pair[0], pair[1].job.id))]
+        return judged + rest
 
     def to_apply(self, threshold: float, limit: int) -> list[Stored]:
         """The best scored jobs at or above the threshold that were not tried yet or are waiting on an answer."""
@@ -102,6 +109,10 @@ class Store:
             (threshold, limit),
         ).fetchall()
         return [self._stored(row) for row in rows]
+
+    def set_evidence(self, job_id: str, evidence: float) -> None:
+        self._db.execute("UPDATE jobs SET evidence = ?, updated = ? WHERE id = ?", (evidence, _now(), job_id))
+        self._db.commit()
 
     def set_score(self, job_id: str, score: float, report: dict[str, Any]) -> None:
         self._db.execute(

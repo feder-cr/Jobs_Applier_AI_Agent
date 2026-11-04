@@ -288,19 +288,21 @@ def test_only_what_is_good_enough_and_not_sent_is_applied_to_best_first(tmp_path
     assert [item.job.id for item in store.to_apply(4.0, 1)] == ["j2"]
 
 
-def test_the_list_weighs_the_judgment_and_the_title_together_and_hides_what_was_screened_out(tmp_path: Path) -> None:
+def test_the_list_weighs_the_judgment_and_the_title_together_and_keeps_what_jevos_passed_over_below(tmp_path: Path) -> None:
     store = Store(tmp_path / "jobs.db")
-    for name, lexical in (("judged-fit", 0.2), ("same-score-better-title", 1.0), ("unjudged", 0.9), ("out", 1.0)):
+    for name, lexical in (("judged-fit", 0.2), ("same-score-better-title", 1.0), ("unjudged", 0.9), ("passed", 1.0)):
         store.add(Job(name, "A", "T", "L", "u", "a", "d", "", lexical))
     store.set_score("judged-fit", 4.0, {})
     store.set_score("same-score-better-title", 4.0, {})
-    store.set_statuses(["out"], "screened_out")
-    assert [item.job.id for item in store.all()] == ["same-score-better-title", "judged-fit", "unjudged"]
+    store.set_statuses(["passed"], "passed_over")
+    store.set_evidence("passed", 2.0)
+    assert [item.job.id for item in store.all()] == ["same-score-better-title", "judged-fit", "passed", "unjudged"]
 
 
 def test_a_new_folder_defaults_to_orcarouter_and_the_published_database(tmp_path: Path) -> None:
     config = load_config(tmp_path)
     assert (config.base_url, config.model, config.api_key_env) == ("https://api.orcarouter.ai/v1", "z-ai/glm-5.3-flash", "ORCAROUTER_API_KEY")
+    assert config.judge_model == "deepseek/deepseek-v4.1-flash"
     assert config.database.endswith("/releases/download/jobs-latest/manifest.json")
     assert not config.filters.include
 

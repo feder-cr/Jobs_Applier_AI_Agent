@@ -41,7 +41,11 @@ packages = ["src/aihawk"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["tests"]
-markers = ["browser: runs the real invisible-playwright-mcp and its Firefox"]
+addopts = "-m 'not jevos'"
+markers = [
+    "browser: runs the real invisible-playwright-mcp and its Firefox",
+    "jevos: runs the real jev binary from AIHAWK_JEVOS_FOLDER; deselected by default",
+]
 
 [tool.ruff]
 line-length = 160

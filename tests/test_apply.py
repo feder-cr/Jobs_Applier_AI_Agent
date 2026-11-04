@@ -6,7 +6,6 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -17,7 +16,7 @@ from pypdf import PdfReader
 from aihawk import apply as apply_module
 from aihawk.apply import FINISH_TOOL, MODEL_TOOLS, SYSTEM, Outcome, apply_to_job, fill_form, instructions, offered, refusal, run_on_page, sends_form, sign_in
 from aihawk.database import Job
-from aihawk.documents import score_from, score_job, screen_titles, tailor_cv, write_cv_pdf
+from aihawk.documents import score_from, score_job, tailor_cv, write_cv_pdf
 from fakes import ScriptedBrowser, ScriptedModel, tool_call
 
 JOB = Job("g:a:1", "Acme", "Engineer", "Rome", "https://u", "https://u/apply", "Build things")
@@ -312,18 +311,6 @@ def test_the_goals_reach_the_model_and_the_score_is_computed_not_asked() -> None
     report = asyncio.run(score_job(model, "m", JOB, "the cv", "remote only"))  # type: ignore[arg-type]
     assert report["score"] == 4.5
     assert "remote only" in model.requests[0]["messages"][1]["content"]
-
-
-def test_screening_drops_only_a_plain_no() -> None:
-    jobs = [JOB, replace(JOB, id="b", title="Cook"), replace(JOB, id="c", title="Unsure")]
-    kept = asyncio.run(screen_titles(ScriptedModel(json.dumps({"ratings": [3, 0, 1]})), "m", jobs, "goals"))  # type: ignore[arg-type]
-    assert [job.id for job in kept] == [JOB.id, "c"]
-
-
-def test_a_screening_that_does_not_rate_every_title_drops_nothing() -> None:
-    jobs = [JOB, replace(JOB, id="b")]
-    kept = asyncio.run(screen_titles(ScriptedModel(json.dumps({"ratings": [0]})), "m", jobs, "goals"))  # type: ignore[arg-type]
-    assert kept == jobs
 
 
 def test_tailor_drops_a_code_fence() -> None:
