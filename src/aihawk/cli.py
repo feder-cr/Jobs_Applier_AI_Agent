@@ -18,13 +18,12 @@ from aihawk.plugins import PluginError
 @click.version_option(__version__)
 @click.argument("resume", required=False, type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--home", type=click.Path(file_okay=False, path_type=Path), help="Folder for this search. Default: ~/.aihawk")
-@click.option("--auto-submit", is_flag=True, help="Send without asking. Risks account bans and wrong applications in your name.")
-def main(resume: Path | None, home: Path | None, auto_submit: bool) -> None:
+def main(resume: Path | None, home: Path | None) -> None:
     """Find the jobs that fit your resume and apply to them."""
     # Imported here: the interface takes a moment to load, and --help should not wait for it.
     from aihawk.tui import AIHawk  # noqa: PLC0415
 
-    AIHawk((home or default_home()).resolve(), resume.resolve() if resume else None, auto_submit).run()
+    AIHawk((home or default_home()).resolve(), resume.resolve() if resume else None).run()
 
 
 def run() -> None:

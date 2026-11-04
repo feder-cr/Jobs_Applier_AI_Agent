@@ -27,7 +27,8 @@ The first time, it asks for an [OrcaRouter](https://orcarouter.ai) key and keeps
 |---|---|
 | space | select a job |
 | enter | the score, the gaps and the reasons |
-| a | apply to the selected jobs, or the current one |
+| a | send the selected jobs, or the current one, after one yes |
+| s | the jobs sent, and what each page said |
 | o | open the posting in your browser |
 | m | score more jobs |
 | r | give a new resume |
@@ -44,9 +45,7 @@ The first time, it asks for an [OrcaRouter](https://orcarouter.ai) key and keeps
 
 ## Sending
 
-The model never sends an application. It fills the form and names the submit button; AIHawk clicks it only after you press `y`.
-
-`aihawk --auto-submit` sends without asking. An application sent in your name can be wrong, and sites can close accounts over it: read the forms first.
+The model never sends an application. It fills the form and names the submit button; AIHawk clicks it once you press `a` and Enter on the selected jobs. Each send keeps what the page said: `applied.csv` and `data/proofs/`.
 
 ## Sites
 

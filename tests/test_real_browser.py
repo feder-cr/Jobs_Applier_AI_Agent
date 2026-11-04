@@ -110,38 +110,23 @@ def steps(cv: Path) -> list[Any]:
     ]
 
 
-def run(site: str, tmp_path: Path, confirm: Any) -> Any:
+def run(site: str, tmp_path: Path) -> Any:
     cv = tmp_path / "cvs" / "cv.pdf"
     write_cv_pdf("# Ada Rossi", cv)
     model = ScriptedModel(*steps(cv))
     job = Job("t:1", "Acme", "Engineer", "Rome", site, site, "d")
-    return asyncio.run(apply_to_job(model, "m", job, "cv", "answers", cv, tmp_path, tmp_path / "browser-profile", confirm))  # type: ignore[arg-type]
+    return asyncio.run(apply_to_job(model, "m", job, "cv", "answers", cv, tmp_path, tmp_path / "browser-profile"))  # type: ignore[arg-type]
 
 
-def test_nothing_reaches_the_site_until_the_person_says_yes(site: str, tmp_path: Path) -> None:
-    seen: list[int] = []
-
-    async def no(summary: str) -> bool:
-        seen.append(len(Site.posts))
-        return False
-
-    outcome = run(site, tmp_path, no)
-    assert outcome.status == "declined"
-    assert seen == [0]
-    assert Site.posts == []
-
-
-def test_a_yes_sends_the_form_with_the_name_and_the_cv(site: str, tmp_path: Path) -> None:
-    async def yes(summary: str) -> bool:
-        assert Site.posts == []
-        return True
-
-    outcome = run(site, tmp_path, yes)
+def test_the_form_is_sent_once_with_the_name_and_the_cv_and_what_the_page_said_is_kept(site: str, tmp_path: Path) -> None:
+    outcome = run(site, tmp_path)
     assert outcome.status == "submitted", outcome.summary
     assert len(Site.posts) == 1
     assert b"Ada Rossi" in Site.posts[0]
     assert b"%PDF" in Site.posts[0]
     assert b"harmless-click-reached-the-page" in Site.posts[0]
+    assert outcome.proof.verdict == "submitted" and "Thank you" in outcome.proof.text
+    assert Path(outcome.proof.screenshot).read_bytes().startswith(b"\x89PNG")
 
 
 @pytest.fixture
@@ -157,7 +142,7 @@ def run_select(site: str, path: str, tmp_path: Path, model: ScriptedModel) -> An
     cv = tmp_path / "cvs" / "cv.pdf"
     write_cv_pdf("# Ada Rossi", cv)
     job = Job("t:2", "Acme", "Engineer", "Rome", site, site + path, "d")
-    return asyncio.run(apply_to_job(model, "m", job, "cv", "answers", cv, tmp_path, tmp_path / "browser-profile", None))  # type: ignore[arg-type]
+    return asyncio.run(apply_to_job(model, "m", job, "cv", "answers", cv, tmp_path, tmp_path / "browser-profile"))  # type: ignore[arg-type]
 
 
 def test_a_select_whose_form_leaves_for_another_host_is_unconfirmed_and_the_post_is_counted(site: str, elsewhere: str, tmp_path: Path) -> None:

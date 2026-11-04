@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import textwrap
 from pathlib import Path
@@ -11,7 +12,7 @@ import pytest
 
 from aihawk.config import Arc, ConfigError, Filters, Form, Node, Plan, load_config
 from aihawk.database import DatabaseError, Job, page_text, rarity, search, with_description
-from aihawk.store import Store
+from aihawk.store import COLUMNS, Proof, Store, said, sent_word, write_applied
 
 JOB = Job("g:a:1", "Acme", "Senior Python Engineer", "Rome, Italy", "u", "a", "d")
 
@@ -310,6 +311,68 @@ def test_only_what_is_good_enough_and_not_sent_is_applied_to_best_first(tmp_path
     store.set_status("j3", "submitted")
     assert [item.job.id for item in store.to_apply(4.0, 5)] == ["j2", "j1"]
     assert [item.job.id for item in store.to_apply(4.0, 1)] == ["j2"]
+
+
+def test_what_was_tried_is_listed_newest_first_in_plain_words_with_what_the_page_said(tmp_path: Path) -> None:
+    store = Store(tmp_path / "jobs.db")
+    for name in ("sent", "unsure", "refused", "blocked", "failed", "untried"):
+        store.add(Job(name, "Co", name, "L", "u", "a", "d"))
+    store.set_proof("sent", Proof("2026-11-03T09:00:00", "https://x/thanks", "submitted", "Thank you", "the page", "/shots/sent.png"))
+    store.set_status("sent", "submitted", "filled")
+    store.set_proof("unsure", Proof("2026-11-04T08:00:00", "https://x/", "unknown", "no words"))
+    store.set_status("unsure", "unconfirmed", "filled")
+    store.set_proof("refused", Proof("2026-11-02T10:00:00", "https://x/form", "rejected", "phone is required"))
+    store.set_status("refused", "refused", "filled")
+    store.set_status("blocked", "blocked", "a captcha")
+    store.set_status("failed", "failed", "timeout")
+    # Set after the statuses, which stamp the time of the change: these two are ordered by it.
+    store._db.execute("UPDATE jobs SET updated = ? WHERE id = ?", ("2026-11-01T12:00:00", "blocked"))  # noqa: SLF001
+    store._db.execute("UPDATE jobs SET updated = ? WHERE id = ?", ("2026-11-05T07:00:00", "failed"))  # noqa: SLF001
+    listed = store.sent()
+    assert [(item.job.id, sent_word(item)) for item in listed] == [
+        ("failed", "failed"),
+        ("unsure", "sent, not confirmed"),
+        ("sent", "sent and confirmed"),
+        ("refused", "refused by the form"),
+        ("blocked", "blocked"),
+    ]
+    assert [said(item) for item in listed] == ["timeout", "no words", "Thank you", "phone is required", "a captcha"]
+    assert listed[2].proof.screenshot == "/shots/sent.png" and listed[2].proof.text == "the page" and listed[2].proof.url == "https://x/thanks"
+
+
+def test_a_later_attempt_without_a_click_clears_the_proof_of_an_earlier_one(tmp_path: Path) -> None:
+    store = Store(tmp_path / "jobs.db")
+    store.add(JOB)
+    store.set_status(JOB.id, "refused", "the form refused it")
+    store.set_proof(JOB.id, Proof("2026-11-04T08:00:00", "u", "rejected", "old"))
+    store.set_status(JOB.id, "blocked", "a captcha")
+    store.set_proof(JOB.id, Proof())
+    assert store.sent()[0].proof == Proof()
+
+
+def test_applied_csv_has_the_columns_and_a_page_cannot_make_a_formula_of_a_cell(tmp_path: Path) -> None:
+    store = Store(tmp_path / "jobs.db")
+    store.add(Job("h", "=HYPERLINK(\"http://x\")", "+1 Engineer", "L", "https://u", "a", "d"))
+    store.set_status("h", "submitted", "filled")
+    store.set_proof("h", Proof("2026-11-04T08:00:00", "https://u/thanks", "submitted", "@cmd evidence", "page text\nline two", "/shots/h.png"))
+    path = tmp_path / "applied.csv"
+    write_applied(path, store.sent())
+    with path.open(newline="", encoding="utf-8-sig") as file:
+        rows = list(csv.reader(file))
+    assert rows[0] == list(COLUMNS)
+    assert rows[1] == [
+        "2026-11-04T08:00:00",
+        "'=HYPERLINK(\"http://x\")",
+        "'+1 Engineer",
+        "sent and confirmed",
+        "'@cmd evidence",
+        "https://u",
+        "https://u/thanks",
+        "/shots/h.png",
+        "filled",
+        "page text\nline two",
+    ]
+    assert not path.with_name("applied.csv.tmp").exists()
 
 
 def test_the_list_weighs_the_judgment_and_the_title_together_and_keeps_what_jev_passed_over_below(tmp_path: Path) -> None:
