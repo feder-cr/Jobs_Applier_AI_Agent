@@ -1,11 +1,10 @@
 """Filling a job's application form with the model, through invisible-playwright-mcp.
 
-The model is told never to send an application. It fills the form and names the submit control when it is done; this
-program clicks that control, after the person's yes, or by itself when they asked for it with --auto-submit. While the
-model works, a click on anything that would send the form and the Enter key are refused (`refusal`), and the person's
-yes guards that control. The model may run script in the page as a last resort, and that script could get around the
-check on rare occasions and send a form without asking. What the model writes comes from the CV and the answers file;
-what they do not say comes back as a question for the person, never as a guess.
+The model is told never to send an application. It fills the form and names the send control when it is done. The
+person's selection and one Enter is the yes, and AIHawk clicks the control the model named. While the model works, a
+click on anything that would send the form and the Enter key are refused (`refusal`). The model may run script in the
+page as a last resort, and a script could get around that refusal and send a form. What the model writes comes from the
+CV and the answers file; what they do not say comes back as a question for the person, never as a guess.
 """
 
 from __future__ import annotations
@@ -443,7 +442,7 @@ async def _server(upload_dir: Path, home: Path) -> AsyncIterator[tuple[ClientSes
 
 
 async def apply_to_job(client: AsyncOpenAI, model: str, job: Job, cv_text: str, answers: str, cv_file: Path, data_dir: Path, profile: Path, guidance: str = "", reaches: frozenset[str] = frozenset()) -> Outcome:
-    """Open the browser on the person's profile, fill the job's form and send it: the person's yes came before, for the selection."""
+    """Open the browser on the person's profile, fill the job's form and send it: the person's selection and Enter came before."""
     shot = data_dir / "proofs" / f"{safe_name(job.id)}.png"
     async with _server(cv_file.parent, data_dir / "browser") as (session, page_rules):
         listed = await session.list_tools()

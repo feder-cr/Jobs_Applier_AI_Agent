@@ -10,4 +10,4 @@ The language switcher in the header is a custom combobox (`role="combobox"`): no
 Upload the CV with the "Datei hinzufügen" control: read the page to find the file input behind it.
 The submit control is "Bewerbung senden". It stays disabled until the required fields are filled.
 
-After sending: nothing is established for Personio. No saved page, real send or documentation shows what follows a submit. Read the page: if the form is still there, the application was not received.
+After sending: read the page: if the form is still there, the application was not received.

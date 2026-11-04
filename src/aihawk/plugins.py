@@ -9,8 +9,8 @@ A plugin with `when: always` in its front matter has no hosts: its body is added
 site's own plugin, and it never makes a site count as one AIHawk can apply to. The mail plugins are of that kind.
 
 A plugin only explains a site. What protects the person stays in apply.py, out of any plugin's reach: the model is told
-not to send the form and clicks on what would send it are refused (a last-resort script could still get around that on
-rare occasions), it writes nothing that the CV and the answers do not say, and it does not get around a captcha or a login.
+not to send the form and clicks on what would send it are refused (a last-resort script could still get around that),
+it writes nothing that the CV and the answers do not say, and it does not get around a captcha or a login.
 """
 
 from __future__ import annotations

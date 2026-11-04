@@ -16,4 +16,4 @@ Leave `#nickname_hpcsaf` empty: it is a hidden trap labelled "Please leave this 
 
 Resume: "Choose File" buttons: read the page to find the file input behind them. The send control is the `button[type=submit]` labelled "Submit Application".
 
-After sending: nothing is established for BambooHR. No saved page, real send or documentation shows what follows a submit. Read the page: if the form is still there, the application was not received.
+After sending: read the page: if the form is still there, the application was not received.

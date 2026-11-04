@@ -12,4 +12,4 @@ Questions the company adds are native selects `select[name^="resumator-questionn
 
 The send control is `#resumator-submit-resume` (`input[type=button]`, value "Submit Application"). It is not a real submit button: it is driven by script. The page carries a reCAPTCHA iframe; do not try to solve it.
 
-After sending: nothing is established for JazzHR. No saved page, real send or documentation shows what follows a submit. Read the page: if the form is still there, the application was not received.
+After sending: read the page: if the form is still there, the application was not received.

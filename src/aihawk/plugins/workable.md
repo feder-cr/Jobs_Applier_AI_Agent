@@ -21,4 +21,4 @@ A `gdpr` checkbox states that the person read the privacy notice and consents to
 
 The submit control is the button "Submit application" (in Portuguese, "Enviar candidatura").
 
-After sending: nothing is established for Workable. No saved page, real send or documentation shows what follows a submit. Read the page: if the form is still there, the application was not received.
+After sending: read the page: if the form is still there, the application was not received.

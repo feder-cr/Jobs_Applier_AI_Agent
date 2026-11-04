@@ -20,4 +20,4 @@ Dropdowns are `div[role="combobox"]` showing "--" until a choice is made, such a
 
 Demographic questions on the last steps are voluntary: choose the option that declines to answer.
 
-After sending: nothing is established for Paylocity. No saved page, real send or documentation shows what follows a submit. Read the page: if the form is still there, the application was not received.
+After sending: read the page: if the form is still there, the application was not received.
