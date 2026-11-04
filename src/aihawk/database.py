@@ -160,8 +160,9 @@ def _any_word(column: str, words: tuple[str, ...]) -> tuple[str, list[str]]:
 
 
 def _place_pattern(words: tuple[str, ...]) -> str:
-    """A place is a whole part of the location, between its separators: `Wales` is not in "New South Wales"."""
-    return "(?i)(?:^|[,;/|(])\\s*(?:" + "|".join(re.escape(word) for word in words) + ")\\s*(?:$|[,;/|)])"
+    """A place starts the location, or follows a separator, a dash or a number: `London` is not in "New London" or "Greater London"."""
+    before = "(?:^|[,;/|()\\-–—]\\s*|\\d\\s+)"
+    return "(?i)" + before + "(?:" + "|".join(re.escape(word) for word in words) + ")(?:$|[^\\pL\\pN])"
 
 
 def rarity(postings: int, holding: int) -> float:

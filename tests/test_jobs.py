@@ -207,6 +207,16 @@ def test_a_place_word_is_a_whole_part_of_the_location_not_a_word_inside_a_longer
     assert [job.id for job in jobs] == ["uk"]
 
 
+def test_a_place_starts_the_location_or_follows_a_separator_a_dash_or_a_number_never_a_word(tmp_path: Path) -> None:
+    kept = ["London", "UK - London", "IT-Milan", "ITA-Lombardy-Milan", "Dallas TX", "TX-Dallas", "Milano Via Turati 25-27", "Berlin Office", "Italy - Rome", "Remote - Italy", "Dallas-Fort Worth", "10117 Berlin"]
+    refused = ["New London", "New Berlin", "New South Wales"]
+    # Each posting has its own company: one job per title and company would keep only one of them.
+    path = catalogue(tmp_path, [(location, "Engineer", location, location) for location in kept + refused])
+    places = ("London", "Milan", "Milano", "Dallas", "Berlin", "Rome", "Italy", "Wales")
+    _, jobs = search(path, Filters(include=("Engineer",), locations=places), 60, tmp_path)
+    assert {job.id for job in jobs} == set(kept)
+
+
 def test_the_own_city_comes_first_and_a_job_posted_once_per_place_is_one_job(tmp_path: Path) -> None:
     connection = duckdb.connect()
     connection.execute("CREATE TABLE t (key VARCHAR, url VARCHAR, title VARCHAR, company VARCHAR, location VARCHAR, description VARCHAR, posted_at VARCHAR)")
