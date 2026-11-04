@@ -75,12 +75,6 @@ def test_a_page_that_cannot_be_read_leaves_the_job_as_it_was() -> None:
     assert with_description(job, timeout=1) is job
 
 
-def test_only_forms_aihawk_can_fill_count_as_fillable() -> None:
-    assert Job("a", "c", "t", "l", "u", "https://jobs.lever.co/a/1", "d").fillable
-    assert Job("a", "c", "t", "l", "u", "https://boards.greenhouse.io/a/jobs/1", "d").fillable
-    assert not Job("a", "c", "t", "l", "u", "https://acme.wd5.myworkdayjobs.com/x", "d").fillable
-
-
 def test_a_job_seen_again_keeps_its_score_and_status(tmp_path: Path) -> None:
     store = Store(tmp_path / "jobs.db")
     assert store.add(JOB) is True

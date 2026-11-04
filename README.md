@@ -29,13 +29,28 @@ The model never sends an application. It fills the form and names the submit but
 
 `aihawk apply --auto-submit` sends without asking. An automated application in your name can be wrong, and sites can close accounts for it: read the forms first, and use it only when you accept that.
 
+## Plugins
+
+Each site AIHawk can apply on is a Markdown file in [`src/aihawk/plugins/`](src/aihawk/plugins): a prompt that tells the model how that site's form works.
+
+```markdown
+---
+name: lever
+hosts: [jobs.lever.co]
+apply_path: /apply
+---
+The form is one page. Upload the CV to `input[name="resume"]` first...
+```
+
+To add a site, add a file. No code is needed, and your own go in a `plugins/` folder beside your `aihawk.yaml`. A plugin only explains a site: it cannot make the model send a form, write what your files do not say, or get around a captcha or a login.
+
 ## Models
 
 AIHawk talks to one gateway, [OrcaRouter](https://orcarouter.ai), with `orcarouter/auto` as the default model. Change `model` in `aihawk.yaml`, or point `base_url` at any endpoint compatible with OpenAI's API that supports tool calling and structured output.
 
 ## Limits
 
-- AIHawk fills forms on Greenhouse, Lever and Ashby. Other postings are found and listed, to apply to by hand.
+- AIHawk applies where a plugin exists: Greenhouse, Lever, Ashby, Recruitee, Workable, Breezy and Paylocity. Other postings are found and listed, to apply to by hand.
 - Forms behind a login or a captcha come back as blocked; AIHawk does not try to get around them.
 - The tailored PDF uses a Latin font, so CVs in other scripts need your own PDF.
 

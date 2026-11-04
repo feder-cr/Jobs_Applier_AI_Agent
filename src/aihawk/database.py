@@ -15,9 +15,6 @@ import duckdb
 
 from aihawk.config import Filters
 
-# Where each form can be filled without an account. Other postings are found and listed, and not applied to.
-FILLABLE_HOSTS = ("greenhouse.io", "lever.co", "ashbyhq.com")
-
 
 class DatabaseError(Exception):
     """The database cannot be read."""
@@ -32,10 +29,6 @@ class Job:
     url: str
     apply_url: str
     description: str
-
-    @property
-    def fillable(self) -> bool:
-        return any(host in self.apply_url.lower() for host in FILLABLE_HOSTS)
 
 
 class _PageText(HTMLParser):

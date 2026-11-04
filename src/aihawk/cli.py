@@ -6,6 +6,7 @@ import asyncio
 import io
 import re
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import click
@@ -16,6 +17,7 @@ from aihawk.config import Config, ConfigError, load_config, write_templates
 from aihawk.database import DatabaseError, search, with_description
 from aihawk.documents import score_job, tailor_cv, write_cv_pdf
 from aihawk.llm import make_client
+from aihawk.plugins import Plugin, PluginError, load_plugins, plugin_for
 from aihawk.store import SUBMITTED, Store, Stored
 
 
@@ -119,7 +121,7 @@ def _report(item: Stored, outcome: Outcome) -> None:
             click.echo(f"  - {question}")
 
 
-async def _apply(config: Config, store: Store, items: list[Stored], auto_submit: bool) -> None:
+async def _apply(config: Config, store: Store, items: list[Stored], auto_submit: bool, plugins: tuple[Plugin, ...]) -> None:
     client = make_client(config)
     cv = _read(config.cv, "CV")
     answers = _read(config.answers, "answers file")
@@ -136,7 +138,9 @@ async def _apply(config: Config, store: Store, items: list[Stored], auto_submit:
             store.set_cv(item.job.id, cv_file)
             click.echo(f"CV for this job: {cv_file}")
         try:
-            outcome = await apply_to_job(client, config.model, item.job, cv, answers, cv_file, config.data_dir, None if auto_submit else _confirm)
+            plugin = plugin_for(item.job.url, plugins)
+            job = replace(item.job, apply_url=plugin.form_url(item.job.url))
+            outcome = await apply_to_job(client, config.model, job, cv, answers, cv_file, config.data_dir, None if auto_submit else _confirm, plugin.instructions)
         except Exception as error:  # noqa: BLE001  One job's failure is reported and recorded; the next job still runs.
             outcome = Outcome("failed", str(error) or type(error).__name__)
         store.set_status(item.job.id, outcome.status, outcome.summary)
@@ -153,24 +157,25 @@ def apply(workspace: Path, job_id: str | None, top: int | None, auto_submit: boo
     if bool(job_id) == bool(top):
         raise click.UsageError("name one JOB_ID or use --top N")
     config = load_config(workspace)
+    plugins = load_plugins(workspace)
     store = _store(config)
     try:
         if job_id:
             item = store.get(job_id)
             if item is None:
                 raise click.ClickException(f"no job {job_id}: see `aihawk list`")
-            if not item.job.fillable:
-                raise click.ClickException(f"AIHawk cannot fill this form yet. Apply by hand: {item.job.apply_url}")
+            if plugin_for(item.job.url, plugins) is None:
+                raise click.ClickException(f"No plugin knows this site yet. Apply by hand: {item.job.url}")
             if item.status in SUBMITTED:
                 raise click.ClickException(f"{job_id} was already sent ({item.status}): it is not sent twice")
             items = [item]
         else:
-            # What AIHawk cannot fill without an account stays listed, and is opened by hand.
-            items = [item for item in store.to_apply(config.threshold, len(store.all())) if item.job.fillable][: top or 0]
+            # A site no plugin knows stays listed, and is applied to by hand.
+            items = [item for item in store.to_apply(config.threshold, len(store.all())) if plugin_for(item.job.url, plugins)][: top or 0]
         if not items:
             click.echo("nothing to apply to")
             return
-        asyncio.run(_apply(config, store, items, auto_submit))
+        asyncio.run(_apply(config, store, items, auto_submit, plugins))
     finally:
         store.close()
 
@@ -182,5 +187,5 @@ def run() -> None:
             stream.reconfigure(encoding="utf-8", errors="replace")
     try:
         main()
-    except (ConfigError, DatabaseError) as error:
+    except (ConfigError, DatabaseError, PluginError) as error:
         raise SystemExit(f"aihawk: {error}") from error

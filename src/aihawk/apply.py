@@ -105,7 +105,13 @@ _SENDS = re.compile(
     r"\b(submit|send|invia|candidati|candidatura|bewerben|absenden|envoyer|postuler|soumettre|enviar|solicitar|aplicar)\b", re.IGNORECASE
 )
 _APPLY = re.compile(r"\b(apply|applica)\b", re.IGNORECASE)
-_STEPS = re.compile(r"\b(next|continue|back|previous|add|avanti|continua|indietro|aggiungi|weiter|suivant|siguiente)\b", re.IGNORECASE)
+# What a button inside a form says when it does not send it: a step, an answer (Ashby's Yes and No are buttons with no
+# type), or a file to attach.
+_STEPS = re.compile(
+    r"\b(next|continue|back|previous|add|avanti|continua|indietro|aggiungi|weiter|suivant|siguiente"
+    r"|yes|no|si|oui|non|ja|nein|upload|attach|browse|carica|choose file)\b",
+    re.IGNORECASE,
+)
 
 
 def _inspect(selector: str) -> str:
@@ -165,9 +171,16 @@ class Outcome:
     questions: list[str] = field(default_factory=list)
 
 
-async def fill_form(session: Session, tools: list[dict[str, Any]], client: AsyncOpenAI, model: str, brief: str) -> dict[str, Any]:
+def instructions(guidance: str) -> str:
+    """The rules, then what a plugin says about this site. The rules come first and win."""
+    if not guidance:
+        return SYSTEM
+    return f"{SYSTEM}\n\nAbout this site. Where this differs from the rules above, the rules above win:\n\n{guidance}"
+
+
+async def fill_form(session: Session, tools: list[dict[str, Any]], client: AsyncOpenAI, model: str, brief: str, guidance: str = "") -> dict[str, Any]:
     """The model works on the open page until it calls finish_form; returns what it reported."""
-    messages: list[Any] = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": brief}]
+    messages: list[Any] = [{"role": "system", "content": instructions(guidance)}, {"role": "user", "content": brief}]
     form_touched = False
     for _ in range(MAX_STEPS):
         response = await client.chat.completions.create(model=model, messages=messages, tools=[*tools, FINISH_TOOL])
@@ -214,12 +227,12 @@ async def submit_and_verify(session: Session, client: AsyncOpenAI, model: str, s
     return Outcome("unconfirmed", f"{summary}\nClicked, not confirmed by the page: {verdict['evidence']}")
 
 
-async def run_on_page(session: Session, tools: list[dict[str, Any]], client: AsyncOpenAI, model: str, job: Job, cv_text: str, answers: str, cv_file: Path, confirm: Confirm | None) -> Outcome:
+async def run_on_page(session: Session, tools: list[dict[str, Any]], client: AsyncOpenAI, model: str, job: Job, cv_text: str, answers: str, cv_file: Path, confirm: Confirm | None, guidance: str = "") -> Outcome:
     brief = (
         f"The form: {job.apply_url}\nThe job: {job.title} at {job.company}\nThe CV file to upload: {cv_file}\n\n"
         f"The CV:\n{cv_text}\n\nThe answers:\n{answers}"
     )
-    report = await fill_form(session, tools, client, model, brief)
+    report = await fill_form(session, tools, client, model, brief, guidance)
     status, summary = report.get("status"), str(report.get("summary", ""))
     if status == "needs_input":
         return Outcome("needs_input", summary, [str(question) for question in report.get("questions") or []])
@@ -255,7 +268,7 @@ def server_parameters(upload_dir: Path, home: Path) -> StdioServerParameters:
     return StdioServerParameters(command=sys.executable, args=["-m", "invisible_playwright_mcp"], env=environment)
 
 
-async def apply_to_job(client: AsyncOpenAI, model: str, job: Job, cv_text: str, answers: str, cv_file: Path, data_dir: Path, confirm: Confirm | None) -> Outcome:
+async def apply_to_job(client: AsyncOpenAI, model: str, job: Job, cv_text: str, answers: str, cv_file: Path, data_dir: Path, confirm: Confirm | None, guidance: str = "") -> Outcome:
     """Open the browser, fill the job's form and send it as `confirm` decides; None sends without asking."""
     home = data_dir / "browser"
     home.mkdir(parents=True, exist_ok=True)
@@ -272,6 +285,6 @@ async def apply_to_job(client: AsyncOpenAI, model: str, job: Job, cv_text: str, 
             navigated = await session.call_tool("browser_navigate", {"url": job.apply_url})
             if navigated.isError:
                 return Outcome("blocked", f"the form did not load: {tool_text(navigated)}")
-            return await run_on_page(session, tools, client, model, job, cv_text, answers, cv_file, confirm)
+            return await run_on_page(session, tools, client, model, job, cv_text, answers, cv_file, confirm, guidance)
         finally:
             await session.call_tool("browser_close", {})
