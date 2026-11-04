@@ -89,7 +89,7 @@ def test_a_click_that_cannot_be_checked_is_refused() -> None:
 
 def test_the_model_is_not_offered_what_cannot_be_checked() -> None:
     assert not MODEL_TOOLS & {"browser_open", "browser_close"}
-    assert {"browser_click_at", "browser_take_screenshot", "browser_evaluate"} <= MODEL_TOOLS
+    assert {"browser_click_at", "browser_take_screenshot"} <= MODEL_TOOLS
     assert FINISH_TOOL["function"]["name"] == "finish_form"
 
 
@@ -127,7 +127,7 @@ def test_a_yes_clicks_once_and_the_page_confirms() -> None:
 
 
 def test_auto_submit_does_not_ask_and_still_verifies() -> None:
-    browser = ScriptedBrowser()
+    browser = ScriptedBrowser({"#send": SUBMIT})
     outcome = run(ScriptedModel(ready(), VERIFIED), browser, None)
     assert outcome.status == "submitted"
     assert browser.clicks() == ["#send"]
@@ -135,12 +135,33 @@ def test_auto_submit_does_not_ask_and_still_verifies() -> None:
 
 def test_a_click_the_page_does_not_confirm_is_not_called_sent() -> None:
     verdict = json.dumps({"outcome": "unknown", "evidence": "page unchanged"})
-    assert run(ScriptedModel(ready(), verdict), ScriptedBrowser(), None).status == "unconfirmed"
+    assert run(ScriptedModel(ready(), verdict), ScriptedBrowser({"#send": SUBMIT}), None).status == "unconfirmed"
+
+
+class ButtonDisablesItself(ScriptedBrowser):
+    """A form that disables its button as it sends: the click answers with an error, and may well have gone."""
+
+    async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
+        result = await super().call_tool(name, arguments)
+        if name == "browser_click":
+            return SimpleNamespace(isError=True, content=[SimpleNamespace(text="the action went out but did not reach the element")])
+        return result
+
+
+@pytest.mark.parametrize(
+    ("verdict", "status"),
+    [("submitted", "submitted"), ("unknown", "unconfirmed")],
+)
+def test_a_click_that_answers_with_an_error_is_never_called_failed_because_it_may_have_gone(verdict: str, status: str) -> None:
+    browser = ButtonDisablesItself({"#send": SUBMIT})
+    outcome = run(ScriptedModel(ready(), json.dumps({"outcome": verdict, "evidence": "the page"})), browser, None)
+    assert outcome.status == status
+    assert browser.clicks() == ["#send"]
 
 
 def test_a_form_that_refuses_it_comes_back_as_a_question() -> None:
     verdict = json.dumps({"outcome": "rejected", "evidence": "phone is required"})
-    outcome = run(ScriptedModel(ready(), verdict), ScriptedBrowser(), None)
+    outcome = run(ScriptedModel(ready(), verdict), ScriptedBrowser({"#send": SUBMIT}), None)
     assert (outcome.status, outcome.questions) == ("needs_input", ["phone is required"])
 
 
@@ -194,13 +215,58 @@ def test_a_click_at_a_point_on_anything_else_passes() -> None:
     assert asyncio.run(refusal(PageAtAPoint(field), "browser_click_at", {"x": 10, "y": 20}, True)) is None
 
 
-@pytest.mark.parametrize("expression", ["fetch('/apply', {method: 'POST'})", "new XMLHttpRequest()", "navigator.sendBeacon('/a')"])
-def test_script_that_reaches_out_is_refused(expression: str) -> None:
-    assert asyncio.run(refusal(ScriptedBrowser(), "browser_evaluate", {"expression": expression}, True))
+def test_script_is_never_offered_because_no_check_can_tell_what_it_does() -> None:
+    tool = SimpleNamespace(name="browser_evaluate", annotations=SimpleNamespace(readOnlyHint=True))
+    assert not offered(tool)
+    assert "browser_evaluate" not in MODEL_TOOLS
 
 
-def test_script_that_reads_passes() -> None:
-    assert asyncio.run(refusal(ScriptedBrowser(), "browser_evaluate", {"expression": "document.title"}, True)) is None
+@pytest.mark.parametrize("arguments", [{"key": " "}, {"key": "Space"}, {"renamed": "space"}])
+def test_space_on_the_submit_control_is_refused(arguments: dict[str, str]) -> None:
+    browser = PageAtAPoint(SUBMIT)
+    assert asyncio.run(refusal(browser, "browser_press_key", arguments, True))
+    assert "activeElement" in browser.calls[0][1]["expression"]
+
+
+def test_space_on_a_checkbox_passes() -> None:
+    box = {"tag": "input", "type": "checkbox", "in_form": True, "text": ""}
+    assert asyncio.run(refusal(PageAtAPoint(box), "browser_press_key", {"key": " "}, True)) is None
+
+
+def test_enter_is_refused_whatever_the_argument_is_called() -> None:
+    assert asyncio.run(refusal(ScriptedBrowser(), "browser_press_key", {"renamed": "Enter"}, True))
+
+
+def test_a_new_line_is_refused_except_in_a_text_area() -> None:
+    field = {"tag": "input", "type": "text", "in_form": True, "text": ""}
+    area = {"tag": "textarea", "type": "", "in_form": True, "text": ""}
+    arguments = {"selector": "#a", "text": "one\ntwo"}
+    assert asyncio.run(refusal(PageAtAPoint(field), "browser_type", arguments, True))
+    assert asyncio.run(refusal(PageAtAPoint(area), "browser_type", arguments, True)) is None
+    assert asyncio.run(refusal(PageAtAPoint(field), "browser_type", {"selector": "#a", "text": "one"}, True)) is None
+
+
+def test_an_image_input_sends_and_a_word_with_no_edge_is_found() -> None:
+    assert sends_form({"tag": "input", "type": "image", "in_form": True, "text": ""}, True)
+    assert sends_form({"tag": "div", "type": "", "in_form": False, "text": "送信する"}, True)
+
+
+def test_a_named_control_that_does_not_send_is_not_clicked_even_after_a_yes() -> None:
+    browser = ScriptedBrowser({"#delete": {"tag": "button", "type": "button", "in_form": True, "text": "Delete my account"}})
+
+    async def yes(summary: str) -> bool:
+        return True
+
+    outcome = run(ScriptedModel(ready("#delete")), browser, yes)
+    assert outcome.status == "blocked"
+    assert browser.clicks() == []
+
+
+def test_a_failure_to_read_the_result_after_the_click_is_not_a_failed_application() -> None:
+    browser = ScriptedBrowser({"#send": SUBMIT})
+    outcome = run(ScriptedModel(ready(), "not json"), browser, None)
+    assert outcome.status == "unconfirmed"
+    assert browser.clicks() == ["#send"]
 
 
 def test_a_screenshot_reaches_the_model_after_the_answers_it_must_follow() -> None:

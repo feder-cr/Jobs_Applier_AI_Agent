@@ -116,7 +116,7 @@ def test_the_newest_server_still_has_what_aihawk_relies_on(tmp_path: Path) -> No
             started = await session.initialize()
             tools = {tool.name: tool for tool in (await session.list_tools()).tools}
             # Each is called by name, and the first two by their arguments, in apply.py.
-            assert MODEL_TOOLS | {"browser_open", "browser_close"} <= set(tools)
+            assert MODEL_TOOLS | {"browser_open", "browser_close", "browser_evaluate"} <= set(tools)
             assert {"selector"} <= set(tools["browser_click"].inputSchema["properties"])
             assert {"x", "y"} <= set(tools["browser_click_at"].inputSchema["properties"])
             assert {"expression"} <= set(tools["browser_evaluate"].inputSchema["properties"])
