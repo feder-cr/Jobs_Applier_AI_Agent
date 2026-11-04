@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import csv
 import json
+import os
+import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -29,14 +32,55 @@ CREATE TABLE IF NOT EXISTS jobs (
     lexical REAL NOT NULL DEFAULT 0,
     evidence REAL,
     note TEXT,
+    sent_at TEXT,
+    final_url TEXT,
+    verdict TEXT,
+    verdict_evidence TEXT,
+    page_text TEXT,
+    screenshot TEXT,
     first_seen TEXT NOT NULL,
     updated TEXT NOT NULL
 )
 """
 
-# new -> shortlisted | passed_over; shortlisted -> scored -> needs_input | blocked | declined | failed | submitted | unconfirmed
+# new -> shortlisted | passed_over; shortlisted -> scored -> needs_input | refused | blocked | failed | submitted | unconfirmed
 SUBMITTED = ("submitted", "unconfirmed")
+# The jobs the person sees as tried, and what each status says in plain words.
+SENT_WORDS = {
+    "submitted": "sent and confirmed",
+    "unconfirmed": "sent, not confirmed",
+    "refused": "refused by the form",
+    "blocked": "blocked",
+    "failed": "failed",
+    "needs_input": "needs an answer",
+}
 LEXICAL_SHARE = 0.5
+# A spreadsheet runs a cell that starts like a formula; such a cell is written as text.
+FORMULA_START = ("=", "+", "-", "@", "\t", "\r")
+COLUMNS = ("When", "Company", "Role", "Status", "What the page said", "Posting", "Final address", "Screenshot", "What was filled", "Page text")
+
+
+@dataclass(frozen=True)
+class Proof:
+    """What the page said after the click. Blank for a job that was not clicked."""
+
+    at: str = ""
+    url: str = ""
+    verdict: str = ""
+    evidence: str = ""
+    text: str = ""
+    screenshot: str = ""
+
+
+@dataclass(frozen=True)
+class Sent:
+    """A job that was tried: when, its status and reason, and what the page said."""
+
+    job: Job
+    status: str
+    note: str
+    when: str
+    proof: Proof
 
 
 @dataclass(frozen=True)
@@ -52,6 +96,36 @@ class Stored:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def safe_name(text: str) -> str:
+    """A job's id as a file name."""
+    return re.sub(r"[^A-Za-z0-9]+", "-", text).strip("-")[:120]
+
+
+def sent_word(item: Sent) -> str:
+    return SENT_WORDS.get(item.status, item.status)
+
+
+def said(item: Sent) -> str:
+    """What the page said, or the reason the job was not sent."""
+    return item.proof.evidence or item.note
+
+
+def inert(cell: str) -> str:
+    return "'" + cell if cell.startswith(FORMULA_START) else cell
+
+
+def write_applied(path: Path, sent: list[Sent]) -> None:
+    """applied.csv, written whole beside itself and renamed over the old one, so it is never half written."""
+    temp = path.with_name(path.name + ".tmp")
+    with temp.open("w", newline="", encoding="utf-8-sig") as out:
+        writer = csv.writer(out)
+        writer.writerow(COLUMNS)
+        for item in sent:
+            cells = (item.when, item.job.company, item.job.title, sent_word(item), said(item), item.job.url, item.proof.url, item.proof.screenshot, item.note, item.proof.text)
+            writer.writerow(inert(cell) for cell in cells)
+    os.replace(temp, path)
 
 
 class Store:
@@ -76,10 +150,23 @@ class Store:
         return cursor.rowcount == 1
 
     @staticmethod
-    def _stored(row: sqlite3.Row) -> Stored:
-        job = Job(row["id"], row["company"], row["title"], row["location"], row["url"], row["apply_url"], row["description"], row["ref"] or "", row["lexical"])
+    def _job(row: sqlite3.Row) -> Job:
+        return Job(row["id"], row["company"], row["title"], row["location"], row["url"], row["apply_url"], row["description"], row["ref"] or "", row["lexical"])
+
+    @classmethod
+    def _stored(cls, row: sqlite3.Row) -> Stored:
         report = json.loads(row["report"]) if row["report"] else None
-        return Stored(job, row["status"], row["score"], report, row["cv_path"], row["note"], row["evidence"])
+        return Stored(cls._job(row), row["status"], row["score"], report, row["cv_path"], row["note"], row["evidence"])
+
+    def sent(self) -> list[Sent]:
+        """Every job tried, the newest first."""
+        marks = ",".join("?" * len(SENT_WORDS))
+        rows = self._db.execute(f"SELECT * FROM jobs WHERE status IN ({marks}) ORDER BY COALESCE(sent_at, updated) DESC", tuple(SENT_WORDS)).fetchall()
+        return [Sent(self._job(row), row["status"], row["note"] or "", row["sent_at"] or row["updated"], self._proof(row)) for row in rows]
+
+    @staticmethod
+    def _proof(row: sqlite3.Row) -> Proof:
+        return Proof(row["sent_at"] or "", row["final_url"] or "", row["verdict"] or "", row["verdict_evidence"] or "", row["page_text"] or "", row["screenshot"] or "")
 
     def get(self, job_id: str) -> Stored | None:
         row = self._db.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
@@ -135,4 +222,11 @@ class Store:
 
     def set_status(self, job_id: str, status: str, note: str = "") -> None:
         self._db.execute("UPDATE jobs SET status = ?, note = ?, updated = ? WHERE id = ?", (status, note, _now(), job_id))
+        self._db.commit()
+
+    def set_proof(self, job_id: str, proof: Proof) -> None:
+        self._db.execute(
+            "UPDATE jobs SET sent_at = ?, final_url = ?, verdict = ?, verdict_evidence = ?, page_text = ?, screenshot = ? WHERE id = ?",
+            (proof.at or None, proof.url, proof.verdict, proof.evidence, proof.text, proof.screenshot, job_id),
+        )
         self._db.commit()

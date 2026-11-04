@@ -12,16 +12,18 @@ from typing import Any
 
 import duckdb
 import pytest
+from click.testing import CliRunner
 from pypdf import PdfWriter
 from textual.widgets import DataTable, Input
 
 from aihawk import apply as apply_module
 from aihawk.apply import Outcome
+from aihawk.cli import main as cli_main
 from aihawk.config import ConfigError, load_config
 from aihawk.database import Job
 from aihawk.profile import add_answers, answer_question, install_resume, read_answers, read_resume
-from aihawk.store import Stored
-from aihawk.tui import AIHawk, ConfirmSend, JobDetails, SignIn, TextPrompt
+from aihawk.store import Proof, Stored
+from aihawk.tui import AIHawk, JobDetails, SendBatch, SentDetails, SentList, SignIn, TextPrompt
 from fakes import ScriptedBrowser
 
 PROFILE = {
@@ -118,7 +120,7 @@ async def settle(pilot: Any, app: AIHawk) -> None:
     for _ in range(200):
         await pilot.pause(0.05)
         running = [worker for worker in app.workers if worker.is_running and worker.group == "flow"]
-        if not running or isinstance(app.screen, (TextPrompt, ConfirmSend)):
+        if not running or isinstance(app.screen, (TextPrompt, SendBatch)):
             return
     raise AssertionError("the flow never settled")
 
@@ -195,12 +197,9 @@ def test_no_key_asks_for_one_and_keeps_it_on_this_computer(home: Path, resume: P
 
 
 def fake_apply(app: AIHawk, outcomes: list[Outcome], calls: list[Any]) -> None:
-    async def apply_to_job(client: Any, model: str, job: Any, cv: str, answers: str, cv_file: Path, data_dir: Path, profile: Path, confirm: Any, guidance: str = "", reaches: frozenset[str] = frozenset()) -> Outcome:
+    async def apply_to_job(client: Any, model: str, job: Any, cv: str, answers: str, cv_file: Path, data_dir: Path, profile: Path, guidance: str = "", reaches: frozenset[str] = frozenset()) -> Outcome:
         calls.append({"job": job, "answers": answers, "guidance": guidance, "cv_file": cv_file, "profile": profile})
-        outcome = outcomes.pop(0)
-        if outcome.status == "submitted" and confirm is not None and not await confirm("the form's summary"):
-            return Outcome("declined", "not sent")
-        return outcome
+        return outcomes.pop(0)
 
     import aihawk.session as session_module
 
@@ -232,7 +231,7 @@ async def wait_for_apply(pilot: Any, app: AIHawk) -> None:
     raise AssertionError("applying never finished")
 
 
-def test_select_apply_and_nothing_leaves_without_the_yes(home: Path, resume: Path, restored_apply: Any) -> None:
+def test_space_space_a_then_enter_sends_each_selected_job_once_and_asks_no_question(home: Path, resume: Path, restored_apply: Any) -> None:
     calls: list[Any] = []
 
     async def run() -> None:
@@ -240,24 +239,58 @@ def test_select_apply_and_nothing_leaves_without_the_yes(home: Path, resume: Pat
         fake_apply(app, [Outcome("submitted", "sent"), Outcome("submitted", "sent")], calls)
         async with app.run_test(size=(140, 40)) as pilot:
             await settle(pilot, app)
-            await pilot.press("space", "a")
-            await wait_for_screen(pilot, ConfirmSend)
-            await pilot.press("n")
+            await pilot.press("space", "space", "a")
+            await wait_for_screen(pilot, SendBatch)
+            await pilot.press("enter")
             await wait_for_apply(pilot, app)
+            await pilot.pause(0.1)
+            assert not isinstance(app.screen, TextPrompt)
             table = app.query_one(DataTable)
-            assert table.get_row_at(0)[6] == "not sent"
+            assert [table.get_row_at(index)[6] for index in range(2)] == ["sent", "sent"]
             assert app.selected == set()
-            table.move_cursor(row=0)
-            await pilot.press("a")
-            await wait_for_screen(pilot, ConfirmSend)
-            await pilot.press("y")
-            await wait_for_apply(pilot, app)
-            assert app.query_one(DataTable).get_row_at(0)[6] == "sent"
 
     asyncio.run(run())
+    assert [call["job"].company for call in calls] == ["Bestco", "Lowly"]
     assert calls[0]["job"].apply_url == "https://jobs.lever.co/beta/2/apply"
     assert "Upload the CV" in calls[0]["guidance"]
     assert Path(calls[0]["cv_file"]).is_file()
+
+
+def test_escape_on_the_batch_sends_none_and_the_selection_stays(home: Path, resume: Path, restored_apply: Any) -> None:
+    calls: list[Any] = []
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        fake_apply(app, [], calls)
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
+            await pilot.press("space", "a")
+            await wait_for_screen(pilot, SendBatch)
+            await pilot.press("escape")
+            await wait_for_apply(pilot, app)
+            assert app.selected == {"high"}
+            assert app.query_one(DataTable).get_row_at(0)[6] == ""
+
+    asyncio.run(run())
+    assert calls == []
+
+
+def test_a_with_nothing_selected_asks_about_the_current_row_alone(home: Path, resume: Path, restored_apply: Any) -> None:
+    calls: list[Any] = []
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        fake_apply(app, [Outcome("submitted", "sent")], calls)
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
+            await pilot.press("a")
+            await wait_for_screen(pilot, SendBatch)
+            assert len(app.screen.items) == 1
+            await pilot.press("enter")
+            await wait_for_apply(pilot, app)
+
+    asyncio.run(run())
+    assert [call["job"].company for call in calls] == ["Bestco"]
 
 
 def test_a_job_already_sent_is_not_sent_twice(home: Path, resume: Path, restored_apply: Any) -> None:
@@ -269,13 +302,14 @@ def test_a_job_already_sent_is_not_sent_twice(home: Path, resume: Path, restored
         async with app.run_test(size=(140, 40)) as pilot:
             await settle(pilot, app)
             await pilot.press("a")
-            await wait_for_screen(pilot, ConfirmSend)
-            await pilot.press("y")
+            await wait_for_screen(pilot, SendBatch)
+            await pilot.press("enter")
             await wait_for_apply(pilot, app)
             app.query_one(DataTable).move_cursor(row=0)
             await pilot.press("a")
             await wait_for_apply(pilot, app)
             await pilot.pause(0.2)
+            assert not isinstance(app.screen, SendBatch)
 
     asyncio.run(run())
     assert len(calls) == 1
@@ -298,24 +332,27 @@ def test_a_site_no_plugin_knows_says_so_and_nothing_runs(home: Path, resume: Pat
     assert calls == []
 
 
-def test_what_a_form_asks_is_asked_remembered_and_tried_again(home: Path, resume: Path, restored_apply: Any) -> None:
+def test_what_a_form_asks_is_asked_after_the_others_are_sent_remembered_and_tried_again(home: Path, resume: Path, restored_apply: Any) -> None:
     calls: list[Any] = []
 
     async def run() -> None:
         app = scripted_app(home, resume)
-        fake_apply(app, [Outcome("needs_input", "missing", ["Your salary?"]), Outcome("submitted", "sent")], calls)
+        fake_apply(app, [Outcome("needs_input", "missing", ["Your salary?"]), Outcome("submitted", "sent"), Outcome("submitted", "sent")], calls)
         async with app.run_test(size=(140, 40)) as pilot:
             await settle(pilot, app)
-            await pilot.press("a")
+            await pilot.press("space", "space", "a")
+            await wait_for_screen(pilot, SendBatch)
+            await pilot.press("enter")
             await wait_for_screen(pilot, TextPrompt)
+            # The other form was sent while this one waited for its answer.
+            assert [call["job"].company for call in calls] == ["Bestco", "Lowly"]
             app.screen.query_one(Input).value = "50000 EUR"
             await pilot.press("enter")
-            await wait_for_screen(pilot, ConfirmSend)
-            await pilot.press("y")
             await wait_for_apply(pilot, app)
 
     asyncio.run(run())
-    assert "50000 EUR" in calls[1]["answers"]
+    assert [call["job"].company for call in calls] == ["Bestco", "Lowly", "Bestco"]
+    assert "50000 EUR" in calls[2]["answers"]
     assert read_answers(load_config(home))["Your salary?"] == "50000 EUR"
 
 
@@ -328,6 +365,8 @@ def test_a_question_skipped_stops_trying_and_is_recorded(home: Path, resume: Pat
         async with app.run_test(size=(140, 40)) as pilot:
             await settle(pilot, app)
             await pilot.press("a")
+            await wait_for_screen(pilot, SendBatch)
+            await pilot.press("enter")
             await wait_for_screen(pilot, TextPrompt)
             await pilot.press("escape")
             await wait_for_apply(pilot, app)
@@ -337,18 +376,50 @@ def test_a_question_skipped_stops_trying_and_is_recorded(home: Path, resume: Pat
     assert len(calls) == 1
 
 
-def test_auto_submit_does_not_ask(home: Path, resume: Path, restored_apply: Any) -> None:
-    calls: list[Any] = []
+def test_the_auto_submit_flag_is_gone() -> None:
+    result = CliRunner().invoke(cli_main, ["--auto-submit"])
+    assert result.exit_code != 0
+    assert "No such option" in result.output
 
+
+def test_s_lists_what_was_tried_newest_first_and_enter_opens_one_in_full(home: Path, resume: Path) -> None:
     async def run() -> None:
-        app = scripted_app(home, resume, auto_submit=True)
-        fake_apply(app, [Outcome("submitted", "sent")], calls)
+        app = scripted_app(home, resume)
+        store = app.session.store
+        store.add(Job("sent", "Acme", "Engineer", "Rome", "https://jobs.lever.co/acme/1", "https://jobs.lever.co/acme/1/apply", "d"))
+        store.set_status("sent", "submitted", "Filled in: the CV")
+        store.set_proof("sent", Proof("2026-11-03T09:00:00", "https://jobs.lever.co/acme/thanks", "submitted", "Thank you", "the whole page", "/shots/sent.png"))
+        store.add(Job("stuck", "Beta", "Designer", "Rome", "https://jobs.lever.co/beta/2", "https://jobs.lever.co/beta/2/apply", "d"))
+        store.set_status("stuck", "blocked", "a captcha")
+        store.set_proof("stuck", Proof())
+        # A job with no click is ordered by when its status changed: an older change comes after the send.
+        store._db.execute("UPDATE jobs SET updated = ? WHERE id = ?", ("2026-11-01T12:00:00", "stuck"))
         async with app.run_test(size=(140, 40)) as pilot:
             await settle(pilot, app)
-            await pilot.press("a")
-            await pilot.pause(0.2)
-            await wait_for_apply(pilot, app)
-            assert app.query_one(DataTable).get_row_at(0)[6] == "sent"
+            await pilot.press("s")
+            await wait_for_screen(pilot, SentList)
+            table = app.screen.query_one(DataTable)
+            rows = [[str(table.get_row_at(index)[column]) for column in (1, 3, 4)] for index in range(table.row_count)]
+            assert rows[0] == ["Acme", "sent and confirmed", "Thank you"]
+            assert rows[1][1:] == ["blocked", "a captcha"]
+            await pilot.press("enter")
+            await wait_for_screen(pilot, SentDetails)
+            assert app.screen.item.job.id == "sent"
+            await pilot.press("escape")
+            await pilot.press("escape")
+
+    asyncio.run(run())
+
+
+def test_s_with_nothing_tried_shows_an_empty_list(home: Path, resume: Path) -> None:
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
+            await pilot.press("s")
+            await wait_for_screen(pilot, SentList)
+            assert app.screen.query_one(DataTable).row_count == 0
+            await pilot.press("escape")
 
     asyncio.run(run())
 
@@ -438,6 +509,8 @@ def test_the_mail_plugins_join_every_form_after_the_sites_own_and_the_profile_is
         async with app.run_test(size=(140, 40)) as pilot:
             await settle(pilot, app)
             await pilot.press("a")
+            await wait_for_screen(pilot, SendBatch)
+            await pilot.press("enter")
             await wait_for_apply(pilot, app)
 
     asyncio.run(run())
@@ -496,15 +569,17 @@ def test_the_sign_in_key_is_refused_while_an_application_runs(home: Path, resume
     async def run() -> None:
         release = asyncio.Event()
 
-        async def slow_apply(client: Any, model: str, job: Any, cv: str, answers: str, cv_file: Path, data_dir: Path, profile: Path, confirm: Any, guidance: str = "", reaches: frozenset[str] = frozenset()) -> Outcome:
+        async def slow_apply(client: Any, model: str, job: Any, cv: str, answers: str, cv_file: Path, data_dir: Path, profile: Path, guidance: str = "", reaches: frozenset[str] = frozenset()) -> Outcome:
             await release.wait()
-            return Outcome("declined", "not sent")
+            return Outcome("blocked", "not sent")
 
         app = scripted_app(home, resume)
         session_module.apply_to_job = slow_apply  # type: ignore[assignment]
         async with app.run_test(size=(140, 40)) as pilot:
             await settle(pilot, app)
             await pilot.press("a")
+            await wait_for_screen(pilot, SendBatch)
+            await pilot.press("enter")
             await pilot.pause(0.2)
             assert app.applying()
             await pilot.press("l")

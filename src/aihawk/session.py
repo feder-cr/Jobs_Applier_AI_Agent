@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import re
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from pathlib import Path
 
 from openai import AsyncOpenAI
 
-from aihawk.apply import Confirm, Outcome, apply_to_job
+from aihawk.apply import Outcome, apply_to_job
 from aihawk.apply import sign_in as sign_in_browser
 from aihawk.config import Config, ConfigError, load_config
 from aihawk.database import search, stored_descriptions, with_description
@@ -19,13 +18,15 @@ from aihawk.judge import evidence, fuse, questions
 from aihawk.llm import make_client
 from aihawk.plugins import Plugin, always_plugins, load_plugins, plugin_for
 from aihawk.profile import answer_question, install_resume
-from aihawk.store import SUBMITTED, Store, Stored
+from aihawk.store import SUBMITTED, Store, Stored, safe_name, write_applied
 
 # The funnel: the next WIDE postings by title are weighed by the decision model, and the best JUDGED of them are scored by the judge model.
 WIDE = 100
 JUDGED = 25
 SCORING_AT_ONCE = 5
+# A form that asks something is tried again with the answers, this many rounds at most.
 MAX_ROUNDS = 3
+ASKED = ("needs_input", "refused")
 
 Log = Callable[[str], None]
 Ask = Callable[[str], Awaitable[str | None]]
@@ -134,16 +135,43 @@ class Session:
         log("writing a CV for this job")
         job = await asyncio.to_thread(with_description, item.job)
         tailored = await tailor_cv(self.client, self.config.model, job, cv)
-        name = re.sub(r"[^A-Za-z0-9]+", "-", item.job.id).strip("-")[:120]
-        path = self.config.data_dir / "cvs" / f"{name}.pdf"
+        path = self.config.data_dir / "cvs" / f"{safe_name(item.job.id)}.pdf"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.with_suffix(".md").write_text(tailored, encoding="utf-8")
         write_cv_pdf(tailored, path)
         self.store.set_cv(item.job.id, path)
         return path
 
-    async def apply(self, item: Stored, confirm: Confirm | None, ask: Ask, log: Log) -> Outcome:
-        """Fill and send one application. What a form asks and the files do not say is asked of the person, then tried again."""
+    async def send(self, items: list[Stored], ask: Ask, log: Log, done: Callable[[], None]) -> None:
+        """Send each application once. A form's questions are put to the person after the others are sent, so a form that
+        waits does not hold them; a form that is answered is tried again."""
+        pending = items
+        for _ in range(MAX_ROUNDS):
+            asking: list[tuple[Stored, list[str]]] = []
+            for item in pending:
+                outcome = await self.apply(item, log)
+                done()
+                if outcome.status in ASKED and outcome.questions:
+                    asking.append((item, outcome.questions))
+            pending = []
+            for item, asked in asking:
+                if await self._answer(item, asked, ask):
+                    pending.append(item)
+            if not pending:
+                return
+
+    async def _answer(self, item: Stored, asked: list[str], ask: Ask) -> bool:
+        """Puts each question to the person; True when one was answered, so the form is tried again."""
+        answered = False
+        for question in asked:
+            answer = await ask(f"{item.job.company} asks: {question}")
+            if answer:
+                answer_question(self.config, question, answer)
+                answered = True
+        return answered
+
+    async def apply(self, item: Stored, log: Log) -> Outcome:
+        """Fill and send one application, once. What the page said is kept with it, and applied.csv is written."""
         if item.status in SUBMITTED:
             raise ConfigError(f"{item.job.company}: already sent, and not sent twice")
         plugin = self.plugin(item)
@@ -152,28 +180,22 @@ class Session:
         cv = self.config.cv.read_text(encoding="utf-8")
         cv_file = await self._cv_for(item, cv, log)
         job = replace(item.job, apply_url=plugin.form_url(item.job.url))
-        outcome = Outcome("failed", "not tried")
-        for _ in range(MAX_ROUNDS):
-            answers = self.config.answers.read_text(encoding="utf-8") if self.config.answers.is_file() else ""
-            log(f"filling the form on {plugin.name}")
-            extras = always_plugins(self.plugins)
-            guidance = "\n\n".join([plugin.instructions, *(extra.instructions for extra in extras)])
-            reaches = frozenset(host for extra in extras for host in extra.reaches)
-            try:
-                outcome = await apply_to_job(self.client, self.config.model, job, cv, answers, cv_file, self.config.data_dir, self.config.browser_profile, confirm, guidance, reaches)
-            except Exception as error:  # noqa: BLE001  One job's failure is reported and recorded; the next job still runs.
-                outcome = Outcome("failed", str(error) or type(error).__name__)
-            if outcome.status != "needs_input":
-                break
-            answered = False
-            for question in outcome.questions:
-                answer = await ask(question)
-                if answer:
-                    answer_question(self.config, question, answer)
-                    answered = True
-            if not answered:
-                break
+        answers = self.config.answers.read_text(encoding="utf-8") if self.config.answers.is_file() else ""
+        log(f"filling the form on {plugin.name}")
+        extras = always_plugins(self.plugins)
+        guidance = "\n\n".join([plugin.instructions, *(extra.instructions for extra in extras)])
+        reaches = frozenset(host for extra in extras for host in extra.reaches)
+        try:
+            outcome = await apply_to_job(self.client, self.config.model, job, cv, answers, cv_file, self.config.data_dir, self.config.browser_profile, guidance, reaches)
+        except Exception as error:  # noqa: BLE001  One job's failure is reported and recorded; the next job still runs.
+            outcome = Outcome("failed", str(error) or type(error).__name__)
         self.store.set_status(item.job.id, outcome.status, outcome.summary)
+        self.store.set_proof(item.job.id, outcome.proof)
+        # The file for the person outside the app. One that another program holds open must not stop the next send.
+        try:
+            write_applied(self.config.workspace / "applied.csv", self.store.sent())
+        except OSError as error:
+            log(f"applied.csv was not written: {error}")
         return outcome
 
 

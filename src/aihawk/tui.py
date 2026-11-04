@@ -18,7 +18,7 @@ from aihawk.config import ConfigError
 from aihawk.database import DatabaseError
 from aihawk.documents import QUESTIONS
 from aihawk.session import Session
-from aihawk.store import SUBMITTED, Stored
+from aihawk.store import SUBMITTED, Sent, Stored, said, sent_word
 
 STATUS_TEXT = {
     "new": "",
@@ -27,7 +27,7 @@ STATUS_TEXT = {
     "passed_over": "passed over",
     "submitted": "sent",
     "unconfirmed": "clicked, not confirmed",
-    "declined": "not sent",
+    "refused": "refused by the form",
     "needs_input": "needs an answer",
     "blocked": "blocked",
     "failed": "failed",
@@ -59,26 +59,100 @@ class TextPrompt(ModalScreen[str | None]):
         self.dismiss(None)
 
 
-class ConfirmSend(ModalScreen[bool]):
-    """The one place an application is allowed to leave."""
+class SendBatch(ModalScreen[bool]):
+    """The one question before anything is sent: these jobs, now. Enter sends them all, Escape cancels."""
 
-    BINDINGS: ClassVar = [Binding("y", "answer(True)", "Send it"), Binding("n,escape", "answer(False)", "Do not send")]
+    BINDINGS: ClassVar = [Binding("enter", "answer(True)", "Send them"), Binding("escape", "answer(False)", "Cancel")]
 
-    def __init__(self, title: str, summary: str) -> None:
+    def __init__(self, items: list[Stored]) -> None:
         super().__init__()
-        self.heading = title
-        self.summary = summary
+        self.items = items
 
     def compose(self) -> ComposeResult:
+        count = len(self.items)
+        lines = [f"{index}. {item.job.company}: {item.job.title}" for index, item in enumerate(self.items, 1)]
         with Vertical(id="dialog"):
-            yield Static(f"Send your application to {self.heading}?", id="question", markup=False)
-            yield Static("Check the form in the browser window.", classes="hint")
+            yield Static(f"Send {count} application{'' if count == 1 else 's'} now?", id="question", markup=False)
+            yield Static("They will be sent now, in the browser window. Enter sends them all; Escape cancels.", classes="hint")
             with VerticalScroll(id="summary"):
-                yield Static(self.summary, markup=False)
+                yield Static("\n".join(lines), markup=False)
             yield Footer()
 
     def action_answer(self, send: bool) -> None:
         self.dismiss(send)
+
+
+def short(text: str) -> str:
+    return " ".join(text.split())[:110]
+
+
+class SentList(ModalScreen[None]):
+    """Every job tried, the newest first. Enter opens one in full."""
+
+    BINDINGS: ClassVar = [Binding("escape,q,s", "close", "Back")]
+
+    def __init__(self, items: list[Sent]) -> None:
+        super().__init__()
+        self.items = items
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="wide"):
+            yield Static("Sent", id="question", markup=False)
+            yield DataTable(id="sent", cursor_type="row")
+            yield Static("Enter opens a job in full · Esc goes back", classes="hint")
+            yield Footer()
+
+    def on_mount(self) -> None:
+        table = self.query_one(DataTable)
+        for label, width in (("When", 17), ("Company", 18), ("Role", 26), ("Status", 20), ("What the page said", 46)):
+            table.add_column(label, key=label, width=width)
+        for item in self.items:
+            cells = (item.when, item.job.company, item.job.title, sent_word(item), short(said(item)))
+            table.add_row(*(Text(cell) for cell in cells), key=item.job.id)
+        table.focus()
+
+    @on(DataTable.RowSelected)
+    def chosen(self, event: DataTable.RowSelected) -> None:
+        # Stopped here: the same event would reach the app and open the main list's job as well.
+        event.stop()
+        item = next(item for item in self.items if item.job.id == event.row_key.value)
+        self.app.push_screen(SentDetails(item))
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
+class SentDetails(ModalScreen[None]):
+    BINDINGS: ClassVar = [Binding("escape,enter,q", "close", "Back")]
+
+    def __init__(self, item: Sent) -> None:
+        super().__init__()
+        self.item = item
+
+    def compose(self) -> ComposeResult:
+        item, proof = self.item, self.item.proof
+        lines = [
+            item.job.title,
+            f"{item.job.company} · {item.job.location}",
+            "",
+            f"{sent_word(item)} · {item.when}",
+            f"Posting: {item.job.url}",
+            f"Address after the send: {proof.url or '-'}",
+            f"Screenshot: {proof.screenshot or '-'}",
+            "",
+            f"Filled in:\n{item.note or '-'}",
+            "",
+            f"What the page said: {proof.evidence or '-'}",
+            "",
+            proof.text or "The page's text was not read.",
+        ]
+        with Vertical(id="dialog"):
+            with VerticalScroll(id="summary"):
+                yield Static("\n".join(lines), markup=False)
+            yield Footer()
+
+    def action_close(self) -> None:
+        self.dismiss(None)
 
 
 class JobDetails(ModalScreen[None]):
@@ -129,6 +203,8 @@ class AIHawk(App[None]):
     #log { height: 7; border-top: solid $primary; padding: 0 1; }
     ModalScreen { align: center middle; background: $background 60%; }
     #dialog { width: 80%; max-width: 100; height: auto; max-height: 85%; padding: 1 2; background: $surface; border: thick $primary; }
+    #wide { width: 95%; height: auto; max-height: 85%; padding: 1 2; background: $surface; border: thick $primary; }
+    #sent { height: auto; max-height: 24; }
     #question { text-style: bold; margin-bottom: 1; }
     #summary { height: auto; max-height: 24; margin: 1 0; }
     .hint { color: $text-muted; }
@@ -137,6 +213,7 @@ class AIHawk(App[None]):
         Binding("space", "toggle", "Select"),
         Binding("enter", "details", "Details"),
         Binding("a", "apply", "Apply"),
+        Binding("s", "sent", "Sent"),
         Binding("o", "open_link", "Open link"),
         Binding("m", "more", "More jobs"),
         Binding("r", "new_resume", "New resume"),
@@ -144,11 +221,10 @@ class AIHawk(App[None]):
         Binding("q", "quit", "Quit"),
     ]
 
-    def __init__(self, workspace: Path, resume: Path | None = None, auto_submit: bool = False) -> None:
+    def __init__(self, workspace: Path, resume: Path | None = None) -> None:
         super().__init__()
         self.session = Session(workspace)
         self.resume = resume
-        self.auto_submit = auto_submit
         self.selected: set[str] = set()
         self.busy = False
         self.signing_in = False
@@ -311,6 +387,9 @@ class AIHawk(App[None]):
         finally:
             self.show_heading()
 
+    def action_sent(self) -> None:
+        self.push_screen(SentList(self.session.store.sent()))
+
     def action_new_resume(self) -> None:
         self.new_resume()
 
@@ -367,36 +446,32 @@ class AIHawk(App[None]):
             current = self.current()
             chosen = [current] if current else []
         chosen.sort(key=lambda item: -(item.score or 0))
+        ready = [item for item in chosen if self.can_send(item)]
+        if not ready:
+            return
+        if not await self.push_screen_wait(SendBatch(ready)):
+            self.say("Nothing was sent.")
+            return
         self.busy = True
+        self.show_heading("applying")
         try:
-            for index, item in enumerate(chosen, 1):
-                self.show_heading(f"applying {index}/{len(chosen)}")
-                await self.apply_one(item)
-                self.selected.discard(item.job.id)
-                self.refresh_jobs()
+            await self.session.send(ready, self.answer, self.say, self.refresh_jobs)
         finally:
             self.busy = False
+            self.selected -= {item.job.id for item in chosen}
+            self.refresh_jobs()
             self.show_heading()
 
-    async def apply_one(self, item: Stored) -> None:
+    def can_send(self, item: Stored) -> bool:
+        """Whether the job goes in the batch; one that cannot says why."""
         name = f"{item.job.company}: {item.job.title}"
         if item.status in SUBMITTED:
             self.say(f"{name}: already sent, skipped.")
-            return
-        if self.session.plugin(item) is None:
+        elif self.session.plugin(item) is None:
             self.say(f"{name}: AIHawk cannot fill this site yet. Press o to open it and apply by hand.")
-            return
-        self.say(f"Applying: {name}")
+        else:
+            return True
+        return False
 
-        async def confirm(summary: str) -> bool:
-            return await self.app.push_screen_wait(ConfirmSend(name, summary))
-
-        async def ask(question: str) -> str | None:
-            return await self.app.push_screen_wait(TextPrompt(f"{item.job.company} asks: {question}"))
-
-        try:
-            outcome = await self.session.apply(item, None if self.auto_submit else confirm, ask, self.say)
-        except ConfigError as error:
-            self.say(str(error))
-            return
-        self.say(f"{STATUS_TEXT.get(outcome.status, outcome.status) or outcome.status}: {name}")
+    async def answer(self, question: str) -> str | None:
+        return await self.push_screen_wait(TextPrompt(question))

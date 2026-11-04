@@ -1,4 +1,4 @@
-"""The rule that matters: the model is held from sending an application, and only a yes (or --auto-submit) clicks the send control."""
+"""The rule that matters: the model cannot send an application, and only the person's yes does, once for the selection."""
 
 from __future__ import annotations
 
@@ -14,7 +14,21 @@ import pytest
 from pypdf import PdfReader
 
 from aihawk import apply as apply_module
-from aihawk.apply import FINISH_TOOL, MODEL_TOOLS, SYSTEM, Outcome, apply_to_job, fill_form, instructions, offered, refusal, run_on_page, sends_form, sign_in
+from aihawk.apply import (
+    FINISH_TOOL,
+    MODEL_TOOLS,
+    PAGE_CHARS,
+    SYSTEM,
+    Outcome,
+    apply_to_job,
+    fill_form,
+    instructions,
+    offered,
+    refusal,
+    run_on_page,
+    sends_form,
+    sign_in,
+)
 from aihawk.database import Job
 from aihawk.documents import score_from, score_job, tailor_cv, write_cv_pdf
 from fakes import ScriptedBrowser, ScriptedModel, tool_call
@@ -92,49 +106,31 @@ def test_the_model_is_not_offered_what_cannot_be_checked() -> None:
     assert FINISH_TOOL["function"]["name"] == "finish_form"
 
 
-def run(model: ScriptedModel, browser: ScriptedBrowser, confirm: Any) -> Outcome:
-    return asyncio.run(run_on_page(browser, [], model, "m", JOB, "cv", "answers", Path("cv.pdf"), confirm))  # type: ignore[arg-type]
+def run(model: ScriptedModel, browser: Any, shot: Path, guidance: str = "", reaches: frozenset[str] = frozenset()) -> Outcome:
+    return asyncio.run(run_on_page(browser, [], model, "m", JOB, "cv", "answers", Path("cv.pdf"), shot, guidance, reaches=reaches))  # type: ignore[arg-type]
 
 
-def test_the_models_own_click_on_submit_never_reaches_the_browser() -> None:
+def test_the_models_own_click_on_submit_never_reaches_the_browser(tmp_path: Path) -> None:
     browser = ScriptedBrowser({"#send": SUBMIT})
     model = ScriptedModel([tool_call("browser_click", selector="#send")], ready(), VERIFIED)
-    asked: list[str] = []
-
-    async def no(summary: str) -> bool:
-        asked.append(summary)
-        return False
-
-    outcome = run(model, browser, no)
-    assert outcome.status == "declined"
-    assert browser.clicks() == []
-    assert asked == ["filled"]
+    outcome = run(model, browser, tmp_path / "proof.png")
+    assert outcome.status == "submitted"
+    # The one click is the program's, after the form was named ready: the model's was refused.
+    assert browser.clicks() == ["#send"]
     refused = [message for message in model.requests[1]["messages"] if message.get("role") == "tool"]
     assert "Refused" in refused[0]["content"]
 
 
-def test_a_yes_clicks_once_and_the_page_confirms() -> None:
+def test_a_send_is_clicked_once_and_the_page_confirms_it_with_no_question(tmp_path: Path) -> None:
     browser = ScriptedBrowser({"#send": SUBMIT})
-    model = ScriptedModel(ready(), VERIFIED)
-
-    async def yes(summary: str) -> bool:
-        return True
-
-    outcome = run(model, browser, yes)
+    outcome = run(ScriptedModel(ready(), VERIFIED), browser, tmp_path / "proof.png")
     assert outcome.status == "submitted"
     assert browser.clicks() == ["#send"]
 
 
-def test_auto_submit_does_not_ask_and_still_verifies() -> None:
-    browser = ScriptedBrowser({"#send": SUBMIT})
-    outcome = run(ScriptedModel(ready(), VERIFIED), browser, None)
-    assert outcome.status == "submitted"
-    assert browser.clicks() == ["#send"]
-
-
-def test_a_click_the_page_does_not_confirm_is_not_called_sent() -> None:
+def test_a_click_the_page_does_not_confirm_is_not_called_sent(tmp_path: Path) -> None:
     verdict = json.dumps({"outcome": "unknown", "evidence": "page unchanged"})
-    assert run(ScriptedModel(ready(), verdict), ScriptedBrowser({"#send": SUBMIT}), None).status == "unconfirmed"
+    assert run(ScriptedModel(ready(), verdict), ScriptedBrowser({"#send": SUBMIT}), tmp_path / "proof.png").status == "unconfirmed"
 
 
 class ButtonDisablesItself(ScriptedBrowser):
@@ -151,34 +147,37 @@ class ButtonDisablesItself(ScriptedBrowser):
     ("verdict", "status"),
     [("submitted", "submitted"), ("unknown", "unconfirmed")],
 )
-def test_a_click_that_answers_with_an_error_is_never_called_failed_because_it_may_have_gone(verdict: str, status: str) -> None:
+def test_a_click_that_answers_with_an_error_is_never_called_failed_because_it_may_have_gone(verdict: str, status: str, tmp_path: Path) -> None:
     browser = ButtonDisablesItself({"#send": SUBMIT})
-    outcome = run(ScriptedModel(ready(), json.dumps({"outcome": verdict, "evidence": "the page"})), browser, None)
+    outcome = run(ScriptedModel(ready(), json.dumps({"outcome": verdict, "evidence": "the page"})), browser, tmp_path / "proof.png")
     assert outcome.status == status
     assert browser.clicks() == ["#send"]
 
 
-def test_a_form_that_refuses_it_comes_back_as_a_question() -> None:
+def test_a_form_that_refuses_it_comes_back_as_a_refusal_with_the_question(tmp_path: Path) -> None:
     verdict = json.dumps({"outcome": "rejected", "evidence": "phone is required"})
-    outcome = run(ScriptedModel(ready(), verdict), ScriptedBrowser({"#send": SUBMIT}), None)
-    assert (outcome.status, outcome.questions) == ("needs_input", ["phone is required"])
+    outcome = run(ScriptedModel(ready(), verdict), ScriptedBrowser({"#send": SUBMIT}), tmp_path / "proof.png")
+    assert (outcome.status, outcome.questions) == ("refused", ["phone is required"])
 
 
-def test_what_the_files_do_not_say_comes_back_as_questions_and_nothing_is_sent() -> None:
+def test_what_the_files_do_not_say_comes_back_as_questions_and_nothing_is_sent(tmp_path: Path) -> None:
     browser = ScriptedBrowser()
     step = [tool_call("finish_form", status="needs_input", summary="missing", submit_selector="", questions=["Salary?"])]
-    outcome = run(ScriptedModel(step), browser, None)
+    outcome = run(ScriptedModel(step), browser, tmp_path / "proof.png")
     assert (outcome.status, outcome.questions) == ("needs_input", ["Salary?"])
     assert browser.clicks() == []
 
 
-@pytest.mark.parametrize("step", [
-    [tool_call("finish_form", status="blocked", summary="captcha", submit_selector="", questions=[])],
-    [tool_call("finish_form", status="ready", summary="no selector", submit_selector="", questions=[])],
-])
-def test_blocked_or_no_control_sends_nothing(step: list[Any]) -> None:
+@pytest.mark.parametrize(
+    "step",
+    [
+        [tool_call("finish_form", status="blocked", summary="captcha", submit_selector="", questions=[])],
+        [tool_call("finish_form", status="ready", summary="no selector", submit_selector="", questions=[])],
+    ],
+)
+def test_blocked_or_no_control_sends_nothing(step: list[Any], tmp_path: Path) -> None:
     browser = ScriptedBrowser()
-    assert run(ScriptedModel(step), browser, None).status == "blocked"
+    assert run(ScriptedModel(step), browser, tmp_path / "proof.png").status == "blocked"
     assert browser.clicks() == []
 
 
@@ -253,20 +252,16 @@ def test_an_image_input_sends_and_a_word_with_no_edge_is_found() -> None:
     assert sends_form({"tag": "div", "type": "", "in_form": False, "text": "送信する"}, True)
 
 
-def test_a_named_control_that_does_not_send_is_not_clicked_even_after_a_yes() -> None:
+def test_a_named_control_that_does_not_send_is_not_clicked_even_after_the_form_is_ready(tmp_path: Path) -> None:
     browser = ScriptedBrowser({"#delete": {"tag": "button", "type": "button", "in_form": True, "text": "Delete my account"}})
-
-    async def yes(summary: str) -> bool:
-        return True
-
-    outcome = run(ScriptedModel(ready("#delete")), browser, yes)
+    outcome = run(ScriptedModel(ready("#delete")), browser, tmp_path / "proof.png")
     assert outcome.status == "blocked"
     assert browser.clicks() == []
 
 
-def test_a_failure_to_read_the_result_after_the_click_is_not_a_failed_application() -> None:
+def test_a_failure_to_read_the_result_after_the_click_is_not_a_failed_application(tmp_path: Path) -> None:
     browser = ScriptedBrowser({"#send": SUBMIT})
-    outcome = run(ScriptedModel(ready(), "not json"), browser, None)
+    outcome = run(ScriptedModel(ready(), "not json"), browser, tmp_path / "proof.png")
     assert outcome.status == "unconfirmed"
     assert browser.clicks() == ["#send"]
 
@@ -291,42 +286,63 @@ def test_a_model_that_never_finishes_fails() -> None:
         asyncio.run(fill_form(ScriptedBrowser(), [], model, "m", "brief"))  # type: ignore[arg-type]
 
 
+def test_the_plugins_text_reaches_the_verifying_model_as_its_rules_while_the_page_stays_text_to_check(tmp_path: Path) -> None:
+    model = ScriptedModel(ready(), VERIFIED)
+    guidance = "After sending: a page that says Thank you has sent it."
+    run(model, ScriptedBrowser({"#send": SUBMIT}), tmp_path / "proof.png", guidance)
+    verifying = model.requests[-1]["messages"]
+    assert guidance in verifying[0]["content"]
+    assert verifying[1]["content"] == "Thank you, your application was received"
+
+
 @pytest.mark.parametrize(
-    ("answers", "score"),
-    [
-        ({"role": "yes", "must_haves": "yes", "level": "yes", "location": "yes"}, 5.0),
-        ({"role": "yes", "must_haves": "yes", "level": "unclear", "location": "unclear"}, 4.5),
-        ({"role": "yes", "must_haves": "unclear", "level": "unclear", "location": "unclear"}, 3.5),
-        ({"role": "unclear", "must_haves": "unclear", "level": "unclear", "location": "unclear"}, 2.5),
-        ({"role": "yes", "must_haves": "no", "level": "yes", "location": "yes"}, 2.5),
-        ({"role": "yes", "must_haves": "yes", "level": "yes", "location": "no"}, 1.0),
-        ({"role": "no", "must_haves": "yes", "level": "yes", "location": "yes"}, 2.5),
-        ({"role": "no", "must_haves": "no", "level": "no", "location": "no"}, 1.0),
-    ],
+    ("verdict", "status"),
+    [("submitted", "submitted"), ("unknown", "unconfirmed"), ("rejected", "refused")],
 )
-def test_the_score_comes_from_closed_answers_and_unclear_moves_nothing(answers: dict[str, str], score: float) -> None:
-    assert score_from(answers) == score
+def test_a_click_keeps_its_time_address_verdict_text_and_picture(verdict: str, status: str, tmp_path: Path) -> None:
+    browser = ScriptedBrowser({"#send": SUBMIT}, page={"url": "https://u/thanks", "text": ""})
+    shot = tmp_path / "proofs" / "g-a-1.png"
+    outcome = run(ScriptedModel(ready(), json.dumps({"outcome": verdict, "evidence": "the page"})), browser, shot)
+    assert outcome.status == status
+    proof = outcome.proof
+    assert (proof.verdict, proof.evidence, proof.url) == (verdict, "the page", "https://u/thanks")
+    assert proof.at and proof.text == "Thank you, your application was received"
+    assert proof.screenshot == str(shot) and shot.read_bytes() == b"PNG"
 
 
-def test_the_goals_reach_the_model_and_the_score_is_computed_not_asked() -> None:
-    reply = {"role": "yes", "must_haves": "yes", "level": "unclear", "location": "unclear", "summary": "s", "gaps": [], "legitimacy": "credible"}
-    model = ScriptedModel(json.dumps(reply))
-    report = asyncio.run(score_job(model, "m", JOB, "the cv", "remote only"))  # type: ignore[arg-type]
-    assert report["score"] == 4.5
-    assert "remote only" in model.requests[0]["messages"][1]["content"]
+class LongPage(ScriptedBrowser):
+    async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
+        if name == "browser_read_text":
+            return SimpleNamespace(isError=False, content=[SimpleNamespace(text="x" * 9000)])
+        return await super().call_tool(name, arguments)
 
 
-def test_tailor_drops_a_code_fence() -> None:
-    model = ScriptedModel("```markdown\n# Name\n```")
-    assert asyncio.run(tailor_cv(model, "m", JOB, "cv")) == "# Name"  # type: ignore[arg-type]
+def test_the_page_text_kept_is_a_few_thousand_characters_at_most(tmp_path: Path) -> None:
+    outcome = run(ScriptedModel(ready(), VERIFIED), LongPage({"#send": SUBMIT}), tmp_path / "proof.png")
+    assert len(outcome.proof.text) == PAGE_CHARS
 
 
-def test_the_pdf_holds_the_text_accents_and_markup_safely(tmp_path: Path) -> None:
-    path = tmp_path / "cvs" / "cv.pdf"
-    write_cv_pdf("# Niccolò Rossi\n\n## Experience\n- **Lead** at A&B <Corp>\n\nPlain line", path)
-    text = " ".join(page.extract_text() for page in PdfReader(path).pages)
-    for piece in ("Niccolò Rossi", "Experience", "Lead", "A&B <Corp>", "Plain line"):
-        assert piece in text
+class NoPicture(ScriptedBrowser):
+    """A page whose picture cannot be taken: the tool answers with an error, or fails outright."""
+
+    def __init__(self, fails: bool) -> None:
+        super().__init__({"#send": SUBMIT})
+        self.fails = fails
+
+    async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
+        if name == "browser_take_screenshot":
+            if self.fails:
+                raise RuntimeError("the window is gone")
+            return SimpleNamespace(isError=True, content=[SimpleNamespace(text="no page")])
+        return await super().call_tool(name, arguments)
+
+
+@pytest.mark.parametrize("fails", [True, False])
+def test_a_picture_that_cannot_be_taken_changes_no_verdict(fails: bool, tmp_path: Path) -> None:
+    shot = tmp_path / "proof.png"
+    outcome = run(ScriptedModel(ready(), VERIFIED), NoPicture(fails), shot)
+    assert outcome.status == "submitted"
+    assert outcome.proof.screenshot == "" and not shot.exists()
 
 
 class ScriptedServer(ScriptedBrowser):
@@ -349,11 +365,18 @@ def test_the_profile_reaches_browser_open_and_the_browser_is_closed(tmp_path: Pa
     scripted_server(monkeypatch, server)
     profile = tmp_path / "browser-profile"
     model = ScriptedModel([tool_call("finish_form", status="blocked", summary="closed", submit_selector="", questions=[])])
-    job = Job("g:a:1", "Acme", "Engineer", "Rome", "https://u", "https://u/apply", "Build things")
-    outcome = asyncio.run(apply_to_job(model, "m", job, "cv", "answers", tmp_path / "cv.pdf", tmp_path, profile, None))  # type: ignore[arg-type]
+    outcome = asyncio.run(apply_to_job(model, "m", JOB, "cv", "answers", tmp_path / "cv.pdf", tmp_path, profile))  # type: ignore[arg-type]
     assert outcome.status == "blocked"
     assert server.calls[0] == ("browser_open", {"profile": str(profile)})
     assert server.calls[-1] == ("browser_close", {})
+
+
+def test_a_sent_form_keeps_its_picture_under_data_proofs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    scripted_server(monkeypatch, ScriptedServer({"#send": SUBMIT}))
+    outcome = asyncio.run(apply_to_job(ScriptedModel(ready(), VERIFIED), "m", JOB, "cv", "answers", tmp_path / "cv.pdf", tmp_path, tmp_path / "profile"))  # type: ignore[arg-type]
+    assert outcome.status == "submitted"
+    assert outcome.proof.screenshot == str(tmp_path / "proofs" / "g-a-1.png")
+    assert (tmp_path / "proofs" / "g-a-1.png").read_bytes() == b"PNG"
 
 
 def test_sign_in_opens_the_profile_on_a_blank_page_and_closes_it_when_the_person_is_done(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -406,10 +429,6 @@ class Moves(ScriptedBrowser):
         return await super().call_tool(name, arguments)
 
 
-def run_with(model: ScriptedModel, browser: ScriptedBrowser, confirm: Any = None, reaches: frozenset[str] = frozenset()) -> Outcome:
-    return asyncio.run(run_on_page(browser, [], model, "m", JOB, "cv", "answers", Path("cv.pdf"), confirm, reaches=reaches))  # type: ignore[arg-type]
-
-
 def test_the_model_may_go_to_the_forms_site_and_to_a_mailbox_a_plugin_reaches_and_nowhere_else() -> None:
     browser = ScriptedBrowser()
     mailbox = frozenset({"u", "mail.google.com"})
@@ -418,17 +437,17 @@ def test_the_model_may_go_to_the_forms_site_and_to_a_mailbox_a_plugin_reaches_an
     assert asyncio.run(refusal(browser, "browser_navigate", {"url": "https://evil.example/confirm?action=submit"}, False, mailbox))
 
 
-def test_a_navigation_by_the_model_to_another_site_is_refused_and_never_reaches_the_browser() -> None:
+def test_a_navigation_by_the_model_to_another_site_is_refused_and_never_reaches_the_browser(tmp_path: Path) -> None:
     browser = ScriptedBrowser({"#send": SUBMIT}, page=FORM_PAGE)
     model = ScriptedModel([tool_call("browser_navigate", url="https://evil.example/")], ready(), VERIFIED)
-    assert run_with(model, browser).status == "submitted"
+    assert run(model, browser, tmp_path / "proof.png").status == "submitted"
     assert [args["url"] for name, args in browser.calls if name == "browser_navigate"] == []
 
 
-def test_a_change_event_that_moves_the_page_off_the_form_stops_as_unconfirmed_and_nothing_is_retried() -> None:
+def test_a_change_event_that_moves_the_page_off_the_form_stops_as_unconfirmed_and_nothing_is_retried(tmp_path: Path) -> None:
     browser = Moves(after={"url": "https://thanks.example/ok", "text": "Thanks"})
     model = ScriptedModel(SELECT, ready(), VERIFIED)
-    outcome = run_with(model, browser)
+    outcome = run(model, browser, tmp_path / "proof.png")
     assert outcome.status == "unconfirmed"
     assert "thanks.example" in outcome.summary
     assert browser.clicks() == []
@@ -450,21 +469,21 @@ class ScriptMoves(ScriptedBrowser):
         return await super().call_tool(name, arguments)
 
 
-def test_a_script_that_moves_the_page_off_the_form_stops_as_unconfirmed_and_nothing_is_retried() -> None:
+def test_a_script_that_moves_the_page_off_the_form_stops_as_unconfirmed_and_nothing_is_retried(tmp_path: Path) -> None:
     browser = ScriptMoves(after={"url": "https://thanks.example/ok", "text": "Thanks"})
     model = ScriptedModel([tool_call("browser_evaluate", expression="location.href = 'https://thanks.example/ok'")], ready(), VERIFIED)
-    outcome = run_with(model, browser)
+    outcome = run(model, browser, tmp_path / "proof.png")
     assert outcome.status == "unconfirmed"
     assert "thanks.example" in outcome.summary
     assert browser.clicks() == []
     assert len(model.requests) == 1
 
 
-def test_a_change_that_stays_on_the_site_goes_on_to_the_form_so_a_same_site_send_is_not_detected() -> None:
+def test_a_change_that_stays_on_the_site_goes_on_to_the_form_so_a_same_site_send_is_not_detected(tmp_path: Path) -> None:
     # The address alone cannot tell a multi-step form from a send that stays on the site: this is the gap, written down.
     browser = Moves(after={"url": "https://u/apply", "text": "Thank you, your application was received"})
     model = ScriptedModel(SELECT, ready(), VERIFIED)
-    assert run_with(model, browser).status == "submitted"
+    assert run(model, browser, tmp_path / "proof.png").status == "submitted"
 
 
 @pytest.fixture
@@ -472,20 +491,20 @@ def no_wait(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(apply_module, "READ_WAIT_S", 0)
 
 
-def test_a_page_still_loading_after_a_change_is_read_again_until_its_host_shows(no_wait: None) -> None:
+def test_a_page_still_loading_after_a_change_is_read_again_until_its_host_shows(no_wait: None, tmp_path: Path) -> None:
     browser = Moves(after={"url": "https://thanks.example/ok", "text": "Thanks"}, unreadable=2)
     model = ScriptedModel(SELECT)
-    outcome = run_with(model, browser)
+    outcome = run(model, browser, tmp_path / "proof.png")
     assert outcome.status == "unconfirmed"
     assert "thanks.example" in outcome.summary
     assert browser.clicks() == []
     assert len(model.requests) == 1
 
 
-def test_a_page_that_stays_unreadable_after_a_change_does_not_end_the_form(no_wait: None) -> None:
+def test_a_page_that_stays_unreadable_after_a_change_does_not_end_the_form(no_wait: None, tmp_path: Path) -> None:
     browser = Moves(after={"url": "https://u/apply", "text": "x"}, unreadable=100)
     model = ScriptedModel(SELECT, ready(), VERIFIED)
-    assert run_with(model, browser).status == "submitted"
+    assert run(model, browser, tmp_path / "proof.png").status == "submitted"
     assert browser.clicks() == ["#send"]
 
 
@@ -505,16 +524,16 @@ class Typing(ScriptedBrowser):
         return await super().call_tool(name, arguments)
 
 
-def test_a_read_that_fails_after_a_type_does_not_end_the_form_and_the_form_is_sent(no_wait: None) -> None:
+def test_a_read_that_fails_after_a_type_does_not_end_the_form_and_the_form_is_sent(no_wait: None, tmp_path: Path) -> None:
     browser = Typing()
     model = ScriptedModel([tool_call("browser_type", selector="#name", text="Ada Rossi")], ready(), VERIFIED)
-    outcome = run(model, browser, None)
+    outcome = run(model, browser, tmp_path / "proof.png")
     assert outcome.status == "submitted"
     assert browser.clicks() == ["#send"]
     assert len(model.requests) == 3
 
 
-def test_a_mail_trip_to_the_mailbox_and_back_does_not_stop_the_form() -> None:
+def test_a_mail_trip_to_the_mailbox_and_back_does_not_stop_the_form(tmp_path: Path) -> None:
     class Mail(ScriptedBrowser):
         async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
             if name == "browser_click":
@@ -530,7 +549,45 @@ def test_a_mail_trip_to_the_mailbox_and_back_does_not_stop_the_form() -> None:
     ]
     browser = Mail({"#send": SUBMIT, "#msg": {"tag": "a", "type": "", "in_form": False, "text": "Verification code"}}, page=FORM_PAGE)
     model = ScriptedModel(*steps)
-    outcome = run_with(model, browser, reaches=frozenset({"mail.google.com"}))
+    outcome = run(model, browser, tmp_path / "proof.png", reaches=frozenset({"mail.google.com"}))
     assert outcome.status == "submitted"
     # No verdict was asked for the mail click: the five requests are the four steps and the verdict on the submit.
     assert len(model.requests) == 5
+
+
+@pytest.mark.parametrize(
+    ("answers", "score"),
+    [
+        ({"role": "yes", "must_haves": "yes", "level": "yes", "location": "yes"}, 5.0),
+        ({"role": "yes", "must_haves": "yes", "level": "unclear", "location": "unclear"}, 4.5),
+        ({"role": "yes", "must_haves": "unclear", "level": "unclear", "location": "unclear"}, 3.5),
+        ({"role": "unclear", "must_haves": "unclear", "level": "unclear", "location": "unclear"}, 2.5),
+        ({"role": "yes", "must_haves": "no", "level": "yes", "location": "yes"}, 2.5),
+        ({"role": "yes", "must_haves": "yes", "level": "yes", "location": "no"}, 1.0),
+        ({"role": "no", "must_haves": "yes", "level": "yes", "location": "yes"}, 2.5),
+        ({"role": "no", "must_haves": "no", "level": "no", "location": "no"}, 1.0),
+    ],
+)
+def test_the_score_comes_from_closed_answers_and_unclear_moves_nothing(answers: dict[str, str], score: float) -> None:
+    assert score_from(answers) == score
+
+
+def test_the_goals_reach_the_model_and_the_score_is_computed_not_asked() -> None:
+    reply = {"role": "yes", "must_haves": "yes", "level": "unclear", "location": "unclear", "summary": "s", "gaps": [], "legitimacy": "credible"}
+    model = ScriptedModel(json.dumps(reply))
+    report = asyncio.run(score_job(model, "m", JOB, "the cv", "remote only"))  # type: ignore[arg-type]
+    assert report["score"] == 4.5
+    assert "remote only" in model.requests[0]["messages"][1]["content"]
+
+
+def test_tailor_drops_a_code_fence() -> None:
+    model = ScriptedModel("```markdown\n# Name\n```")
+    assert asyncio.run(tailor_cv(model, "m", JOB, "cv")) == "# Name"  # type: ignore[arg-type]
+
+
+def test_the_pdf_holds_the_text_accents_and_markup_safely(tmp_path: Path) -> None:
+    path = tmp_path / "cvs" / "cv.pdf"
+    write_cv_pdf("# Niccolò Rossi\n\n## Experience\n- **Lead** at A&B <Corp>\n\nPlain line", path)
+    text = " ".join(page.extract_text() for page in PdfReader(path).pages)
+    for piece in ("Niccolò Rossi", "Experience", "Lead", "A&B <Corp>", "Plain line"):
+        assert piece in text

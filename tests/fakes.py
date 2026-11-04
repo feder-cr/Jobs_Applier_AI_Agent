@@ -55,6 +55,8 @@ class ScriptedBrowser:
             self.page = {"url": arguments["url"], "text": self.page["text"]}
         elif name == "browser_read_text":
             text = "Thank you, your application was received"
+        elif name == "browser_take_screenshot":
+            return SimpleNamespace(isError=False, content=[SimpleNamespace(type="image", mimeType="image/png", data="UE5H")])
         return SimpleNamespace(isError=False, content=[SimpleNamespace(text=text)])
 
     def clicks(self) -> list[str]:
