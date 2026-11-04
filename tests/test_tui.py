@@ -85,7 +85,7 @@ def resume(tmp_path: Path) -> Path:
 def scripted_app(home: Path, resume: Path | None, **options: Any) -> AIHawk:
     app = AIHawk(home, resume, **options)
     model = ScriptedModelForApp()
-    app.session._client = model  # noqa: SLF001
+    app.session._client = model
     return app
 
 
@@ -202,14 +202,14 @@ def fake_apply(app: AIHawk, outcomes: list[Outcome], calls: list[Any]) -> None:
             return Outcome("declined", "not sent")
         return outcome
 
-    import aihawk.session as session_module  # noqa: PLC0415
+    import aihawk.session as session_module
 
     session_module.apply_to_job = apply_to_job  # type: ignore[assignment]
 
 
 @pytest.fixture
 def restored_apply() -> Any:
-    import aihawk.session as session_module  # noqa: PLC0415
+    import aihawk.session as session_module
 
     original = session_module.apply_to_job
     yield
@@ -397,7 +397,7 @@ def test_a_pdf_with_no_text_says_what_to_do(tmp_path: Path) -> None:
 
 
 def test_a_word_resume_is_read(tmp_path: Path) -> None:
-    import zipfile  # noqa: PLC0415
+    import zipfile
 
     path = tmp_path / "cv.docx"
     words = "Senior Python Engineer at Acme for five years, on backend services and data."
@@ -491,7 +491,7 @@ def test_the_sign_in_key_opens_the_profile_until_the_person_is_done(home: Path, 
 def test_the_sign_in_key_is_refused_while_an_application_runs(home: Path, resume: Path, restored_apply: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     server = ScriptedServer()
     scripted_server(monkeypatch, server)
-    import aihawk.session as session_module  # noqa: PLC0415
+    import aihawk.session as session_module
 
     async def run() -> None:
         release = asyncio.Event()

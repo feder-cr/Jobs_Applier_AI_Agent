@@ -22,7 +22,7 @@ MIN_SHARE_OF_PREVIOUS = 0.7
 
 
 def gh(*arguments: str) -> str:
-    done = subprocess.run(["gh", *arguments], capture_output=True, text=True)
+    done = subprocess.run(["gh", *arguments], check=False, capture_output=True, text=True)
     if done.returncode:
         raise GhError(f"gh {arguments[0]} {arguments[1]}: {done.stderr.strip()}")
     return done.stdout

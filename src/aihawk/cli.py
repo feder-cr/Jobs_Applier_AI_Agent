@@ -22,7 +22,7 @@ from aihawk.plugins import PluginError
 def main(resume: Path | None, home: Path | None, auto_submit: bool) -> None:
     """Find the jobs that fit your resume and apply to them."""
     # Imported here: the interface takes a moment to load, and --help should not wait for it.
-    from aihawk.tui import AIHawk  # noqa: PLC0415
+    from aihawk.tui import AIHawk
 
     AIHawk((home or default_home()).resolve(), resume.resolve() if resume else None, auto_submit).run()
 
