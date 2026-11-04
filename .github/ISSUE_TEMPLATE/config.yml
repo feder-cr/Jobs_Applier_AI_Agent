@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk/discussions
+    about: Ask how AIHawk works, or talk over an idea before you build it.
+  - name: Security problem
+    url: https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk/security/policy
+    about: Report it privately. Do not open a public issue for it.
