@@ -17,12 +17,14 @@ dependencies = [
     "invisible-playwright-mcp",
     "mcp>=1.9",
     "openai>=1.40",
+    "pypdf>=4",
     "pyyaml>=6",
     "reportlab>=4",
+    "textual>=0.80",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pypdf>=4", "ruff>=0.6"]
+dev = ["pytest>=8", "ruff>=0.6"]
 
 [project.scripts]
 aihawk = "aihawk.cli:run"

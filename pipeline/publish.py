@@ -82,7 +82,7 @@ def main() -> None:
     check(manifest["rows_out"], None if arguments.allow_shrink else previous_rows(arguments.repo))
 
     tag = "jobs-" + manifest["built_at"][:19].replace(":", "").replace("-", "").replace("T", "-")
-    names = [item["name"] for item in manifest["files"]]
+    names = [manifest["index"]["name"], *(item["name"] for item in manifest["files"])]
     notes = f"{manifest['rows_out']} job postings. See {LATEST} for the current database."
     publish_files(arguments.repo, tag, arguments.out, names, notes)
 

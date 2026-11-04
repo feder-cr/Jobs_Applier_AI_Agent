@@ -1,63 +1,24 @@
-"""The workspace's aihawk.yaml: who is looking, for what, at which companies, through which model."""
+"""AIHawk's folder: the settings and everything it remembers about one person's search."""
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 import yaml
 
 CONFIG_FILE = "aihawk.yaml"
+KEY_FILE = "key"
 DEFAULT_BASE_URL = "https://api.orcarouter.ai/v1"
 DEFAULT_MODEL = "orcarouter/auto"
 DEFAULT_THRESHOLD = 4.0
 DEFAULT_DATABASE = "https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk/releases/download/jobs-latest/manifest.json"
 DEFAULT_MAX_AGE_DAYS = 60
 
-TEMPLATE = """\
-# AIHawk's settings. The API key is read from the environment, never from this file.
-model: orcarouter/auto
-base_url: https://api.orcarouter.ai/v1
-api_key_env: ORCAROUTER_API_KEY
-
-# Your CV as text, and your answers to what application forms ask beyond it.
-# AIHawk writes nothing on a form that is not in these two files.
-cv: cv.md
-answers: answers.yaml
-
-# What you want, in your own words: it weighs in the score.
-goals: Describe the role, seniority, location and pay you are looking for.
-
-# A job scoring below this (1-5) is not applied to with `aihawk apply --top`.
-threshold: 4.0
-
-# Keep a job only if its title holds one of `include` (required) and none of `exclude`, and its
-# location holds one of `locations`. Whole words in any case, so `java` is not `javascript`, and
-# no translation, so list every spelling you want: italy, italia, milan, milano. Older postings
-# are left out.
-filters:
-  include: [Replace with words of the job titles you want]
-  exclude: []
-  locations: []
-max_age_days: 60
-"""
-
-CV_TEMPLATE = "# Your Name\n\nReplace this with your real CV as plain text or Markdown.\n"
-
-ANSWERS_TEMPLATE = """\
-# Answers to questions application forms ask. Keep them true: they are written on the forms as they are.
-# `aihawk apply` lists what a form asked that is missing here. Examples:
-#
-# email: you@example.com
-# phone: "+39 000 000 0000"
-# linkedin: https://www.linkedin.com/in/you
-# work_authorization: I am authorized to work in the EU and need no sponsorship.
-"""
-
 
 class ConfigError(Exception):
-    """aihawk.yaml is missing or says something that cannot be used."""
+    """aihawk.yaml or a file it needs says something that cannot be used."""
 
 
 @dataclass(frozen=True)
@@ -70,8 +31,7 @@ class Filters:
 @dataclass(frozen=True)
 class Config:
     workspace: Path
-    cv: Path
-    answers: Path
+    name: str = ""
     goals: str = ""
     database: str = DEFAULT_DATABASE
     max_age_days: int = DEFAULT_MAX_AGE_DAYS
@@ -82,11 +42,39 @@ class Config:
     filters: Filters = field(default_factory=Filters)
 
     @property
+    def cv(self) -> Path:
+        return self.workspace / "cv.md"
+
+    @property
+    def answers(self) -> Path:
+        return self.workspace / "answers.yaml"
+
+    @property
     def data_dir(self) -> Path:
-        return self.workspace / ".aihawk"
+        return self.workspace / "data"
+
+    @property
+    def key_file(self) -> Path:
+        return self.workspace / KEY_FILE
+
+    def api_key(self) -> str:
+        """The model's key: from the environment, or the one the person typed in."""
+        from_environment = os.environ.get(self.api_key_env, "").strip()
+        if from_environment:
+            return from_environment
+        return self.key_file.read_text(encoding="utf-8").strip() if self.key_file.is_file() else ""
+
+    def save_key(self, key: str) -> None:
+        self.workspace.mkdir(parents=True, exist_ok=True)
+        self.key_file.touch(mode=0o600, exist_ok=True)
+        self.key_file.write_text(key.strip(), encoding="utf-8")
 
 
-def _words(value: Any, name: str) -> tuple[str, ...]:
+def default_home() -> Path:
+    return Path(os.environ.get("AIHAWK_HOME") or Path.home() / ".aihawk")
+
+
+def _words(value: object, name: str) -> tuple[str, ...]:
     if value is None:
         return ()
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
@@ -95,9 +83,10 @@ def _words(value: Any, name: str) -> tuple[str, ...]:
 
 
 def load_config(workspace: Path) -> Config:
+    """The settings in the folder. Nothing there yet is a new search, not an error."""
     path = workspace / CONFIG_FILE
     if not path.is_file():
-        raise ConfigError(f"no {CONFIG_FILE} in {workspace}: run `aihawk init` first")
+        return Config(workspace=workspace)
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except yaml.YAMLError as error:
@@ -112,8 +101,7 @@ def load_config(workspace: Path) -> Config:
 
     return Config(
         workspace=workspace,
-        cv=workspace / raw.get("cv", "cv.md"),
-        answers=workspace / raw.get("answers", "answers.yaml"),
+        name=str(raw.get("name") or ""),
         goals=str(raw.get("goals") or ""),
         database=str(raw.get("database") or DEFAULT_DATABASE),
         max_age_days=int(raw.get("max_age_days", DEFAULT_MAX_AGE_DAYS)),
@@ -127,14 +115,3 @@ def load_config(workspace: Path) -> Config:
             _words(filters.get("locations"), "filters.locations"),
         ),
     )
-
-
-def write_templates(workspace: Path) -> list[Path]:
-    """Write the files of a new workspace; a file that exists is kept. Returns the ones written."""
-    written = []
-    for name, text in ((CONFIG_FILE, TEMPLATE), ("cv.md", CV_TEMPLATE), ("answers.yaml", ANSWERS_TEMPLATE)):
-        path = workspace / name
-        if not path.exists():
-            path.write_text(text, encoding="utf-8")
-            written.append(path)
-    return written

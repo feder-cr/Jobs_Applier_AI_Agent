@@ -44,7 +44,7 @@ def merged(tmp_path: Path) -> tuple[dict, dict[str, tuple]]:
     connection = build.connect(tmp_path)
     counts = build.merge(connection, tmp_path)
     rows = duckdb.connect().execute(
-        f"SELECT url, title, description, sources FROM read_parquet('{(tmp_path / 'out').as_posix()}/*.parquet')"
+        f"SELECT url, title, description, sources FROM read_parquet('{(tmp_path / 'out').as_posix()}/jobs_*.parquet')"
     ).fetchall()
     return counts, {row[0]: row for row in rows}
 
@@ -74,6 +74,18 @@ def test_a_query_that_names_the_posting_keeps_it_apart(tmp_path: Path) -> None:
         ("https://stripe.com/jobs/search?gh_jid=2", "Two", None),
     ])
     assert merged(tmp_path)[0]["rows_out"] == 2
+
+
+def test_the_index_points_at_each_description_without_holding_it(tmp_path: Path) -> None:
+    write_source(tmp_path, "s", [("https://a.example/1", "One", "First text"), ("https://a.example/2", "Two", "Second text")])
+    merged(tmp_path)
+    out = (tmp_path / "out").as_posix()
+    connection = duckdb.connect()
+    columns = [row[0] for row in connection.execute(f"DESCRIBE SELECT * FROM read_parquet('{out}/index.parquet')").fetchall()]
+    assert "description" not in columns
+    for title, part, row in connection.execute(f"SELECT title, part, row_number FROM read_parquet('{out}/index.parquet')").fetchall():
+        text = connection.execute(f"SELECT description FROM read_parquet('{out}/{part}', file_row_number = true) WHERE file_row_number = {row}").fetchone()[0]
+        assert text == {"One": "First text", "Two": "Second text"}[title]
 
 
 def test_rows_without_a_link_or_a_title_are_left_out(tmp_path: Path) -> None:

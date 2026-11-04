@@ -7,7 +7,8 @@ Runs daily in .github/workflows/jobs-database.yml, which publishes work/out as a
 work/sources/<name>.parquet in the columns of COMMON. A source that fails is left out of the day's database and named in
 the manifest; publish.py refuses a database that lost too much of itself. Postings are the same posting when their links
 are the same after `KEY`, and of those the row with the longest description is kept, the other rows adding their source's
-name. The output is cut in files under GitHub's limit of 2 GiB per release file.
+name. The output is cut in files under GitHub's limit of 2 GiB per release file, with index.parquet beside them: every posting without its
+description, and where to find that description. A search reads the index; only a job being judged reads a description.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ HF = "https://huggingface.co/datasets"
 HF_API = "https://huggingface.co/api/datasets"
 RAW = "https://raw.githubusercontent.com"
 MAX_FILE = "1800MB"
+INDEX = "index.parquet"
 
 COMMON = (
     "url", "title", "company", "ats", "location", "country", "remote",
@@ -307,12 +309,19 @@ def merge(connection: duckdb.DuckDBPyConnection, work: Path) -> dict[str, int]:
             FROM {every_row} AS row
             JOIN best ON row.filename = best.winner.filename AND row.file_row_number = best.winner.row
         ) TO '{out.as_posix()}' (
-            FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 100000, FILE_SIZE_BYTES '{MAX_FILE}', FILENAME_PATTERN 'jobs_{{i}}'
+            FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 5000, FILE_SIZE_BYTES '{MAX_FILE}', FILENAME_PATTERN 'jobs_{{i}}'
         )
     """)
-    rows_out = connection.execute(f"SELECT count(*) FROM read_parquet('{out.as_posix()}/*.parquet')").fetchone()[0]
+    rows_out = connection.execute(f"SELECT count(*) FROM read_parquet('{out.as_posix()}/jobs_*.parquet')").fetchone()[0]
     if rows_out != rows_out_expected:
         raise SystemExit(f"{rows_out_expected} postings chosen and {rows_out} written")
+    connection.execute(f"""
+        COPY (
+            SELECT key, url, title, company, ats, location, country, remote, salary_min, salary_max, salary_currency, posted_at,
+                regexp_extract(filename, '([^/\\\\\\\\]+)$', 1) AS part, file_row_number AS row_number
+            FROM read_parquet('{out.as_posix()}/jobs_*.parquet', filename = true, file_row_number = true)
+        ) TO '{(out / INDEX).as_posix()}' (FORMAT parquet, COMPRESSION zstd, COMPRESSION_LEVEL 9)
+    """)
     return {"rows_in": int(rows_in), "rows_out": rows_out}
 
 
@@ -344,7 +353,8 @@ def main() -> None:
         **counts,
         "seconds": round(time.monotonic() - started),
         "columns": ["key", *COMMON, "sources"],
-        "files": [{"name": path.name, "bytes": path.stat().st_size} for path in sorted(out.glob("*.parquet"))],
+        "index": {"name": INDEX, "bytes": (out / INDEX).stat().st_size},
+        "files": [{"name": path.name, "bytes": path.stat().st_size} for path in sorted(out.glob("jobs_*.parquet"))],
         "sources": reports,
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from typing import Any
 
 from openai import AsyncOpenAI
@@ -12,7 +11,7 @@ from aihawk.config import Config, ConfigError
 
 
 def make_client(config: Config) -> AsyncOpenAI:
-    key = os.environ.get(config.api_key_env)
+    key = config.api_key()
     if not key:
         raise ConfigError(f"no model key: set {config.api_key_env} (create one at https://orcarouter.ai)")
     # The SDK retries 429s and 5xx itself and honours Retry-After, which is all OrcaRouter sends about its limits.

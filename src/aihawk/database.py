@@ -5,7 +5,9 @@ from __future__ import annotations
 import html
 import json
 import re
+import shutil
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from html.parser import HTMLParser
 from pathlib import Path
@@ -29,6 +31,8 @@ class Job:
     url: str
     apply_url: str
     description: str
+    # Where the database holds the description: "<file>#<row>".
+    ref: str = ""
 
 
 class _PageText(HTMLParser):
@@ -61,10 +65,31 @@ def page_text(markup: str) -> str:
     return re.sub(r"\n\s*\n+", "\n\n", "".join(parser.parts)).strip()
 
 
+def stored_description(ref: str) -> str:
+    """The description the database holds for a posting; empty when its sources published none."""
+    if "#" not in ref:
+        return ""
+    file, number = ref.rsplit("#", 1)
+    connection = duckdb.connect()
+    try:
+        connection.execute("INSTALL httpfs; LOAD httpfs;")
+        row = connection.execute(
+            "SELECT description FROM read_parquet(?, file_row_number = true) WHERE file_row_number = ?", [file, int(number)]
+        ).fetchone()
+    except duckdb.Error:
+        return ""
+    finally:
+        connection.close()
+    return row[0] or "" if row else ""
+
+
 def with_description(job: Job, timeout: float = 30.0) -> Job:
-    """The job with the text of its page, when its source published none. One page, for one job the person may want."""
+    """The job with its description: the database's, or else the text of its page. One job, the one being judged."""
     if job.description.strip():
         return job
+    stored = stored_description(job.ref)
+    if stored.strip():
+        return replace(job, description=stored)
     request = urllib.request.Request(job.url, headers={"User-Agent": "AIHawk (+https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk)"})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -83,25 +108,52 @@ def load_manifest(location: str) -> dict[str, Any]:
         raise DatabaseError(f"the job database's manifest at {location} cannot be read: {error}") from error
 
 
-def file_locations(manifest: dict[str, Any], location: str) -> list[str]:
+def _base(manifest: dict[str, Any], location: str) -> str:
     """Where the database's files are: the release the manifest names, or beside the manifest."""
-    base = manifest.get("base_url") or location.rsplit("/", 1)[0].rsplit("\\", 1)[0]
-    return [f"{base}/{item['name']}" for item in manifest["files"]]
+    return manifest.get("base_url") or location.rsplit("/", 1)[0].rsplit("\\", 1)[0]
+
+
+def local_index(manifest: dict[str, Any], location: str, cache: Path, log: Callable[[str], None] = lambda _: None) -> Path:
+    """Today's index on this computer: downloaded once per database, in one rename, and the older ones removed."""
+    source = f"{_base(manifest, location)}/{manifest['index']['name']}"
+    if not source.startswith(("http://", "https://")):
+        return Path(source)
+    cache.mkdir(parents=True, exist_ok=True)
+    stamp = re.sub(r"[^0-9]", "", manifest["built_at"])
+    path = cache / f"index-{stamp}.parquet"
+    if path.is_file():
+        return path
+    log(f"downloading today's job index ({manifest['index']['bytes'] // 1_000_000} MB), once a day")
+    partial = path.with_suffix(".part")
+    try:
+        with urllib.request.urlopen(source, timeout=120) as response, partial.open("wb") as out:
+            shutil.copyfileobj(response, out, 1 << 20)
+    except OSError as error:
+        partial.unlink(missing_ok=True)
+        raise DatabaseError(f"the job index at {source} cannot be downloaded: {error}") from error
+    partial.replace(path)
+    for old in cache.glob("index-*.parquet"):
+        if old != path:
+            old.unlink()
+    return path
 
 
 def _any_word(column: str, words: tuple[str, ...]) -> tuple[str, list[str]]:
     """Whole words, in any case: `java` is not `javascript`, and `roma` is not `Romania`."""
-    # Not \b: it finds no end after a symbol, as in `c++`, and takes accented letters for edges.
+    # Not \\b: it finds no end after a symbol, as in `c++`, and takes accented letters for edges.
     pattern = "(?i)(?:^|[^\\pL\\pN])(?:" + "|".join(re.escape(word) for word in words) + ")(?:$|[^\\pL\\pN])"
     return f"regexp_matches({column}, ?)", [pattern]
 
 
-def search(location: str, filters: Filters, max_age_days: int) -> tuple[dict[str, Any], list[Job]]:
-    """The postings the filters keep, the newest first, with the manifest they came from."""
+def search(
+    location: str, filters: Filters, max_age_days: int, cache: Path, log: Callable[[str], None] = lambda _: None
+) -> tuple[dict[str, Any], list[Job]]:
+    """The postings the filters keep, the newest first, with the manifest they came from. Their descriptions stay in the database."""
     if not filters.include:
         raise DatabaseError("filters.include is empty: say which job titles you want")
     manifest = load_manifest(location)
-    files = file_locations(manifest, location)
+    index = local_index(manifest, location, cache, log)
+    base = _base(manifest, location)
 
     clauses, parameters = [], []
     clause, words = _any_word("title", filters.include)
@@ -120,19 +172,18 @@ def search(location: str, filters: Filters, max_age_days: int) -> tuple[dict[str
 
     connection = duckdb.connect()
     try:
-        connection.execute("INSTALL httpfs; LOAD httpfs;")
         rows = connection.execute(
-            f"""SELECT key, coalesce(company, ''), title, coalesce(location, ''), url, coalesce(description, '')
+            f"""SELECT key, coalesce(company, ''), title, coalesce(location, ''), url, part, row_number
                 FROM read_parquet(?) WHERE {' AND '.join(clauses)}
                 ORDER BY TRY_CAST(posted_at AS TIMESTAMP) DESC NULLS LAST""",
-            [files, *parameters],
+            [str(index), *parameters],
         ).fetchall()
     except duckdb.Error as error:
-        raise DatabaseError(f"the job database cannot be read: {error}") from error
+        raise DatabaseError(f"the job index cannot be read: {error}") from error
     finally:
         connection.close()
     # Some sources publish their names with HTML entities still in them.
     return manifest, [
-        Job(key, html.unescape(company), html.unescape(title), html.unescape(place), url, url, text)
-        for key, company, title, place, url, text in rows
+        Job(key, html.unescape(company), html.unescape(title), html.unescape(place), url, url, "", f"{base}/{part}#{number}")
+        for key, company, title, place, url, part, number in rows
     ]

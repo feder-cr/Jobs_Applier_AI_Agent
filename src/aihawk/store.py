@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     score REAL,
     report TEXT,
     cv_path TEXT,
+    ref TEXT,
     note TEXT,
     first_seen TEXT NOT NULL,
     updated TEXT NOT NULL
@@ -62,16 +63,16 @@ class Store:
         """Record a job seen in a scan; True when it is new. A known job keeps its status and score."""
         now = _now()
         cursor = self._db.execute(
-            "INSERT OR IGNORE INTO jobs (id, company, title, location, url, apply_url, description, first_seen, updated)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (job.id, job.company, job.title, job.location, job.url, job.apply_url, job.description, now, now),
+            "INSERT OR IGNORE INTO jobs (id, company, title, location, url, apply_url, description, ref, first_seen, updated)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (job.id, job.company, job.title, job.location, job.url, job.apply_url, job.description, job.ref, now, now),
         )
         self._db.commit()
         return cursor.rowcount == 1
 
     @staticmethod
     def _stored(row: sqlite3.Row) -> Stored:
-        job = Job(row["id"], row["company"], row["title"], row["location"], row["url"], row["apply_url"], row["description"])
+        job = Job(row["id"], row["company"], row["title"], row["location"], row["url"], row["apply_url"], row["description"], row["ref"] or "")
         report = json.loads(row["report"]) if row["report"] else None
         return Stored(job, row["status"], row["score"], report, row["cv_path"], row["note"])
 
@@ -80,7 +81,7 @@ class Store:
         return self._stored(row) if row else None
 
     def unscored(self) -> list[Stored]:
-        rows = self._db.execute("SELECT * FROM jobs WHERE status = 'new' ORDER BY first_seen, id").fetchall()
+        rows = self._db.execute("SELECT * FROM jobs WHERE status = 'new' ORDER BY rowid").fetchall()
         return [self._stored(row) for row in rows]
 
     def all(self) -> list[Stored]:
@@ -100,6 +101,10 @@ class Store:
             "UPDATE jobs SET status = 'scored', score = ?, report = ?, updated = ? WHERE id = ?",
             (score, json.dumps(report, ensure_ascii=False), _now(), job_id),
         )
+        self._db.commit()
+
+    def set_description(self, job_id: str, description: str) -> None:
+        self._db.execute("UPDATE jobs SET description = ?, updated = ? WHERE id = ?", (description, _now(), job_id))
         self._db.commit()
 
     def set_cv(self, job_id: str, path: Path) -> None:

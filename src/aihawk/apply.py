@@ -272,19 +272,21 @@ async def apply_to_job(client: AsyncOpenAI, model: str, job: Job, cv_text: str, 
     """Open the browser, fill the job's form and send it as `confirm` decides; None sends without asking."""
     home = data_dir / "browser"
     home.mkdir(parents=True, exist_ok=True)
-    async with stdio_client(server_parameters(cv_file.parent, home)) as (read, write), ClientSession(read, write) as session:
-        await session.initialize()
-        listed = await session.list_tools()
-        tools = [
-            {"type": "function", "function": {"name": tool.name, "description": tool.description or tool.name, "parameters": tool.inputSchema}}
-            for tool in listed.tools
-            if tool.name in MODEL_TOOLS
-        ]
-        await _open_browser(session)
-        try:
-            navigated = await session.call_tool("browser_navigate", {"url": job.apply_url})
-            if navigated.isError:
-                return Outcome("blocked", f"the form did not load: {tool_text(navigated)}")
-            return await run_on_page(session, tools, client, model, job, cv_text, answers, cv_file, confirm, guidance)
-        finally:
-            await session.call_tool("browser_close", {})
+    # The server's own messages go to a file: on the person's terminal they would draw over the screen.
+    with (home / "server.log").open("a", encoding="utf-8") as server_log:
+        async with stdio_client(server_parameters(cv_file.parent, home), errlog=server_log) as (read, write), ClientSession(read, write) as session:
+            await session.initialize()
+            listed = await session.list_tools()
+            tools = [
+                {"type": "function", "function": {"name": tool.name, "description": tool.description or tool.name, "parameters": tool.inputSchema}}
+                for tool in listed.tools
+                if tool.name in MODEL_TOOLS
+            ]
+            await _open_browser(session)
+            try:
+                navigated = await session.call_tool("browser_navigate", {"url": job.apply_url})
+                if navigated.isError:
+                    return Outcome("blocked", f"the form did not load: {tool_text(navigated)}")
+                return await run_on_page(session, tools, client, model, job, cv_text, answers, cv_file, confirm, guidance)
+            finally:
+                await session.call_tool("browser_close", {})

@@ -8,11 +8,21 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from aihawk.config import ConfigError, Filters, load_config, write_templates
+from aihawk.config import ConfigError, Filters, load_config
 from aihawk.database import DatabaseError, Job, page_text, search, with_description
 from aihawk.store import Store
 
 JOB = Job("g:a:1", "Acme", "Senior Python Engineer", "Rome, Italy", "u", "a", "d")
+
+
+def publish_locally(connection: duckdb.DuckDBPyConnection, folder: Path) -> str:
+    """Table t as the pipeline publishes it: the file of descriptions, the index beside it, the manifest."""
+    connection.execute(f"COPY t TO '{(folder / 'jobs_0.parquet').as_posix()}' (FORMAT parquet)")
+    connection.execute(f"""COPY (SELECT * EXCLUDE (description, file_row_number), 'jobs_0.parquet' AS part, file_row_number AS row_number
+        FROM read_parquet('{(folder / 'jobs_0.parquet').as_posix()}', file_row_number = true)) TO '{(folder / 'index.parquet').as_posix()}' (FORMAT parquet)""")
+    manifest = {"rows_out": 4, "built_at": "2026-11-04T00:00:00", "index": {"name": "index.parquet", "bytes": 1}, "files": [{"name": "jobs_0.parquet"}]}
+    (folder / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return str(folder / "manifest.json")
 
 
 def database(tmp_path: Path) -> str:
@@ -25,10 +35,7 @@ def database(tmp_path: Path) -> str:
     connection = duckdb.connect()
     connection.execute("CREATE TABLE t (key VARCHAR, url VARCHAR, title VARCHAR, company VARCHAR, location VARCHAR, description VARCHAR, posted_at VARCHAR)")
     connection.executemany("INSERT INTO t VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
-    connection.execute(f"COPY t TO '{(tmp_path / 'jobs_0.parquet').as_posix()}' (FORMAT parquet)")
-    manifest = {"rows_out": 4, "built_at": "2026-11-04", "files": [{"name": "jobs_0.parquet"}]}
-    (tmp_path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
-    return str(tmp_path / "manifest.json")
+    return publish_locally(connection, tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -41,7 +48,7 @@ def database(tmp_path: Path) -> str:
     ],
 )
 def test_search_keeps_what_the_filters_say_and_leaves_out_what_is_old(tmp_path: Path, filters: Filters, titles: list[str]) -> None:
-    _, jobs = search(database(tmp_path), filters, max_age_days=60)
+    _, jobs = search(database(tmp_path), filters, 60, tmp_path)
     assert [job.title for job in jobs] == titles
 
 
@@ -52,11 +59,8 @@ def test_filters_match_whole_words_and_keep_symbols_literal(tmp_path: Path) -> N
         "INSERT INTO t VALUES (?, 'https://a.example/', ?, 'c', ?, 'd', NULL)",
         [("1", "Java Developer", "Roma, Italy"), ("2", "JavaScript Developer", "Roma"), ("3", "Java Lead", "Bucharest, Romania"), ("4", "C++ Developer", "Roma")],
     )
-    connection.execute(f"COPY t TO '{(tmp_path / 'jobs_0.parquet').as_posix()}' (FORMAT parquet)")
-    manifest = {"rows_out": 4, "built_at": "x", "files": [{"name": "jobs_0.parquet"}]}
-    path = tmp_path / "manifest.json"
-    path.write_text(json.dumps(manifest), encoding="utf-8")
-    keys = lambda filters: {job.id for job in search(str(path), filters, 60)[1]}  # noqa: E731
+    path = publish_locally(connection, tmp_path)
+    keys = lambda filters: {job.id for job in search(path, filters, 60, tmp_path)[1]}
     assert keys(Filters(include=("java",))) == {"1", "3"}
     assert keys(Filters(include=("java",), locations=("roma",))) == {"1"}
     assert keys(Filters(include=("c++",))) == {"4"}
@@ -64,23 +68,29 @@ def test_filters_match_whole_words_and_keep_symbols_literal(tmp_path: Path) -> N
 
 
 def test_names_come_without_html_entities(tmp_path: Path) -> None:
-    _, jobs = search(database(tmp_path), Filters(include=("accountant",)), max_age_days=60)
+    _, jobs = search(database(tmp_path), Filters(include=("accountant",)), 60, tmp_path)
     assert [(job.title, job.company) for job in jobs] == [("Accountant & Clerk", "B&A")]
 
 
 def test_search_needs_titles_and_says_so(tmp_path: Path) -> None:
     with pytest.raises(DatabaseError, match="filters.include"):
-        search(database(tmp_path), Filters(), max_age_days=60)
+        search(database(tmp_path), Filters(), 60, tmp_path)
 
 
 def test_a_database_that_cannot_be_read_says_so(tmp_path: Path) -> None:
     with pytest.raises(DatabaseError, match="manifest"):
-        search(str(tmp_path / "none.json"), Filters(include=("x",)), max_age_days=60)
+        search(str(tmp_path / "none.json"), Filters(include=("x",)), 60, tmp_path)
 
 
 def test_page_text_keeps_the_words_and_drops_scripts() -> None:
     text = page_text("<html><head><title>x</title><style>a{}</style></head><body><nav>menu</nav><p>Build &amp; ship</p><script>evil()</script><li>Python</li></body></html>")
     assert text.split() == ["Build", "&", "ship", "Python"]
+
+
+def test_a_job_being_judged_gets_its_description_from_the_database(tmp_path: Path) -> None:
+    _, jobs = search(database(tmp_path), Filters(include=("intern",)), 60, tmp_path)
+    assert jobs[0].description == ""
+    assert with_description(jobs[0]).description == "Learn"
 
 
 def test_a_job_with_a_description_reads_no_page() -> None:
@@ -114,18 +124,11 @@ def test_only_what_is_good_enough_and_not_sent_is_applied_to_best_first(tmp_path
     assert [item.job.id for item in store.to_apply(4.0, 1)] == ["j2"]
 
 
-def test_the_template_loads_and_defaults_to_orcarouter_and_the_published_database(tmp_path: Path) -> None:
-    write_templates(tmp_path)
+def test_a_new_folder_defaults_to_orcarouter_and_the_published_database(tmp_path: Path) -> None:
     config = load_config(tmp_path)
     assert (config.base_url, config.model, config.api_key_env) == ("https://api.orcarouter.ai/v1", "orcarouter/auto", "ORCAROUTER_API_KEY")
     assert config.database.endswith("/releases/download/jobs-latest/manifest.json")
-    assert config.filters.include
-
-
-def test_templates_keep_a_file_that_exists(tmp_path: Path) -> None:
-    (tmp_path / "cv.md").write_text("mine", encoding="utf-8")
-    write_templates(tmp_path)
-    assert (tmp_path / "cv.md").read_text(encoding="utf-8") == "mine"
+    assert not config.filters.include
 
 
 @pytest.mark.parametrize(
@@ -135,9 +138,4 @@ def test_templates_keep_a_file_that_exists(tmp_path: Path) -> None:
 def test_settings_that_cannot_be_used_are_refused(tmp_path: Path, text: str) -> None:
     (tmp_path / "aihawk.yaml").write_text(text, encoding="utf-8")
     with pytest.raises(ConfigError):
-        load_config(tmp_path)
-
-
-def test_no_settings_says_what_to_do(tmp_path: Path) -> None:
-    with pytest.raises(ConfigError, match="aihawk init"):
         load_config(tmp_path)
