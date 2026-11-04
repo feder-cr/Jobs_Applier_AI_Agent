@@ -362,6 +362,15 @@ def test_a_screenshot_reaches_the_model_after_the_answers_it_must_follow() -> No
     assert model.requests[1]["messages"][-3]["role"] == "tool"
 
 
+def test_only_the_latest_picture_stays_in_the_prompt_and_an_older_one_is_a_note() -> None:
+    model = ScriptedModel([tool_call("browser_take_screenshot")], [tool_call("browser_take_screenshot")], ready())
+    asyncio.run(fill_form(PageAtAPoint(SUBMIT), [], model, "m", "brief"))  # type: ignore[arg-type]
+    messages = model.requests[-1]["messages"]
+    pictures = [m for m in messages if m.get("role") == "user" and isinstance(m.get("content"), list)]
+    assert len(pictures) == 1
+    assert sum(isinstance(m.get("content"), str) and "taken here" in m["content"] for m in messages) == 1
+
+
 def test_the_servers_way_of_driving_a_page_comes_after_the_rules_and_before_the_site() -> None:
     text = instructions("About a site.", "Try selectors first.")
     assert text.index(SYSTEM) < text.index("Try selectors first.") < text.index("About a site.")

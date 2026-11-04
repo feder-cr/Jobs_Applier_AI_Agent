@@ -324,7 +324,12 @@ class LeftForm(Exception):
 
 # The calls that can change the page, a script included. A navigation is the model's own choice, so it is not checked after: `refusal` judges it.
 ACTING = {"browser_click", "browser_click_at", "browser_type", "browser_select_option", "browser_upload_files", "browser_press_key", "browser_evaluate"}
-PAGE = "({url: location.href, text: document.body ? document.body.innerText : ''})"
+# The document's time origin is its identity: a navigation makes a new one, so a page that moved is told apart from one that stayed.
+PAGE = "({url: location.href, origin: performance.timeOrigin, text: document.body ? document.body.innerText : ''})"
+# The calls that can start a navigation of their own, which begins a moment after the call has returned.
+NAVIGATES = {"browser_click", "browser_click_at", "browser_select_option", "browser_press_key", "browser_evaluate"}
+NAV_TRIES = 10
+NAV_WAIT_S = 0.2
 
 
 async def _page(session: Session) -> dict[str, str] | None:
@@ -348,12 +353,28 @@ async def _readable_page(session: Session) -> dict[str, str] | None:
     return None
 
 
-async def _after(session: Session, name: str, form_host: str) -> None:
+async def _after(session: Session, name: str, form_host: str, before: dict[str, str] | None = None) -> None:
     """Stops the form when a call moved the page to another site. A same-site send is not detected: a multi-step form
-    advances by address too, so the address alone cannot tell the two apart. A page that stays unreadable says nothing."""
+    advances by address too, so the address alone cannot tell the two apart. A page that stays unreadable says nothing.
+    A call that can navigate returns before the navigation has begun, so the page is read again, for a short while, until
+    its document or its address has changed. A page that stays the same document is the answer, not a fault."""
     after = await _readable_page(session)
+    if before and before.get("origin") is not None and name in NAVIGATES:
+        for _ in range(NAV_TRIES):
+            if after is None or after.get("origin") != before.get("origin") or _host(after.get("url", "")) != form_host:
+                break
+            await asyncio.sleep(NAV_WAIT_S)
+            after = await _readable_page(session)
     if after is not None and _host(after.get("url", "")) != form_host:
         raise LeftForm(f"After {name} the page went to {after.get('url')}, not the form. It is not known whether the application went out. It is not retried.")
+
+
+def _keep_latest_picture(messages: list[Any]) -> None:
+    """Only the latest picture stays in the prompt: an older one becomes a note that it was taken. Pictures kept in every
+    later call are most of a long form's tokens, and the model acts on the latest one."""
+    for message in messages:
+        if message.get("role") == "user" and isinstance(message.get("content"), list):
+            message["content"] = "A picture of the page was taken here; the latest one is below."
 
 
 async def _stopped(client: AsyncOpenAI, model: str, messages: list[Any], reason: str, fallback: str) -> dict[str, Any]:
@@ -419,7 +440,7 @@ async def fill_form(session: Session, tools: list[dict[str, Any]], client: Async
                 before = await _page(session) if call.function.name in ACTING else None
                 result = await session.call_tool(call.function.name, arguments)
                 if before and _host(before.get("url", "")) == form_host:
-                    await _after(session, call.function.name, form_host)
+                    await _after(session, call.function.name, form_host, before)
                 seen += _images(result)
                 content = tool_text(result) or "Done: what it shows comes next."
                 if call.function.name in {"browser_type", "browser_select_option", "browser_upload_files"} and not result.isError:
@@ -428,6 +449,7 @@ async def fill_form(session: Session, tools: list[dict[str, Any]], client: Async
         if stopped:
             return await _stopped(client, model, messages, stopped, f"Stopped after a refused call. Last call: {last}")
         if seen:
+            _keep_latest_picture(messages)
             messages.append({"role": "user", "content": seen})
     return await _stopped(client, model, messages, f"the form was not finished in {MAX_STEPS} steps.", f"The form was not finished in {MAX_STEPS} steps. Last call: {last}")
 
