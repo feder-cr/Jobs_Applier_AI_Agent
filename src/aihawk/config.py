@@ -33,7 +33,8 @@ goals: Describe the role, seniority, location and pay you are looking for.
 threshold: 4.0
 
 # Keep a job only if its title holds one of `include` (required) and none of `exclude`, and its
-# location holds one of `locations`, in any language the posting uses. Older postings are left out.
+# location holds one of `locations`. Words are matched as written, so list every spelling you
+# want: italy, italia, milan, milano. Older postings are left out.
 filters:
   include: [Replace with words of the job titles you want]
   exclude: []

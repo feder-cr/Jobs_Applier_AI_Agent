@@ -19,7 +19,7 @@ def database(tmp_path: Path) -> str:
     rows = [
         ("k1", "https://jobs.lever.co/a/1", "Senior Python Engineer", "Acme", "Rome, Italy", "Build", "2099-01-01"),
         ("k2", "https://jobs.lever.co/a/2", "Python Intern", "Acme", "Berlin", "Learn", None),
-        ("k3", "https://example.com/3", "Accountant", "Beta", "Rome, Italy", "Count", "2099-01-01"),
+        ("k3", "https://example.com/3", "Accountant &amp; Clerk", "B&amp;A", "Rome, Italy", "Count", "2099-01-01"),
         ("k4", "https://example.com/4", "Python Developer", "Old", "Rome, Italy", "Past", "2001-01-01"),
     ]
     connection = duckdb.connect()
@@ -43,6 +43,11 @@ def database(tmp_path: Path) -> str:
 def test_search_keeps_what_the_filters_say_and_leaves_out_what_is_old(tmp_path: Path, filters: Filters, titles: list[str]) -> None:
     _, jobs = search(database(tmp_path), filters, max_age_days=60)
     assert [job.title for job in jobs] == titles
+
+
+def test_names_come_without_html_entities(tmp_path: Path) -> None:
+    _, jobs = search(database(tmp_path), Filters(include=("accountant",)), max_age_days=60)
+    assert [(job.title, job.company) for job in jobs] == [("Accountant & Clerk", "B&A")]
 
 
 def test_search_needs_titles_and_says_so(tmp_path: Path) -> None:

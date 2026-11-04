@@ -135,4 +135,8 @@ def search(location: str, filters: Filters, max_age_days: int) -> tuple[dict[str
         raise DatabaseError(f"the job database cannot be read: {error}") from error
     finally:
         connection.close()
-    return manifest, [Job(key, company, title, place, url, url, text) for key, company, title, place, url, text in rows]
+    # Some sources publish their names with HTML entities still in them.
+    return manifest, [
+        Job(key, html.unescape(company), html.unescape(title), html.unescape(place), url, url, text)
+        for key, company, title, place, url, text in rows
+    ]
