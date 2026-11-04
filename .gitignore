@@ -1,35 +1,14 @@
-node_modules/
-.next/
-dist/
-coverage/
-*.tsbuildinfo
-*.log
-.env
-.env.*
-
-# Go build output (guest/dot-agentd/bin/dot-agentd)
-bin/
-
-# Images written by local checks and builds; the real ones live in
-# INVISIBLE_DOTS_HOME, never in the tree.
-*.iso
-*.qcow2
-*.img
-
-# Scratch output of local checks, and the virtual environment the pre-push
-# hook creates there for the English and claims gates
-/tmp/
-
-# vitest's JSON report, as CI and the pre-push hook write it
-vitest-report.json
-
-# The benchmark's tasks: tests/bench/run.sh writes them with author.py and author_long.py before every run
-/tests/bench/tasks/
-/tests/bench/tasks-long/
-
-# Editor and Python leftovers of the gates
 __pycache__/
+*.pyc
 .venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
 
-# The README animation's frames: docs/hero/build.mjs writes them on every run, from the pages and photos beside it
-/docs/hero/frames/
+# A search's own files: your CV, your answers and what AIHawk records.
+.aihawk/
+aihawk.yaml
+cv.md
+answers.yaml

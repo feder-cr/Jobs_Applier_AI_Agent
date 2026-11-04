@@ -1,8 +1,0 @@
-blank_issues_enabled: false
-contact_links:
-  - name: Security issue
-    url: https://github.com/feder-cr/invisible_dots/blob/main/SECURITY.md
-    about: Do not open a public issue; report it privately as SECURITY.md says.
-  - name: A site detects or blocks the browser
-    url: https://github.com/feder-cr/invisible_playwright/issues
-    about: The Dot's browser is invisible_playwright; its issues are the place for that.

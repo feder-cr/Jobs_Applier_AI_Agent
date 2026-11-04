@@ -1,104 +1,50 @@
-<div align="center">
-<picture>
-  <source media="(max-width: 374px) and (prefers-color-scheme: dark)" srcset="docs/images/hero-small-dark.gif">
-  <source media="(max-width: 374px)" srcset="docs/images/hero-small-light.gif">
-  <source media="(max-width: 1239px) and (prefers-color-scheme: dark)" srcset="docs/images/hero-mobile-dark.gif">
-  <source media="(max-width: 1239px)" srcset="docs/images/hero-mobile-light.gif">
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/hero-dark.gif">
-  <img alt="invisible_dots, an open-source, self-hosted alternative to OpenAI Dots, Meta Muse, Grok Bot, Manus Cue and Claude Cowork. An animation of what a Dot does: asked once in its chat to save a shop's invoices every month and send the total to Telegram, it works on a computer of its own (a desktop, a terminal, files and a Firefox that keeps the shop's login), writes the steps down as a skill, asks before it adds the monthly automation, and then sends the total every month; several Dots, one computer each." src="docs/images/hero-light.gif" width="100%">
-</picture>
-</div>
+# AIHawk
 
-Open-source, self-hosted alternative to OpenAI Dots, Grok Bot. Built to be undetectable by anti-bot systems.
+Find the jobs that fit your CV and apply to them.
 
-## Quickstart
+AIHawk searches a job database rebuilt every day from every public job database we know of, judges each job against your CV, writes a CV for the job, and fills in the application form in a visible browser. It sends nothing until you say yes.
 
-You need Node 24+, Go 1.25+, Git and hardware virtualization (x86-64), plus an OpenRouter key.
+```sh
+pip install git+https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk
+export ORCAROUTER_API_KEY=sk-orca-...
 
-**Windows** (PowerShell):
-
-```powershell
-winget install -e --id OpenJS.NodeJS.LTS; winget install -e --id GoLang.Go; winget install -e --id Git.Git
-git clone https://github.com/feder-cr/invisible_dots; cd invisible_dots
-npm ci; npm run build --workspace @invisible-dots/cli
-node apps/cli/dist/invisible-dots.mjs setup --all
-node apps/cli/dist/invisible-dots.mjs server
+mkdir my-search && cd my-search
+aihawk init            # writes aihawk.yaml, cv.md and answers.yaml: fill them in
+aihawk scan            # searches the database; uses no model, scrapes nothing
+aihawk score           # judges the new jobs against your CV and goals
+aihawk list            # the best first
+aihawk apply --top 5   # fills the forms and asks before each send
 ```
 
-**Linux** (Ubuntu 24.04):
+## How it works
 
-```bash
-curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - && sudo apt-get install -y nodejs git && sudo snap install go --classic
-git clone https://github.com/feder-cr/invisible_dots && cd invisible_dots
-npm ci && npm run build --workspace @invisible-dots/cli
-node apps/cli/dist/invisible-dots.mjs setup --all
-node apps/cli/dist/invisible-dots.mjs server
-```
-
-`setup --all` installs QEMU and turns on the accelerator (KVM, or the Windows Hypervisor Platform), then builds or
-downloads the Dot's images; run it again after a restart and it carries on. Then open **http://127.0.0.2:3000**,
-paste your OpenRouter key and create your first Dot. Every step and its failure modes:
-[the guide's quickstart](docs/guide.md#quickstart).
-
-## What to ask a Dot
-
-Anything that needs a computer and a person's judgement, for as long as it takes:
-
-> Open a browser identity called research, go to https://example.com and tell me the page's title and its first
-> sentence. Leave the browser open.
-
-> Every morning, check one-way fares from Milan to Lisbon for the next two weeks, write them to
-> ~/workspace/fares.csv and tell me the cheapest day.
-
-> Log in to the shop with the shopping identity, download this month's invoices to ~/documents, and remember where
-> the invoices page is for next time.
-
-## What a Dot has
-
-| | |
+| Step | What happens |
 |---|---|
-| **[A computer of its own](docs/guide.md#what-a-dot-can-do)** | A hardware-accelerated VM with a Linux desktop and a persistent disk. It sleeps when idle and wakes for the next message, task or automation. |
-| **[A browser that is not blocked](docs/guide.md#the-browser)** | [invisible_playwright_mcp](https://github.com/feder-cr/invisible_playwright_mcp): Firefox patched in C++, the fingerprint set inside the engine. Each identity keeps its own cookies and logins. |
-| **[Memory and skills](docs/guide.md#what-a-dot-can-do)** | It writes its own notes and how-tos in its home folder, as Claude Code does, and reads them on the next task. |
-| **[Your MCP servers](docs/guide.md#mcp-servers)** | Any MCP server you declare, a program on its computer or a URL, as in Claude Code. Its keys stay out of the config. |
-| **[Permissions you set](docs/guide.md#approvals)** | Every tool belongs to a permission: allow, ask or deny. An ask waits in your Inbox, survives a restart and runs the call once. |
-| **[Tasks and automations](docs/guide.md#the-web-ui)** | A queue with priorities and start times, and its own recurring jobs, for which its computer is started on time. |
-| **[Many ways to reach it](docs/guide.md#talk-to-it-from-your-phone)** | Web UI, command line, HTTP API with live events, Telegram, and WhatsApp as an opt-in. |
-| **[Nothing lost on a crash](docs/guide.md#how-it-works)** | A restart or a `kill -9` keeps every message and task you saw accepted, and a tool call cut short is never run twice. |
+| **Find** | Queries the daily database in place, keeping the titles and locations you asked for, without downloading the whole of it. |
+| **Judge** | Scores each job from 1 to 5 by reasoning about your CV against the posting, and reports the gaps. |
+| **Tailor** | Reorders and rephrases your CV for the job. Every fact must already be in your CV. |
+| **Apply** | Fills the form through [invisible-playwright-mcp](https://github.com/feder-cr/invisible_playwright_mcp) with what your CV and answers file say. What they do not say comes back to you as a question, never as a guess. |
 
-## Documentation
+The model never sends an application. It fills the form and names the submit button; AIHawk clicks it after your yes. A click by the model on anything that would send the form is refused.
 
-- [Guide](docs/guide.md): install, the web UI, the command line, the browser, channels, configuration, updating
-- [Architecture](docs/architecture.md): every component and why it is there
-- [Troubleshooting](docs/guide.md#troubleshooting) and [development and tests](docs/guide.md#development-and-tests)
+`aihawk apply --auto-submit` sends without asking. An automated application in your name can be wrong, and sites can close accounts for it: read the forms first, and use it only when you accept that.
 
-## Related projects
+## Models
 
-**The pieces of this one.** A Dot's browser is
-[invisible_playwright_mcp](https://github.com/feder-cr/invisible_playwright_mcp), on
-[invisible_playwright](https://github.com/feder-cr/invisible_playwright) and
-[invisible_core](https://github.com/feder-cr/invisible_core); the engine is a fork of
-[nanobot](https://github.com/HKUDS/nanobot).
+AIHawk talks to one gateway, [OrcaRouter](https://orcarouter.ai), with `orcarouter/auto` as the default model. Change `model` in `aihawk.yaml`, or point `base_url` at any endpoint compatible with OpenAI's API that supports tool calling and structured output.
+
+## Limits
+
+- AIHawk fills forms on Greenhouse, Lever and Ashby. Other postings are found and listed, to apply to by hand.
+- Forms behind a login or a captcha come back as blocked; AIHawk does not try to get around them.
+- The tailored PDF uses a Latin font, so CVs in other scripts need your own PDF.
+
+## Thanks
+
+The job database is built from the public databases listed in [NOTICE](NOTICE); each posting belongs to its employer and links back to it. The scoring rubric's shape is adapted from [career-ops](https://github.com/santifer/career-ops) (MIT).
+
+The Dots project that used to live here moved to [feder-cr/invisible_dots](https://github.com/feder-cr/invisible_dots).
 
 ## License
 
-MIT, see [LICENSE](LICENSE). Third-party components and their licenses: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-
-## Disclaimer
-
-This project is provided as-is, with no warranties. Use it at your own risk and in compliance with the laws of your
-jurisdiction. A Dot acts with your accounts and from your connection: respect the terms of the sites it visits and
-their robots.txt.
-
----
-
-<p align="center">
-  <a href="https://github.com/feder-cr/invisible_dots/actions/workflows/tests.yml"><img alt="tests" src="https://github.com/feder-cr/invisible_dots/actions/workflows/tests.yml/badge.svg"></a>
-  <a href="LICENSE"><img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
-  <img alt="status: alpha" src="https://img.shields.io/badge/status-alpha-orange">
-  <img alt="hosts: Linux and Windows" src="https://img.shields.io/badge/hosts-Linux%20%7C%20Windows-lightgrey">
-</p>
-
-<p align="center">
-  Built by <a href="https://it.linkedin.com/in/federico-elia-5199951b6">Federico Elia</a>
-</p>
+[MIT](LICENSE)

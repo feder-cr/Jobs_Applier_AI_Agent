@@ -4,333 +4,43 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
-  workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
-defaults:
-  run:
-    shell: bash
-
-# `gate` is the ONLY context the branch protection requires: it depends on every
-# job, so its name never drifts when the jobs change. It accepts nothing but
-# success, because no job here is ever skipped on purpose and none has a paths
-# filter: a skip would mean a job that did not run, which reads exactly like
-# one that passed.
 jobs:
-  node:
-    name: typecheck, vitest and the bundle (${{ matrix.os }})
+  unit:
+    name: lint and unit tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        # The floors each host must reach live in .github/test-floors.json,
-        # which the pre-push hook reads too.
         os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: npm
-      # Linux's vitest builds the real dot-agentd and drives it with the host's GuestClient
-      # (apps/vm-manager/test/agentd.linux.test.ts, which vitest.config.ts collects on Linux only).
-      - if: runner.os == 'Linux'
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: guest/dot-agentd/go.mod
-          # The module has no dependencies, so there is no go.sum to key a cache on.
-          cache: false
-      - run: npm ci --no-audit --no-fund
-      - run: npm run typecheck
-      - name: the pre-push hook parses
-        run: sh -n .githooks/pre-push
-      - name: vitest
-        run: npx vitest run --reporter=default --reporter=json --outputFile=vitest-report.json
-      # vitest's exit code cannot tell "everything passed" from "half of it
-      # was never collected" or "a suite skipped itself": count what ran.
-      - name: refuse a run with too few tests or an unexpected skip
-        if: always()
-        run: node .github/scripts/test-guard.mjs vitest-report.json --suite vitest
-      - name: bundle (the command, which carries the server)
-        run: npm run build --workspace @invisible-dots/cli
-      # The bundled command on a fresh home: doctor must run end to end and
-      # create nothing. Its exit code is not 0 here (no QEMU, no images), so
-      # only "it ran and printed every check" is asserted.
-      - name: the bundled doctor runs and creates nothing
-        env:
-          INVISIBLE_DOTS_HOME: ${{ runner.temp }}/idots-home
-        run: |
-          set +e
-          node apps/cli/dist/invisible-dots.mjs doctor > doctor.txt 2>&1
-          code=$?
-          set -e
-          cat doctor.txt
-          echo "doctor exit code: $code"
-          grep -q "checks:" doctor.txt
-          test ! -e "$INVISIBLE_DOTS_HOME"
-
-  postgres:
-    name: the pg adapter against PostgreSQL
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:18.4-alpine3.23
-        env:
-          POSTGRES_PASSWORD: test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 2s
-          --health-timeout 5s
-          --health-retries 30
-    env:
-      # With DATABASE_URL set, every suite parametrized with testAdapters()
-      # runs on pg as well as on PGlite.
-      DATABASE_URL: postgres://postgres:test@127.0.0.1:5432/postgres
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: npm
-      - run: npm ci --no-audit --no-fund
-      - name: vitest on both adapters
-        run: npx vitest run packages/database packages/events packages/channels apps/api apps/scheduler --reporter=default --reporter=json --outputFile=vitest-report.json
-      - name: refuse a run in which the pg suites did not run
-        if: always()
-        run: node .github/scripts/test-guard.mjs vitest-report.json --suite postgres
-
-  # The WhatsApp client (Baileys) is an opt-in install: it depends on libsignal, which is GPL-3.0, and the default
-  # npm install holds nothing GPL. The jobs above never install it. This one does, with the command a person runs
-  # (npm run whatsapp:install), to prove the adapter against the real library: the types (the real module has the
-  # shape the adapter writes down) and the tests that need it, on PGlite and on PostgreSQL.
-  whatsapp-client:
-    name: the WhatsApp client, opt-in (types and tests on the real library)
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:18.4-alpine3.23
-        env:
-          POSTGRES_PASSWORD: test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 2s
-          --health-timeout 5s
-          --health-retries 30
-    env:
-      DATABASE_URL: postgres://postgres:test@127.0.0.1:5432/postgres
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: npm
-      - run: npm ci --no-audit --no-fund
-      - name: install the client, as a person who enables WhatsApp does
-        run: npm run whatsapp:install
-      - name: the real module has the shape the adapter writes down
-        run: npm run typecheck:whatsapp
-      - name: vitest with the real client
-        run: npm run test:whatsapp -- --reporter=default --reporter=json --outputFile=vitest-report.json
-      - name: refuse a run with too few tests or an unexpected skip
-        if: always()
-        run: node .github/scripts/test-guard.mjs vitest-report.json --suite whatsapp
-
-  iso:
-    name: the Linux kernel reads our ISO images
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: npm
-      - run: npm ci --no-audit --no-fund
-      # The unit tests read images back with our own parser; this is the
-      # reader a guest really uses. See packages/iso/scripts/kernel-check.ts.
-      - name: write, mount read-only, compare
-        run: |
-          npx tsx packages/iso/scripts/kernel-check.ts write "$RUNNER_TEMP/sample.iso"
-          blkid -p -o export "$RUNNER_TEMP/sample.iso" | tee blkid.txt
-          grep -qx "TYPE=iso9660" blkid.txt
-          grep -qx "LABEL=cidata" blkid.txt
-          mkdir -p "$RUNNER_TEMP/mnt"
-          sudo mount -o loop,ro "$RUNNER_TEMP/sample.iso" "$RUNNER_TEMP/mnt"
-          npx tsx packages/iso/scripts/kernel-check.ts verify "$RUNNER_TEMP/mnt"
-          sudo umount "$RUNNER_TEMP/mnt"
-
-  go:
-    name: dot-agentd (gofmt, go vet, go test, static build)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: guest/dot-agentd
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: guest/dot-agentd/go.mod
-          # The module has no dependencies, so there is no go.sum to key a cache on.
-          cache: false
-      - run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
-      - run: go vet ./...
-      - run: GOOS=windows go vet ./...
-      # go test exits 0 when a test skipped itself or a build constraint left
-      # a file out, so what ran is counted against the same floors file.
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-      - run: go test -json -count=1 ./... > go-test.json
-      - name: refuse a run with too few tests or an unexpected skip
-        if: always()
-        run: node ../../.github/scripts/test-guard.mjs go-test.json --suite go --floors ../../.github/test-floors.json
-      - run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-s -w" -o bin/dot-agentd ./cmd/dot-agentd
-      - run: file bin/dot-agentd | tee /dev/stderr | grep -q "ELF 64-bit LSB executable, x86-64.*statically linked"
-
-  engine:
-    name: the engine (pytest)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: invisible_engine_dots
-    steps:
-      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install -e ".[dev]"
-      - run: pytest -q --junitxml=pytest-report.xml
-      # pytest exits 0 when a module stopped being collected or a test skipped
-      # itself, so what ran is counted against the same floors file.
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-      - name: refuse a run with too few tests or an unexpected skip
-        if: always()
-        run: node ../.github/scripts/test-guard.mjs pytest-report.xml --suite pytest --floors ../.github/test-floors.json
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: pytest -m "not browser"
 
-  smoke:
-    name: the engine smoke (dot-agentd and the engine under their two users)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      # Builds dot-agentd in golang:1.26.8, the engine's environment in ubuntu:24.04
-      # the way provision.sh builds it, and runs the Dot. It exits non-zero on a
-      # failed or a skipped check and prints "SMOKE: N passed, F failed, S skipped".
-      - name: run the smoke on this checkout
-        run: bash guest/image-builder/test/smoke/run.sh
-
-  browser-smoke:
-    name: the browser smoke (the real invisible-playwright-mcp and its Firefox, as the Dot runs them)
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-      # The golden image's browser built as provision.sh builds it (apt packages of pins.json, the newest
-      # invisible-playwright-mcp, the engine of the browser), a desktop on :0, and the Dot
-      # (dot-agentd and the engine under their two users) browsing pages of the container. It needs the
-      # network for those downloads and for the egress address of a launch. Same exit rule and summary
-      # line as the smoke job.
-      - name: run the browser smoke on this checkout
-        run: bash guest/image-builder/test/smoke/run.sh --suite browser
-
-  web:
-    name: the web client builds and passes its browser tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: npm
-      - run: npm ci --no-audit --no-fund
-      - name: next build
-        run: npm run build --workspace @invisible-dots/web
-      - name: install the browser the tests drive
-        run: npx playwright install --with-deps chromium
-      # Each worker starts the real control plane (over a fake VM layer) and the built web client; see
-      # apps/web/e2e/harness.ts. The JUnit report lands in apps/web/playwright-report.xml.
-      - name: browser tests
-        run: npm run test:e2e --workspace @invisible-dots/web
-      # Playwright exits 0 when a spec file stopped being collected or a test skipped itself, so what ran is
-      # counted against the same floors file.
-      - name: refuse a run with too few tests or an unexpected skip
-        if: always()
-        run: node .github/scripts/test-guard.mjs apps/web/playwright-report.xml --suite playwright
-      - name: keep the traces of a failed run
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-traces
-          path: apps/web/test-results
-          if-no-files-found: ignore
-
-  english:
-    name: the repository is English
+  browser:
+    name: the real browser on a real form
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      # The gate ships in the pinned invisible-core; its settings are read
-      # from pyproject.toml ([tool.invisible.english]).
-      - name: install the pinned gates
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r .github/gates-requirements.txt
-      - name: check the prose
-        run: |
-          python -m invisible_core.english --selftest
-          python -m invisible_core.english
-
-  claims:
-    name: the README promises nothing it cannot support
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: install the pinned gates
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r .github/gates-requirements.txt
-      - name: check the claims
-        run: |
-          python -m invisible_core.claims --selftest
-          python -m invisible_core.claims
+      - run: pip install -e ".[dev]"
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb libgtk-3-0t64 libasound2t64 libdbus-glib-1-2 libxt6t64
+      - run: xvfb-run -a -s "-screen 0 1920x1080x24" pytest -m browser
 
   gate:
-    needs: [node, postgres, whatsapp-client, iso, go, engine, smoke, browser-smoke, web, english, claims]
-    if: always()
+    name: gate
     runs-on: ubuntu-latest
+    needs: [unit, browser]
+    if: always()
     steps:
-      - name: refuse unless every job succeeded
-        env:
-          RESULTS: ${{ toJSON(needs) }}
-        run: |
-          echo "$RESULTS"
-          node -e '
-            const needs = JSON.parse(process.env.RESULTS);
-            const names = Object.keys(needs);
-            if (names.length !== 11) { console.error(`expected 11 jobs, got ${names.length}`); process.exit(1); }
-            let ok = true;
-            for (const name of names) {
-              console.log(`${name}: ${needs[name].result}`);
-              if (needs[name].result !== "success") ok = false;
-            }
-            if (!ok) { console.error("a job did not succeed"); process.exit(1); }
-            console.log("ok");
-          '
+      - run: test "${{ needs.unit.result }}" = success && test "${{ needs.browser.result }}" = success

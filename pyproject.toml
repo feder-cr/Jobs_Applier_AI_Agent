@@ -1,26 +1,46 @@
-# Configuration only: nothing in this repository is a Python package. The
-# pre-push hook and CI run the English and claims gates of the pinned
-# invisible-core (.github/gates-requirements.txt), and those gates read their
-# settings from this file.
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
-# Which gates `.githooks/pre-push` hands over to invisible_core.hooks. The
-# suites of this repository (vitest and go test) run in the hook itself before
-# that, so the core's pytest gate is off; `pin` is off because nothing here
-# pins invisible-core in a package manifest, and there are no release tags
-# because nothing is published to an index.
-[tool.invisible.hooks]
-pytest = false
-pin = false
-english = true
-identity = true
-release_tags = []
-
-# The gate's own default list, then every kind of file this repository writes
-# prose in. `.mjs` is listed on its own because the gate matches by suffix and
-# "build.mjs" does not end in ".js".
-[tool.invisible.english]
-extensions = [
-    ".py", ".md", ".toml", ".cfg", ".yml", ".yaml", ".js", ".css", ".html",
-    ".ts", ".tsx", ".mts", ".cts", ".mjs", ".go", ".sh", ".sql", ".service", "Dockerfile",
+[project]
+name = "aihawk"
+description = "Find the jobs that fit your CV and apply to them, on a model through OrcaRouter and an undetected browser."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE", "NOTICE"]
+dynamic = ["version"]
+# invisible-playwright-mcp is never pinned: an install takes its newest release.
+dependencies = [
+    "click>=8.1",
+    "duckdb>=1.1",
+    "invisible-playwright-mcp",
+    "mcp>=1.9",
+    "openai>=1.40",
+    "pyyaml>=6",
+    "reportlab>=4",
 ]
-excluded = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pypdf>=4", "ruff>=0.6"]
+
+[project.scripts]
+aihawk = "aihawk.cli:run"
+
+[project.urls]
+Homepage = "https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk"
+
+[tool.hatch.version]
+path = "src/aihawk/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aihawk"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+markers = ["browser: runs the real invisible-playwright-mcp and its Firefox"]
+
+[tool.ruff]
+line-length = 160
+src = ["src", "tests"]
