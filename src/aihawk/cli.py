@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import re
+import sys
 from pathlib import Path
 
 import click
@@ -174,6 +176,10 @@ def apply(workspace: Path, job_id: str | None, top: int | None, auto_submit: boo
 
 
 def run() -> None:
+    # A Windows console's code page cannot print every company's name.
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     try:
         main()
     except (ConfigError, DatabaseError) as error:

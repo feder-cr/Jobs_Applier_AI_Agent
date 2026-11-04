@@ -17,6 +17,7 @@ import json
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 from collections.abc import Callable
@@ -151,13 +152,13 @@ def _eu_tech(_: Path) -> str:
 
 def _rolebase(work: Path) -> str:
     # Thousands of small files in the repository: a shallow clone is the one way to read them in a reasonable time.
-    clone = work / "clones" / "roleBase"
-    if not clone.exists():
-        clone.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
-            ["git", "clone", "--quiet", "--depth", "1", "https://github.com/chandranshB/roleBase", str(clone)],
-            check=True, timeout=3600,
-        )  # fmt: skip
+    clones = work / "clones"
+    clones.mkdir(parents=True, exist_ok=True)
+    clone = Path(tempfile.mkdtemp(dir=clones)) / "roleBase"
+    subprocess.run(
+        ["git", "clone", "--quiet", "--depth", "1", "https://github.com/chandranshB/roleBase", str(clone)],
+        check=True, timeout=3600,
+    )  # fmt: skip
     pattern = (clone / "data" / "jobs" / "*.jsonl").as_posix()
     source = (
         f"read_json('{pattern}', format='newline_delimited', union_by_name=true, ignore_errors=true, "
@@ -170,7 +171,10 @@ def _rolebase(work: Path) -> str:
         WHEN 'lever' THEN 'https://jobs.lever.co/' || split_part(id, ':', 2) || '/' || split_part(id, ':', 3)
         WHEN 'ashby' THEN 'https://jobs.ashbyhq.com/' || split_part(id, ':', 2) || '/' || split_part(id, ':', 3)
         END)"""
-    return select(source, url=url, ats="split_part(id, ':', 1)", remote="remote", posted_at="posted", where="closed_at IS NULL")
+    # Links ending in a 12-character hex code are not the board's own ids: measured on 40 at random, 20 answered 404 and
+    # 6 answered 403, against none of 40 of its other links. A posting with no working link is of no use to anyone.
+    usable = r"closed_at IS NULL AND NOT regexp_matches(coalesce(url, ''), '/job/[0-9a-f]{12}$')"
+    return select(source, url=url, ats="split_part(id, ':', 1)", remote="remote", posted_at="posted", where=usable)
 
 
 def _clean_up(work: Path) -> None:

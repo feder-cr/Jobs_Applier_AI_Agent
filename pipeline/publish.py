@@ -47,11 +47,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--repo", required=True)
+    parser.add_argument("--allow-shrink", action="store_true", help="Publish a database much smaller than yesterday's on purpose.")
     arguments = parser.parse_args()
 
     manifest_path: Path = arguments.out / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    check(manifest["rows_out"], previous_rows(arguments.repo))
+    check(manifest["rows_out"], None if arguments.allow_shrink else previous_rows(arguments.repo))
 
     tag = "jobs-" + manifest["built_at"][:19].replace(":", "").replace("-", "").replace("T", "-")
     files = [str(arguments.out / item["name"]) for item in manifest["files"]]
