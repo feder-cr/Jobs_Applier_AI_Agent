@@ -19,7 +19,6 @@ from aihawk import apply as apply_module
 from aihawk.apply import Outcome
 from aihawk.config import ConfigError, load_config
 from aihawk.database import Job
-from aihawk.judge import Judge
 from aihawk.profile import add_answers, answer_question, install_resume, read_answers, read_resume
 from aihawk.store import Stored
 from aihawk.tui import AIHawk, ConfirmSend, JobDetails, SignIn, TextPrompt
@@ -87,8 +86,6 @@ def scripted_app(home: Path, resume: Path | None, **options: Any) -> AIHawk:
     app = AIHawk(home, resume, **options)
     model = ScriptedModelForApp()
     app.session._client = model  # noqa: SLF001
-    # No jevos in these tests: a judge with no endpoint gives evidence 0, and nothing is downloaded.
-    app.session._judge = Judge(app.session.config)  # noqa: SLF001
     return app
 
 
@@ -96,14 +93,14 @@ class ScriptedModelForApp:
     """Answers each kind of request the way a model would."""
 
     def __init__(self) -> None:
-        from types import SimpleNamespace  # noqa: PLC0415
-
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
         self.requests: list[dict[str, Any]] = []
 
-    async def _create(self, **request: Any) -> Any:
-        from types import SimpleNamespace  # noqa: PLC0415
+    async def post(self, path: str, *, body: dict[str, Any], cast_to: type) -> dict[str, Any]:
+        """The decision endpoint: no opinion on any question, so the evidence is zero and the title alone decides."""
+        return {"answers": {name: {"type": "noul", "noul": 0.5} for name in body["questions"]}}
 
+    async def _create(self, **request: Any) -> Any:
         self.requests.append(request)
         name = (request.get("response_format") or {}).get("json_schema", {}).get("name")
         if name == "search_profile":
@@ -183,7 +180,6 @@ def test_no_key_asks_for_one_and_keeps_it_on_this_computer(home: Path, resume: P
 
     async def run() -> None:
         app = AIHawk(home, resume)
-        app.session._judge = Judge(app.session.config)  # noqa: SLF001  No jevos here: nothing is downloaded.
         async with app.run_test(size=(140, 40)) as pilot:
             await settle(pilot, app)
             assert isinstance(app.screen, TextPrompt)

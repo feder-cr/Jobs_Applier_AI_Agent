@@ -91,7 +91,7 @@ class Store:
         return [self._stored(row) for row in rows]
 
     def all(self) -> list[Stored]:
-        """What the person sees, the best first: the judged by the judgment and the title's fit together, then the rest by the title's fit and jevos's evidence."""
+        """What the person sees, the best first: the judged by the judgment and the title's fit together, then the rest by the title's fit and Jev's evidence."""
         items = [self._stored(row) for row in self._db.execute("SELECT * FROM jobs").fetchall()]
         judged = sorted(
             (item for item in items if item.score is not None),

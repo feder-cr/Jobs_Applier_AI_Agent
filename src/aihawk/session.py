@@ -15,13 +15,13 @@ from aihawk.apply import sign_in as sign_in_browser
 from aihawk.config import Config, ConfigError, load_config
 from aihawk.database import Job, search, stored_description, with_description
 from aihawk.documents import score_job, tailor_cv, write_cv_pdf
-from aihawk.judge import Judge, fuse, questions
+from aihawk.judge import evidence, fuse, questions
 from aihawk.llm import make_client
 from aihawk.plugins import Plugin, always_plugins, load_plugins, plugin_for
 from aihawk.profile import answer_question, install_resume
 from aihawk.store import SUBMITTED, Store, Stored
 
-# The funnel: the next WIDE postings by title are weighed by jevos, and the best JUDGED of them are scored by the judge model.
+# The funnel: the next WIDE postings by title are weighed by the decision model, and the best JUDGED of them are scored by the judge model.
 WIDE = 100
 JUDGED = 25
 JUDGE_AT_ONCE = 4
@@ -39,11 +39,8 @@ class Session:
         self.plugins: tuple[Plugin, ...] = load_plugins(workspace)
         self.store = Store(self.config.data_dir / "jobs.db")
         self._client: AsyncOpenAI | None = None
-        self._judge: Judge | None = None
 
     def close(self) -> None:
-        if self._judge is not None:
-            self._judge.close()
         self.store.close()
 
     @property
@@ -85,7 +82,7 @@ class Session:
         return new
 
     async def funnel(self, log: Log, status: Log) -> int:
-        """Weigh the next WIDE postings by title with jevos, and shortlist the best JUDGED by the title's fit and that evidence.
+        """Weigh the next WIDE postings by title with the decision model, and shortlist the best JUDGED by the title's fit and that evidence.
         The others of the batch are passed over: kept, and listed below the judged ones. Returns how many are shortlisted."""
         batch = self.store.with_status("new")[:WIDE]
         if not batch:
@@ -94,7 +91,6 @@ class Session:
         for item, text in zip(batch, texts, strict=True):
             self.store.set_description(item.job.id, text)
         jobs = [replace(item.job, description=text) for item, text in zip(batch, texts, strict=True)]
-        judge = await self._judge_for(log, status)
         cv = self.config.cv.read_text(encoding="utf-8")
         asked = questions(self.config.goals, _places(self.config))
         limit = asyncio.Semaphore(JUDGE_AT_ONCE)
@@ -104,17 +100,18 @@ class Session:
             nonlocal done
             async with limit:
                 try:
-                    value = await judge.read(cv, job, asked)
-                except Exception:  # noqa: BLE001  One posting jevos cannot read must not stop the others; it is counted below.
+                    # The client is read here, so a missing key is one more failed verdict: the title alone decides, and the log says so once.
+                    value = await evidence(self.client, self.config.decision_model, cv, job, asked)
+                except Exception:  # noqa: BLE001  One posting the model cannot read must not stop the others; it is counted below.
                     value = None
             done += 1
-            status(f"jevos reads {done}/{len(jobs)}")
+            status(f"Jev reads {done}/{len(jobs)}")
             return value
 
         values = await asyncio.gather(*(weigh(job) for job in jobs))
         failed = sum(value is None for value in values)
         if failed:
-            log(f"jevos could not read {failed} of {len(jobs)} postings: they are ranked by their title alone")
+            log(f"Jev could not read {failed} of {len(jobs)} postings: they are ranked by their title alone")
         for job, value in zip(jobs, values, strict=True):
             if value is not None:
                 self.store.set_evidence(job.id, value)
@@ -123,12 +120,6 @@ class Session:
         self.store.set_statuses([job.id for job in jobs if job.id in best], "shortlisted")
         self.store.set_statuses([job.id for job in jobs if job.id not in best], "passed_over")
         return len(best)
-
-    async def _judge_for(self, log: Log, status: Log) -> Judge:
-        if self._judge is None:
-            self._judge = Judge(self.config)
-            await self._judge.start(log, status)
-        return self._judge
 
     async def score(self, items: list[Stored], on_scored: Callable[[], None], log: Log) -> None:
         cv = self.config.cv.read_text(encoding="utf-8")

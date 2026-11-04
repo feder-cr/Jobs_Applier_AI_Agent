@@ -17,8 +17,11 @@ DEFAULT_MODEL = "z-ai/glm-5.3-flash"
 # For the plan and the other short calls of a search. Measured on OrcaRouter on five CVs: 10 s a plan, with valid graphs, where
 # deepseek-v4.1-flash broke the nested schema and glm-5.3-flash took minutes.
 DEFAULT_QUICK_MODEL = "google/gemini-3.5-flash"
-# Judges the postings the funnel picks. Measured against the title's fit on five people's searches: see judge.py.
+# Scores the postings the funnel picks. Measured against the title's fit on five people's searches: see judge.py.
 DEFAULT_JUDGE_MODEL = "deepseek/deepseek-v4.1-flash"
+# Answers the six questions that shortlist the postings. Pinned, unlike the other models: the thresholds of judge.evidence() were measured
+# on this model's answers, and another model answers differently, so a change needs those thresholds measured again.
+DEFAULT_DECISION_MODEL = "typesafe/jev-1.14"
 DEFAULT_THRESHOLD = 4.0
 DEFAULT_DATABASE = "https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk/releases/download/jobs-latest/manifest.json"
 DEFAULT_MAX_AGE_DAYS = 60
@@ -85,6 +88,7 @@ class Config:
     model: str = DEFAULT_MODEL
     quick_model: str = DEFAULT_QUICK_MODEL
     judge_model: str = DEFAULT_JUDGE_MODEL
+    decision_model: str = DEFAULT_DECISION_MODEL
     base_url: str = DEFAULT_BASE_URL
     api_key_env: str = "ORCAROUTER_API_KEY"
     threshold: float = DEFAULT_THRESHOLD
@@ -231,6 +235,7 @@ def load_config(workspace: Path) -> Config:
         model=str(raw.get("model") or DEFAULT_MODEL),
         quick_model=str(raw.get("quick_model") or DEFAULT_QUICK_MODEL),
         judge_model=str(raw.get("judge_model") or DEFAULT_JUDGE_MODEL),
+        decision_model=str(raw.get("decision_model") or DEFAULT_DECISION_MODEL),
         base_url=str(raw.get("base_url") or DEFAULT_BASE_URL),
         api_key_env=str(raw.get("api_key_env") or "ORCAROUTER_API_KEY"),
         threshold=float(threshold),
