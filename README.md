@@ -2,9 +2,7 @@
 
 Find the jobs that fit your CV and apply to them.
 
-Give it your resume. It lists the jobs that fit you best, right in your terminal. You select the ones you want, and it fills each application in a visible browser window. It asks before sending anything.
-
-Python 3.11 or newer.
+Give it your resume. It lists the jobs that fit you best, right in your terminal. You select the ones you want, and it fills each application in a visible browser window. It asks before sending anything. Needs Python 3.11 or newer.
 
 ```sh
 pip install git+https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk
@@ -60,11 +58,6 @@ A plugin is a Markdown file in [`src/aihawk/plugins/`](src/aihawk/plugins): a pr
 The search plan is an editable graph in `filters.plan` of `~/.aihawk/aihawk.yaml`; restart `aihawk` after you change it.
 
 Models go through OrcaRouter: `model` (default `z-ai/glm-5.3-flash`) writes the CV and fills forms; `quick_model` (default `google/gemini-3.5-flash`) writes the plan, rates titles and scores jobs. Any OpenAI-compatible endpoint with tool calling and structured output can replace OrcaRouter through `base_url`.
-
-## Limits
-
-- Forms behind a login or a captcha come back as blocked; AIHawk does not get around them.
-- The tailored PDF uses a Latin font.
 
 ## Thanks
 
