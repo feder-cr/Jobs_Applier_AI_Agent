@@ -98,6 +98,11 @@ class Config:
     def key_file(self) -> Path:
         return self.workspace / KEY_FILE
 
+    @property
+    def browser_profile(self) -> Path:
+        """The one Firefox profile for everything the browser does: the person's sign-ins and the applications."""
+        return self.workspace / "browser-profile"
+
     def api_key(self) -> str:
         """The model's key: from the environment, or the one the person typed in."""
         from_environment = os.environ.get(self.api_key_env, "").strip()

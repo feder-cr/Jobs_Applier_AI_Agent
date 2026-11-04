@@ -11,11 +11,12 @@ from pathlib import Path
 from openai import AsyncOpenAI
 
 from aihawk.apply import Confirm, Outcome, apply_to_job
+from aihawk.apply import sign_in as sign_in_browser
 from aihawk.config import ConfigError, load_config
 from aihawk.database import search, with_description
 from aihawk.documents import score_job, screen_titles, tailor_cv, write_cv_pdf
 from aihawk.llm import make_client
-from aihawk.plugins import Plugin, load_plugins, plugin_for
+from aihawk.plugins import Plugin, always_plugins, load_plugins, plugin_for
 from aihawk.profile import answer_question, install_resume
 from aihawk.store import SUBMITTED, Store, Stored
 
@@ -61,6 +62,10 @@ class Session:
 
     def plugin(self, item: Stored) -> Plugin | None:
         return plugin_for(item.job.url, self.plugins)
+
+    async def sign_in(self, wait: Callable[[], Awaitable[None]]) -> None:
+        """Open the browser for the person to sign in, until `wait` returns: the same profile the applications use."""
+        await sign_in_browser(self.config.browser_profile, self.config.data_dir / "browser", wait)
 
     async def find(self, log: Log) -> int:
         """Bring today's postings for this search into the store; how many are new."""
@@ -136,8 +141,9 @@ class Session:
         for _ in range(MAX_ROUNDS):
             answers = self.config.answers.read_text(encoding="utf-8") if self.config.answers.is_file() else ""
             log(f"filling the form on {plugin.name}")
+            guidance = "\n\n".join([plugin.instructions, *(extra.instructions for extra in always_plugins(self.plugins))])
             try:
-                outcome = await apply_to_job(self.client, self.config.model, job, cv, answers, cv_file, self.config.data_dir, confirm, plugin.instructions)
+                outcome = await apply_to_job(self.client, self.config.model, job, cv, answers, cv_file, self.config.data_dir, self.config.browser_profile, confirm, guidance)
             except Exception as error:  # noqa: BLE001  One job's failure is reported and recorded; the next job still runs.
                 outcome = Outcome("failed", str(error) or type(error).__name__)
             if outcome.status != "needs_input":

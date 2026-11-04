@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from aihawk.apply import SYSTEM, fill_form, instructions
-from aihawk.plugins import Plugin, PluginError, load_plugins, parse_plugin, plugin_for
+from aihawk.plugins import Plugin, PluginError, always_plugins, load_plugins, parse_plugin, plugin_for
 from fakes import ScriptedBrowser, ScriptedModel, tool_call
 
 PLUGIN = Plugin("lever", ("jobs.lever.co",), "Upload first.", "/apply")
@@ -56,10 +56,38 @@ def test_a_plugin_that_cannot_be_used_is_refused(text: str) -> None:
 
 def test_the_bundled_plugins_load_and_each_names_a_site() -> None:
     plugins = load_plugins()
-    assert plugins
-    assert all(plugin.hosts and plugin.instructions for plugin in plugins)
-    hosts = [host for plugin in plugins for host in plugin.hosts]
+    sites = [plugin for plugin in plugins if not plugin.always]
+    assert sites
+    assert all(plugin.hosts and plugin.instructions for plugin in sites)
+    hosts = [host for plugin in sites for host in plugin.hosts]
     assert len(hosts) == len(set(hosts))
+
+
+def test_the_mail_plugins_apply_to_every_form_and_name_no_site() -> None:
+    plugins = load_plugins()
+    always = {plugin.name: plugin for plugin in always_plugins(plugins)}
+    assert set(always) == {"gmail", "outlook"}
+    assert all(plugin.hosts == () and plugin.instructions for plugin in always.values())
+    assert plugin_for("https://mail.google.com/mail/u/0/", plugins) is None
+    assert plugin_for("https://outlook.live.com/mail/", plugins) is None
+    assert plugin_for("https://jobs.lever.co/acme/1", plugins).name == "lever"
+
+
+def test_a_plugin_for_every_form_lists_no_hosts_and_names_a_known_when() -> None:
+    always = parse_plugin("mail", "---\nwhen: always\n---\nRead the mailbox.")
+    assert always.always and always.hosts == () and always.instructions == "Read the mailbox."
+    with pytest.raises(PluginError):
+        parse_plugin("mail", "---\nwhen: always\nhosts: [mail.example]\n---\nRead.")
+    with pytest.raises(PluginError):
+        parse_plugin("mail", "---\nwhen: sometimes\nhosts: [mail.example]\n---\nRead.")
+
+
+def test_your_own_mail_plugin_wins_over_the_bundled_one(tmp_path: Path) -> None:
+    (tmp_path / "plugins").mkdir()
+    (tmp_path / "plugins" / "gmail.md").write_text("---\nwhen: always\n---\nMine.", encoding="utf-8")
+    always = {plugin.name: plugin.instructions for plugin in always_plugins(load_plugins(tmp_path))}
+    assert always["gmail"] == "Mine."
+    assert set(always) == {"gmail", "outlook"}
 
 
 def test_a_site_no_plugin_knows_has_no_plugin() -> None:

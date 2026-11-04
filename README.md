@@ -17,7 +17,7 @@ aihawk resume.pdf
  │   │ 4.5   │ auto  │ Beta     │ Backend Developer       │ Remote   │ sent   │
  │   │ 4.1   │ link  │ Gamma    │ Python Developer        │ Rome     │        │
  └───┴───────┴───────┴──────────┴─────────────────────────┴──────────┴────────┘
-  space select · enter details · a apply · o open link · m more jobs · r new resume · q quit
+  space select · enter details · a apply · o open link · m more jobs · r new resume · l sign in · q quit
 ```
 
 The first time, it asks for an [OrcaRouter](https://orcarouter.ai) key. After that, `aihawk` alone reopens your list.

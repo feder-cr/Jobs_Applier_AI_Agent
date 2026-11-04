@@ -5,6 +5,9 @@ link; its body is added to the model's instructions when it fills a form on thos
 file to src/aihawk/plugins/, or to a plugins/ folder beside your aihawk.yaml, which wins over a bundled one of the same
 name. AIHawk applies only where a plugin exists; other postings are listed for applying by hand.
 
+A plugin with `when: always` in its front matter has no hosts: its body is added to every form's instructions, beside the
+site's own plugin, and it never makes a site count as one AIHawk can apply to. The mail plugins are of that kind.
+
 A plugin only explains a site. What protects the person stays in apply.py, out of any plugin's reach: the model cannot
 send the form, writes nothing that the CV and the answers do not say, and does not get around a captcha or a login.
 """
@@ -30,6 +33,7 @@ class Plugin:
     hosts: tuple[str, ...]
     instructions: str
     apply_path: str = ""
+    always: bool = False
 
     def matches(self, url: str) -> bool:
         host = (urlsplit(url).hostname or "").lower()
@@ -54,12 +58,18 @@ def parse_plugin(name: str, text: str) -> Plugin:
         meta = yaml.safe_load(head) or {}
     except yaml.YAMLError as error:
         raise PluginError(f"plugin {name}: its front matter is not valid YAML: {error}") from error
+    always = meta.get("when") == "always"
     hosts = meta.get("hosts")
-    if not isinstance(hosts, list) or not hosts or not all(isinstance(host, str) for host in hosts):
+    if always and hosts is not None:
+        raise PluginError(f"plugin {name}: a plugin for every form lists no hosts")
+    if not always and (not isinstance(hosts, list) or not hosts or not all(isinstance(host, str) for host in hosts)):
         raise PluginError(f"plugin {name}: `hosts` must list the sites it is for")
+    if meta.get("when") not in (None, "always"):
+        raise PluginError(f"plugin {name}: `when` can only be always")
     if not body.strip():
         raise PluginError(f"plugin {name}: it has no instructions")
-    return Plugin(str(meta.get("name") or name), tuple(host.lower() for host in hosts), body.strip(), str(meta.get("apply_path") or ""))
+    names = tuple(host.lower() for host in hosts or ())
+    return Plugin(str(meta.get("name") or name), names, body.strip(), str(meta.get("apply_path") or ""), always)
 
 
 def _files(folder: Traversable | Path) -> dict[str, str]:
@@ -76,4 +86,9 @@ def load_plugins(workspace: Path | None = None) -> tuple[Plugin, ...]:
 
 
 def plugin_for(url: str, plugins: tuple[Plugin, ...]) -> Plugin | None:
-    return next((plugin for plugin in plugins if plugin.matches(url)), None)
+    return next((plugin for plugin in plugins if not plugin.always and plugin.matches(url)), None)
+
+
+def always_plugins(plugins: tuple[Plugin, ...]) -> tuple[Plugin, ...]:
+    """The plugins that apply to every form, such as the mail ones; they explain no site."""
+    return tuple(plugin for plugin in plugins if plugin.always)

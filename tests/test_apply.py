@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,7 +14,8 @@ from typing import Any
 import pytest
 from pypdf import PdfReader
 
-from aihawk.apply import FINISH_TOOL, MODEL_TOOLS, SYSTEM, Outcome, fill_form, instructions, offered, refusal, run_on_page, sends_form
+from aihawk import apply as apply_module
+from aihawk.apply import FINISH_TOOL, MODEL_TOOLS, SYSTEM, Outcome, apply_to_job, fill_form, instructions, offered, refusal, run_on_page, sends_form, sign_in
 from aihawk.database import Job
 from aihawk.documents import score_from, score_job, screen_titles, tailor_cv, write_cv_pdf
 from fakes import ScriptedBrowser, ScriptedModel, tool_call
@@ -42,6 +45,9 @@ def ready(selector: str = "#send") -> list[Any]:
         ({"tag": "button", "type": "", "in_form": True, "text": "Yes"}, True, False),
         ({"tag": "button", "type": "", "in_form": True, "text": "No"}, True, False),
         ({"tag": "button", "type": "", "in_form": True, "text": "Upload File"}, True, False),
+        # Gmail's send control is a role=button div outside any form: its text is "Send", or "Schedule send" in the menu.
+        ({"tag": "div", "type": "", "in_form": False, "text": "Send"}, True, True),
+        ({"tag": "div", "type": "", "in_form": False, "text": "Schedule send"}, True, True),
         ({"tag": "button", "type": "button", "in_form": True, "text": "Submit application"}, True, True),
         ({"tag": "button", "type": "", "in_form": True, "text": "Presenta candidatura"}, True, True),
         ({"tag": "button", "type": "", "in_form": True, "text": "Submit Application"}, True, True),
@@ -51,6 +57,11 @@ def ready(selector: str = "#send") -> list[Any]:
 )
 def test_sends_form(element: dict[str, Any], touched: bool, sends: bool) -> None:
     assert sends_form(element, touched) is sends
+
+
+@pytest.mark.parametrize("word", ["Send", "Senden", "Inviar", "Verzenden", "Versturen", "Skicka", "Wyślij", "Odeslat", "Отправить", "送信", "提交", "제출"])
+def test_a_control_that_sends_in_another_language_is_held_back_even_with_no_form_around_it(word: str) -> None:
+    assert sends_form({"tag": "div", "type": "", "in_form": False, "text": word}, True)
 
 
 @pytest.mark.parametrize("key", ["Enter", "enter", "Control+Enter"])
@@ -260,3 +271,56 @@ def test_the_pdf_holds_the_text_accents_and_markup_safely(tmp_path: Path) -> Non
     text = " ".join(page.extract_text() for page in PdfReader(path).pages)
     for piece in ("Niccolò Rossi", "Experience", "Lead", "A&B <Corp>", "Plain line"):
         assert piece in text
+
+
+class ScriptedServer(ScriptedBrowser):
+    """The browser server as the tests see it: every call is recorded, and there are no tools to list."""
+
+    async def list_tools(self) -> SimpleNamespace:
+        return SimpleNamespace(tools=[])
+
+
+def scripted_server(monkeypatch: pytest.MonkeyPatch, server: ScriptedServer) -> None:
+    @asynccontextmanager
+    async def started(upload_dir: Path, home: Path) -> AsyncIterator[tuple[ScriptedServer, str]]:
+        yield server, ""
+
+    monkeypatch.setattr(apply_module, "_server", started)
+
+
+def test_the_profile_reaches_browser_open_and_the_browser_is_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    server = ScriptedServer()
+    scripted_server(monkeypatch, server)
+    profile = tmp_path / "browser-profile"
+    model = ScriptedModel([tool_call("finish_form", status="blocked", summary="closed", submit_selector="", questions=[])])
+    job = Job("g:a:1", "Acme", "Engineer", "Rome", "https://u", "https://u/apply", "Build things")
+    outcome = asyncio.run(apply_to_job(model, "m", job, "cv", "answers", tmp_path / "cv.pdf", tmp_path, profile, None))  # type: ignore[arg-type]
+    assert outcome.status == "blocked"
+    assert server.calls[0] == ("browser_open", {"profile": str(profile)})
+    assert server.calls[-1] == ("browser_close", {})
+
+
+def test_sign_in_opens_the_profile_on_a_blank_page_and_closes_it_when_the_person_is_done(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    server = ScriptedServer()
+    scripted_server(monkeypatch, server)
+    profile = tmp_path / "browser-profile"
+    waited: list[tuple[str, ...]] = []
+
+    async def wait() -> None:
+        waited.append(tuple(name for name, _ in server.calls))
+
+    asyncio.run(sign_in(profile, tmp_path, wait))
+    assert waited == [("browser_open", "browser_navigate")]
+    assert server.calls == [("browser_open", {"profile": str(profile)}), ("browser_navigate", {"url": "about:blank"}), ("browser_close", {})]
+
+
+def test_sign_in_closes_the_browser_even_when_the_wait_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    server = ScriptedServer()
+    scripted_server(monkeypatch, server)
+
+    async def broken() -> None:
+        raise RuntimeError("the window was closed")
+
+    with pytest.raises(RuntimeError, match="window was closed"):
+        asyncio.run(sign_in(tmp_path / "browser-profile", tmp_path, broken))
+    assert server.calls[-1] == ("browser_close", {})

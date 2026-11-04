@@ -106,6 +106,20 @@ class JobDetails(ModalScreen[None]):
         self.dismiss(None)
 
 
+class SignIn(ModalScreen[None]):
+    """The browser window is open for the person to sign in. Nothing is typed for them; a key here says they are done."""
+
+    BINDINGS: ClassVar = [Binding("enter,escape", "done", "Done")]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Static("The browser window is open. Sign in there to your email, and to any site you apply on.", id="question", markup=False)
+            yield Static("Press Enter here when you are done. The window closes then.", classes="hint")
+
+    def action_done(self) -> None:
+        self.dismiss(None)
+
+
 class AIHawk(App[None]):
     TITLE = "AIHawk"
     CSS = """
@@ -125,6 +139,7 @@ class AIHawk(App[None]):
         Binding("o", "open_link", "Open link"),
         Binding("m", "more", "More jobs"),
         Binding("r", "new_resume", "New resume"),
+        Binding("l", "sign_in", "Sign in"),
         Binding("q", "quit", "Quit"),
     ]
 
@@ -135,6 +150,7 @@ class AIHawk(App[None]):
         self.auto_submit = auto_submit
         self.selected: set[str] = set()
         self.busy = False
+        self.signing_in = False
 
     def compose(self) -> ComposeResult:
         yield Static("AIHawk", id="heading", markup=False)
@@ -302,10 +318,42 @@ class AIHawk(App[None]):
             self.start()
 
     def action_apply(self) -> None:
-        if self.busy:
+        if self.signing_in:
+            self.say("One moment: the browser is open for signing in.")
+            return
+        if self.applying():
             self.say("One moment: still applying.")
             return
         self.apply_selected()
+
+    def applying(self) -> bool:
+        """Whether an application holds the browser: one running, or one just started and not yet running."""
+        return self.busy or any(worker.group == "apply" and not worker.is_finished for worker in self.workers)
+
+    def action_sign_in(self) -> None:
+        # One browser per profile: an application and the sign-in window never open it at the same time.
+        if self.signing_in:
+            self.say("The browser is already open for signing in.")
+        elif self.applying():
+            self.say("Not now: an application is using the browser. Wait until it is done.")
+        else:
+            self.sign_in()
+
+    @work(group="sign_in")
+    async def sign_in(self) -> None:
+        self.signing_in = True
+        self.say("Opening the browser for you to sign in.")
+
+        async def wait() -> None:
+            await self.push_screen_wait(SignIn())
+
+        try:
+            await self.session.sign_in(wait)
+            self.say("The browser is closed. Applications use the same browser profile, so the sign-ins carry over.")
+        except Exception as error:  # noqa: BLE001  The screen stays up and says what went wrong, as in start.
+            self.say(f"The sign-in browser did not open: {error}")
+        finally:
+            self.signing_in = False
 
     @work(exclusive=True, group="apply")
     async def apply_selected(self) -> None:

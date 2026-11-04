@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import duckdb
@@ -12,10 +15,12 @@ import pytest
 from pypdf import PdfWriter
 from textual.widgets import DataTable, Input
 
+from aihawk import apply as apply_module
 from aihawk.apply import Outcome
 from aihawk.config import ConfigError, load_config
 from aihawk.profile import add_answers, answer_question, install_resume, read_answers, read_resume
-from aihawk.tui import AIHawk, ConfirmSend, JobDetails, TextPrompt
+from aihawk.tui import AIHawk, ConfirmSend, JobDetails, SignIn, TextPrompt
+from fakes import ScriptedBrowser
 
 PROFILE = {
     "name": "Ada Rossi",
@@ -183,8 +188,8 @@ def test_no_key_asks_for_one_and_keeps_it_on_this_computer(home: Path, resume: P
 
 
 def fake_apply(app: AIHawk, outcomes: list[Outcome], calls: list[Any]) -> None:
-    async def apply_to_job(client: Any, model: str, job: Any, cv: str, answers: str, cv_file: Path, data_dir: Path, confirm: Any, guidance: str = "") -> Outcome:
-        calls.append({"job": job, "answers": answers, "guidance": guidance, "cv_file": cv_file})
+    async def apply_to_job(client: Any, model: str, job: Any, cv: str, answers: str, cv_file: Path, data_dir: Path, profile: Path, confirm: Any, guidance: str = "") -> Outcome:
+        calls.append({"job": job, "answers": answers, "guidance": guidance, "cv_file": cv_file, "profile": profile})
         outcome = outcomes.pop(0)
         if outcome.status == "submitted" and confirm is not None and not await confirm("the form's summary"):
             return Outcome("declined", "not sent")
@@ -415,3 +420,91 @@ def test_a_new_resume_never_invents_a_contact_detail(home: Path, resume: Path) -
     config = load_config(home)
     asyncio.run(install_resume(ScriptedModelForApp(), config, resume))  # type: ignore[arg-type]
     assert "phone" not in read_answers(config)
+
+
+def test_the_mail_plugins_join_every_form_after_the_sites_own_and_the_profile_is_the_workspaces(home: Path, resume: Path, restored_apply: Any) -> None:
+    calls: list[Any] = []
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        fake_apply(app, [Outcome("blocked", "closed")], calls)
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
+            await pilot.press("a")
+            await wait_for_apply(pilot, app)
+
+    asyncio.run(run())
+    guidance = calls[0]["guidance"]
+    assert guidance.index("The form is one page") < guidance.index("mail.google.com") < guidance.index("outlook.live.com")
+    assert calls[0]["profile"] == home / "browser-profile"
+
+
+class ScriptedServer(ScriptedBrowser):
+    """The browser server as the tests see it: every call is recorded, and there are no tools to list."""
+
+    async def list_tools(self) -> SimpleNamespace:
+        return SimpleNamespace(tools=[])
+
+
+def scripted_server(monkeypatch: pytest.MonkeyPatch, server: ScriptedServer) -> None:
+    @asynccontextmanager
+    async def started(upload_dir: Path, home: Path) -> AsyncIterator[tuple[ScriptedServer, str]]:
+        yield server, ""
+
+    monkeypatch.setattr(apply_module, "_server", started)
+
+
+async def wait_for_sign_in_to_close(pilot: Any, app: AIHawk) -> None:
+    for _ in range(100):
+        await pilot.pause(0.05)
+        if not app.signing_in:
+            return
+    raise AssertionError("the sign-in browser never closed")
+
+
+def test_the_sign_in_key_opens_the_profile_until_the_person_is_done(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    server = ScriptedServer()
+    scripted_server(monkeypatch, server)
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
+            await pilot.press("l")
+            await wait_for_screen(pilot, SignIn)
+            assert ("browser_open", {"profile": str(home / "browser-profile")}) in server.calls
+            assert server.calls[-1] == ("browser_navigate", {"url": "about:blank"})
+            await pilot.press("enter")
+            await wait_for_sign_in_to_close(pilot, app)
+
+    asyncio.run(run())
+    assert server.calls[-1] == ("browser_close", {})
+
+
+def test_the_sign_in_key_is_refused_while_an_application_runs(home: Path, resume: Path, restored_apply: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    server = ScriptedServer()
+    scripted_server(monkeypatch, server)
+    import aihawk.session as session_module  # noqa: PLC0415
+
+    async def run() -> None:
+        release = asyncio.Event()
+
+        async def slow_apply(client: Any, model: str, job: Any, cv: str, answers: str, cv_file: Path, data_dir: Path, profile: Path, confirm: Any, guidance: str = "") -> Outcome:
+            await release.wait()
+            return Outcome("declined", "not sent")
+
+        app = scripted_app(home, resume)
+        session_module.apply_to_job = slow_apply  # type: ignore[assignment]
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
+            await pilot.press("a")
+            await pilot.pause(0.2)
+            assert app.applying()
+            await pilot.press("l")
+            await pilot.pause(0.2)
+            assert not app.signing_in
+            assert not any(name == "browser_open" for name, _ in server.calls)
+            release.set()
+            await wait_for_apply(pilot, app)
+
+    asyncio.run(run())
