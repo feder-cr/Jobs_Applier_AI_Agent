@@ -16,12 +16,14 @@ from textual.widgets import DataTable, Footer, Input, RichLog, Static
 
 from aihawk.config import ConfigError
 from aihawk.database import DatabaseError
+from aihawk.documents import QUESTIONS
 from aihawk.session import BATCH, Session
 from aihawk.store import SUBMITTED, Stored
 
 STATUS_TEXT = {
     "new": "",
     "scored": "",
+    "shortlisted": "",
     "submitted": "sent",
     "unconfirmed": "clicked, not confirmed",
     "declined": "not sent",
@@ -89,7 +91,8 @@ class JobDetails(ModalScreen[None]):
         job, report = self.item.job, self.item.report or {}
         lines = [f"{job.title}", f"{job.company} · {job.location}", job.url, ""]
         if report:
-            lines += [f"Score {report.get('score', 0):.1f}/5 · posting looks {report.get('legitimacy', '?')} · {report.get('confidence', '?')} confidence", "", report.get("summary", "")]
+            answers = " · ".join(f"{name.replace('_', ' ')}: {report.get(name, '?')}" for name in QUESTIONS)
+            lines += [f"Score {report.get('score', 0):.1f}/5 · posting looks {report.get('legitimacy', '?')}", answers, "", report.get("summary", "")]
             if report.get("gaps"):
                 lines += ["", "Gaps:", *(f"  - {gap}" for gap in report["gaps"])]
         if self.item.note:
@@ -232,6 +235,9 @@ class AIHawk(App[None]):
             self.show_heading()
 
     async def judge(self) -> None:
+        self.show_heading("reading titles")
+        await self.session.shortlist(BATCH, self.say)
+        self.refresh_jobs()
         items = self.session.next_to_score(BATCH)
         if not items:
             self.say("Every posting found so far has been judged.")

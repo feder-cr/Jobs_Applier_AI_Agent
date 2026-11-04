@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # invisible-playwright-mcp is never pinned: this says on the day a new release of it stops working with AIHawk.
+  schedule:
+    - cron: "41 5 * * *"
 
 permissions:
   contents: read

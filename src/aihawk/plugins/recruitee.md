@@ -3,10 +3,16 @@ name: recruitee
 hosts: [recruitee.com]
 apply_path: /c/new
 ---
-A cookie banner may cover the page: click "Agree to necessary" first.
+The form is on the posting's Application tab (Sollicitatie or Application), at /c/new. The page is often in Dutch. A cookie banner may cover the page: click "Agree to necessary" first. A Cookiebot banner may show instead, with Dutch labels: "Weigeren" declines.
 
-Fields are named `candidate.name`, `candidate.email` and `candidate.phone`. Their ids change on each load, so select by name, such as `input[name="candidate.email"]`. The phone has a country code list in a button just before it: set it to the country of the number in the answers.
+Fields are named `candidate.name`, `candidate.email` and `candidate.phone`. Their ids change on each load, so select by name, such as `input[name="candidate.email"]`. The phone has a country code list in a button just before it, whose label names the country: set it to the country of the number in the answers.
 
-Upload the CV to `input[name="candidate.cv"]`. `candidate.photo` is a photo and `candidate.coverLetterFile` a cover letter: leave them empty unless they are required, and if a required one is not among your files, ask.
+Upload the CV to `input[name="candidate.cv"]`. `candidate.photo` is a photo and `candidate.coverLetterFile` a cover letter: leave them empty unless they are required, and if a required one is not among your files, ask. The cover letter has a switch button, "Write it here instead" (in Dutch, "Schrijf je motivatiebrief in plaats daarvan hier"): do not click it.
 
-Questions a company adds come under "Questions". The form is often in the company's own language: answer in that language only where the answers file gives the words; a required answer it does not give is a question for the person.
+Questions a company adds come under "Questions" (Vragen). Yes and No questions are radio buttons named `candidate.openQuestionAnswers.<id>.flag`; a written answer is `candidate.openQuestionAnswers.<id>.content`. Answer in the company's language only where the answers file gives the words; a required answer it does not give is a question for the person.
+
+`candidate.agreements.0.consent` is a checkbox under "Legal Agreements", worded "Yes, I give my consent for <company> to hold my details for GDPR compliance". Tick it only if the answers file says the person accepts that.
+
+A required field has a * with the title "This field is required and can not be left empty".
+
+The submit control has `data-testid="submit-application-form-button"`, labelled "Send" or "Versturen".

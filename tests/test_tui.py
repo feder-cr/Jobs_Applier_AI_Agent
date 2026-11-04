@@ -19,17 +19,22 @@ from aihawk.tui import AIHawk, ConfirmSend, JobDetails, TextPrompt
 
 PROFILE = {
     "name": "Ada Rossi",
-    "titles": ["Python Engineer"],
-    "locations": ["Milan", "Milano"],
+    "plan": {
+        "nodes": [{"id": "role", "weight": 1.5, "forms": [{"text": "Python Engineer", "weight": 1.0}, {"text": "Python Developer", "weight": 1.0}]}],
+        "arcs": [],
+    },
+    "cities": ["Milan", "Milano"],
+    "locations": ["Italy"],
+    "countries": ["it"],
     "goals": "Senior Python work.",
     "answers": {"email": "ada@example.com", "phone": "", "location": "Milan", "linkedin": "", "website": "", "current_company": ""},
 }
-FIELDS = {"summary": "Fits.", "gaps": ["No Kubernetes"], "legitimacy": "credible", "confidence": "high", "cv_match": "", "goal_alignment": "", "compensation": "", "culture": "", "red_flags": ""}
+FIELDS = {"summary": "Fits.", "gaps": ["No Kubernetes"], "legitimacy": "credible"}
 CV_TEXT = "# Ada Rossi\n\nSenior Python Engineer at Acme for five years, working on backend services.\n"
 
 
-def report(score: float) -> str:
-    return json.dumps({"score": score, **FIELDS})
+def report(role: str, must_haves: str) -> str:
+    return json.dumps({"role": role, "must_haves": must_haves, "level": "unclear", "location": "unclear", **FIELDS})
 
 
 def published(folder: Path) -> str:
@@ -45,6 +50,7 @@ def published(folder: Path) -> str:
             ("other", "https://jobs.lever.co/gamma/4", "Accountant", "Gamma"),
         ],
     )
+    connection.execute("ALTER TABLE t ADD COLUMN IF NOT EXISTS country VARCHAR; ALTER TABLE t ADD COLUMN IF NOT EXISTS remote BOOLEAN")
     connection.execute(f"COPY t TO '{(folder / 'jobs_0.parquet').as_posix()}' (FORMAT parquet)")
     connection.execute(f"""COPY (SELECT * EXCLUDE (description, file_row_number), 'jobs_0.parquet' AS part, file_row_number AS row_number
         FROM read_parquet('{(folder / 'jobs_0.parquet').as_posix()}', file_row_number = true)) TO '{(folder / 'index.parquet').as_posix()}' (FORMAT parquet)""")
@@ -94,7 +100,10 @@ class ScriptedModelForApp:
             content = json.dumps(PROFILE)
         elif name == "job_report":
             text = request["messages"][1]["content"]
-            content = report(4.9 if "Bestco" in text else 4.0 if "Lowly" in text else 2.0)
+            content = report("yes", "yes") if "Bestco" in text else report("yes", "unclear") if "Lowly" in text else report("no", "unclear")
+        elif name == "title_ratings":
+            count = request["messages"][1]["content"].count("\n") - 1
+            content = json.dumps({"ratings": [2] * count})
         else:
             content = "# Ada Rossi"
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content, tool_calls=None))])
@@ -122,13 +131,16 @@ def test_a_resume_is_all_it_takes_to_get_the_best_jobs_first(home: Path, resume:
             await settle(pilot, app)
             assert companies(app) == ["Bestco", "Lowly", "Noplugin"]
             table = app.query_one(DataTable)
-            assert table.get_row_at(0)[1] == "4.9"
+            assert table.get_row_at(0)[1] == "4.5"
             assert table.get_row_at(0)[2] == "auto"
             assert table.get_row_at(2)[2] == "link"
 
     asyncio.run(run())
     config = load_config(home)
-    assert config.filters.include == ("Python Engineer",)
+    assert config.filters.include == ("role",)
+    assert [form.text for form in config.filters.plan.nodes[0].forms] == ["Python Engineer", "Python Developer"]
+    assert config.filters.locations == ("Milan", "Milano", "Italy")
+    assert config.filters.cities == ("Milan", "Milano")
     assert config.cv.read_text(encoding="utf-8").startswith("# Ada Rossi")
     assert read_answers(config) == {"email": "ada@example.com", "location": "Milan"}
 

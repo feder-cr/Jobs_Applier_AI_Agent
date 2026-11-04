@@ -5,13 +5,18 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import yaml
 
 CONFIG_FILE = "aihawk.yaml"
 KEY_FILE = "key"
 DEFAULT_BASE_URL = "https://api.orcarouter.ai/v1"
-DEFAULT_MODEL = "orcarouter/auto"
+# The model invisible_dots gives a new Dot, for the long work on a form. It reads screenshots.
+DEFAULT_MODEL = "z-ai/glm-5.3-flash"
+# For the plan and the other short calls of a search. Measured on OrcaRouter on five CVs: 10 s a plan, with valid graphs, where
+# deepseek-v4.1-flash broke the nested schema and glm-5.3-flash took minutes.
+DEFAULT_QUICK_MODEL = "google/gemini-3.5-flash"
 DEFAULT_THRESHOLD = 4.0
 DEFAULT_DATABASE = "https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk/releases/download/jobs-latest/manifest.json"
 DEFAULT_MAX_AGE_DAYS = 60
@@ -22,10 +27,45 @@ class ConfigError(Exception):
 
 
 @dataclass(frozen=True)
+class Form:
+    """One wording a title may use for a node. The weight says how surely that exact wording means the job."""
+
+    text: str
+    weight: float = 1.0
+
+
+@dataclass(frozen=True)
+class Node:
+    """One facet of the job, and the wordings that stand for it. The weight says how telling the facet is; 0 only conditions arcs."""
+
+    id: str
+    weight: float
+    forms: tuple[Form, ...]
+
+
+@dataclass(frozen=True)
+class Arc:
+    """When or unless a node (or a phrase) is in the title, scale the nodes named in `then`; "*" scales the whole title."""
+
+    then: tuple[tuple[str, float], ...]
+    when: str = ""
+    unless: str = ""
+
+
+@dataclass(frozen=True)
+class Plan:
+    nodes: tuple[Node, ...] = ()
+    arcs: tuple[Arc, ...] = ()
+
+
+@dataclass(frozen=True)
 class Filters:
     include: tuple[str, ...] = ()
     exclude: tuple[str, ...] = ()
     locations: tuple[str, ...] = ()
+    cities: tuple[str, ...] = ()
+    countries: tuple[str, ...] = ()
+    plan: Plan = field(default_factory=Plan)
 
 
 @dataclass(frozen=True)
@@ -36,6 +76,7 @@ class Config:
     database: str = DEFAULT_DATABASE
     max_age_days: int = DEFAULT_MAX_AGE_DAYS
     model: str = DEFAULT_MODEL
+    quick_model: str = DEFAULT_QUICK_MODEL
     base_url: str = DEFAULT_BASE_URL
     api_key_env: str = "ORCAROUTER_API_KEY"
     threshold: float = DEFAULT_THRESHOLD
@@ -82,6 +123,75 @@ def _words(value: object, name: str) -> tuple[str, ...]:
     return tuple(value)
 
 
+def _items(value: object, name: str) -> list[Any]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ConfigError(f"{name} must be a list")
+    return value
+
+
+def _text(value: object, name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"{name} must be a word or phrase, not {value!r}")
+    return value
+
+
+def _weight(value: object, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        raise ConfigError(f"{name} must be a number, 0 or more, not {value!r}")
+    return float(value)
+
+
+def _node(entry: object) -> Node:
+    if not isinstance(entry, dict):
+        raise ConfigError(f"a node needs id, weight and forms: {entry!r}")
+    forms = tuple(_form(item) for item in _items(entry.get("forms"), "a node's forms"))
+    return Node(_text(entry.get("id"), "a node's id"), _weight(entry.get("weight", 1.0), "a node's weight"), forms)
+
+
+def _form(entry: object) -> Form:
+    if not isinstance(entry, dict):
+        raise ConfigError(f"a form needs text and weight: {entry!r}")
+    return Form(_text(entry.get("text"), "a form's text"), _weight(entry.get("weight", 1.0), "a form's weight"))
+
+
+def _arc(entry: object) -> Arc:
+    if not isinstance(entry, dict):
+        raise ConfigError(f"an arc needs when or unless, and then: {entry!r}")
+    when = str(entry.get("when") or "")
+    unless = str(entry.get("unless") or "")
+    # Exactly one condition: an arc with both, or with neither, would not say what it means.
+    if bool(when) == bool(unless):
+        raise ConfigError(f"an arc needs exactly one of when or unless: {entry!r}")
+    then = tuple(_target(item) for item in _items(entry.get("then"), "an arc's then"))
+    return Arc(then, when, unless)
+
+
+def _target(entry: object) -> tuple[str, float]:
+    if not isinstance(entry, dict):
+        raise ConfigError(f"a target needs target and multiplier: {entry!r}")
+    multiplier = entry.get("multiplier")
+    if isinstance(multiplier, bool) or not isinstance(multiplier, (int, float)):
+        raise ConfigError(f"a multiplier must be a number, not {multiplier!r}")
+    return _text(entry.get("target"), "a target"), float(multiplier)
+
+
+def _plan(value: object) -> Plan:
+    if value is None:
+        return Plan()
+    if not isinstance(value, dict):
+        raise ConfigError("filters.plan must be a mapping with nodes and arcs")
+    nodes = tuple(_node(entry) for entry in _items(value.get("nodes"), "filters.plan.nodes"))
+    arcs = tuple(_arc(entry) for entry in _items(value.get("arcs"), "filters.plan.arcs"))
+    ids = {node.id for node in nodes}
+    for arc in arcs:
+        for target, _ in arc.then:
+            if target != "*" and target not in ids:
+                raise ConfigError(f"an arc targets {target!r}, which is no node in filters.plan")
+    return Plan(nodes, arcs)
+
+
 def load_config(workspace: Path) -> Config:
     """The settings in the folder. Nothing there yet is a new search, not an error."""
     path = workspace / CONFIG_FILE
@@ -106,6 +216,7 @@ def load_config(workspace: Path) -> Config:
         database=str(raw.get("database") or DEFAULT_DATABASE),
         max_age_days=int(raw.get("max_age_days", DEFAULT_MAX_AGE_DAYS)),
         model=str(raw.get("model") or DEFAULT_MODEL),
+        quick_model=str(raw.get("quick_model") or DEFAULT_QUICK_MODEL),
         base_url=str(raw.get("base_url") or DEFAULT_BASE_URL),
         api_key_env=str(raw.get("api_key_env") or "ORCAROUTER_API_KEY"),
         threshold=float(threshold),
@@ -113,5 +224,8 @@ def load_config(workspace: Path) -> Config:
             _words(filters.get("include"), "filters.include"),
             _words(filters.get("exclude"), "filters.exclude"),
             _words(filters.get("locations"), "filters.locations"),
+            _words(filters.get("cities"), "filters.cities"),
+            _words(filters.get("countries"), "filters.countries"),
+            _plan(filters.get("plan")),
         ),
     )

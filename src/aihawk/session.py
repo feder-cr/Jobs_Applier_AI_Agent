@@ -13,13 +13,14 @@ from openai import AsyncOpenAI
 from aihawk.apply import Confirm, Outcome, apply_to_job
 from aihawk.config import ConfigError, load_config
 from aihawk.database import search, with_description
-from aihawk.documents import score_job, tailor_cv, write_cv_pdf
+from aihawk.documents import score_job, screen_titles, tailor_cv, write_cv_pdf
 from aihawk.llm import make_client
 from aihawk.plugins import Plugin, load_plugins, plugin_for
 from aihawk.profile import answer_question, install_resume
 from aihawk.store import SUBMITTED, Store, Stored
 
 BATCH = 40
+SCREEN_BATCH = 40
 SCORING_AT_ONCE = 5
 MAX_ROUNDS = 3
 
@@ -68,10 +69,26 @@ class Session:
         log(f"{len(jobs)} postings fit your search, of {manifest['rows_out']:,} in today's database; {new} new")
         return new
 
+    async def shortlist(self, wanted: int, log: Log) -> None:
+        """Rate titles, the best fit first, until `wanted` jobs are worth judging or none is left. Costs little: many titles to a call."""
+        while len(self.store.with_status("shortlisted")) < wanted:
+            batch = self.store.with_status("new")[:SCREEN_BATCH]
+            if not batch:
+                return
+            try:
+                candidate = f"{self.config.goals} They live in: {', '.join(self.config.filters.locations)}."
+                kept = await screen_titles(self.client, self.config.quick_model, [item.job for item in batch], candidate)
+            except Exception as error:  # noqa: BLE001  With no rating nothing is dropped: no evidence is not a no.
+                log(f"titles not rated: {error}")
+                kept = [item.job for item in batch]
+            kept_ids = {job.id for job in kept}
+            self.store.set_statuses([item.job.id for item in batch if item.job.id in kept_ids], "shortlisted")
+            self.store.set_statuses([item.job.id for item in batch if item.job.id not in kept_ids], "screened_out")
+
     def next_to_score(self, count: int = BATCH) -> list[Stored]:
-        """The postings to judge next: where AIHawk can apply first, the newest first. Judging costs model calls."""
-        unscored = self.store.unscored()
-        return sorted(unscored, key=lambda item: self.plugin(item) is None)[:count]
+        """The postings to judge next: where AIHawk can apply first, the best fit first. Judging costs model calls."""
+        waiting = self.store.with_status("shortlisted")
+        return sorted(waiting, key=lambda item: self.plugin(item) is None)[:count]
 
     async def score(self, items: list[Stored], on_scored: Callable[[], None], log: Log) -> None:
         cv = self.config.cv.read_text(encoding="utf-8")
@@ -81,7 +98,7 @@ class Session:
             async with limit:
                 try:
                     job = await asyncio.to_thread(with_description, item.job)
-                    report = await score_job(self.client, self.config.model, job, cv, self.config.goals)
+                    report = await score_job(self.client, self.config.quick_model, job, cv, self.config.goals)
                 except Exception as error:  # noqa: BLE001  One posting that cannot be judged must not stop the others.
                     log(f"{item.job.company}: not judged: {error}")
                     return

@@ -5,10 +5,14 @@ apply_path: /apply
 ---
 The page follows the browser's language, so labels may not be in English: go by the field's name.
 
-Fields are named `cName`, `cEmail`, `cPhoneNumber`, `cSummary` for a summary of experience, and `cCoverLetter`. A required summary may be written only from the CV's own words. Leave `smsConsent` unticked unless the answers file says otherwise. Do not use the Indeed or LinkedIn buttons.
+Fields are named `cName`, `cEmail` and `cPhoneNumber`, which is one text field with no country list. Some forms also have `cSummary` for a summary of experience and `cCoverLetter`. A required summary may be written only from the CV's own words. Leave `smsConsent` unticked unless the answers file says otherwise. Do not use the Indeed or LinkedIn links.
 
-The CV upload is a button near the top, with no visible file input: pass that button's selector to the upload tool. Uploading may fill fields from the CV, so read the page again afterwards and correct them.
+The CV upload is a link, "Carica Curriculum", near the top, with no file input and no id: select it by that text. It carries a "Required" mark when the CV is required. Uploading may fill fields from the CV, so read the page again afterwards and correct them.
 
-Questions a company adds have names like `section_..._question_0`, as radio buttons or lists: find each by the text before it. Some forms ask many required questions about licences or experience: what the files do not answer goes back to the person.
+"Aggiungi posizione" (add position) and "Aggiungi Studi e formazione" (add education) are links that add an entry: leave them empty unless required.
 
-The submit control is the form's last button.
+Questions a company adds have names like `section_..._question_0`, as radio buttons, native select lists or text: find each by the text before it. Some forms ask many required questions about licences or experience: what the files do not answer goes back to the person.
+
+Race, gender and veteran questions (`race_ethnicity`, `gender`, `eeoc.veteran_status`) have an "unspecified" choice: pick that. Their ids do not match their labels (`#race_hispanic` is labelled "asian"), so choose by the label, not the id.
+
+The send control is the button "Invia candidatura" (submit application), the form's last control.

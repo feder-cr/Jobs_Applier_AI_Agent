@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, ClassVar
 
 import pytest
+from mcp import ClientSession
+from mcp.client.stdio import stdio_client
 
-from aihawk.apply import apply_to_job
+from aihawk.apply import MODEL_TOOLS, apply_to_job, offered, server_parameters
 from aihawk.database import Job
 from aihawk.documents import write_cv_pdf
 from fakes import ScriptedModel, tool_call
@@ -105,3 +108,22 @@ def test_a_yes_sends_the_form_with_the_name_and_the_cv(site: str, tmp_path: Path
     assert b"Ada Rossi" in Site.posts[0]
     assert b"%PDF" in Site.posts[0]
     assert b"harmless-click-reached-the-page" in Site.posts[0]
+
+
+def test_the_newest_server_still_has_what_aihawk_relies_on(tmp_path: Path) -> None:
+    async def check() -> None:
+        async with stdio_client(server_parameters(tmp_path, tmp_path), errlog=sys.stderr) as (read, write), ClientSession(read, write) as session:
+            started = await session.initialize()
+            tools = {tool.name: tool for tool in (await session.list_tools()).tools}
+            # Each is called by name, and the first two by their arguments, in apply.py.
+            assert MODEL_TOOLS | {"browser_open", "browser_close"} <= set(tools)
+            assert {"selector"} <= set(tools["browser_click"].inputSchema["properties"])
+            assert {"x", "y"} <= set(tools["browser_click_at"].inputSchema["properties"])
+            assert {"expression"} <= set(tools["browser_evaluate"].inputSchema["properties"])
+            assert {"url"} <= set(tools["browser_navigate"].inputSchema["properties"])
+            # What the model reads about driving a page is the server's, and a tool that acts must not pass for one that reads.
+            assert started.instructions
+            assert not any(offered(tool) for name, tool in tools.items() if name in {"browser_open", "browser_close"})
+
+    asyncio.run(check())
+
