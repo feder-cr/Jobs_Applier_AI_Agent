@@ -17,6 +17,7 @@ from textual.widgets import DataTable, Footer, Input, RichLog, Static
 from aihawk.config import ConfigError
 from aihawk.database import DatabaseError
 from aihawk.documents import QUESTIONS
+from aihawk.llm import explain, refused
 from aihawk.session import Session
 from aihawk.store import SUBMITTED, Sent, Stored, said, sent_word
 
@@ -49,7 +50,7 @@ class TextPrompt(ModalScreen[str | None]):
         with Vertical(id="dialog"):
             yield Static(self.question, id="question", markup=False)
             yield Input(placeholder=self.placeholder, password=self.password, id="answer")
-            yield Static("Enter to answer · Esc to skip", classes="hint")
+            yield Static("Enter to answer · Esc to skip · Ctrl+C quits", classes="hint")
 
     @on(Input.Submitted)
     def answered(self, event: Input.Submitted) -> None:
@@ -73,7 +74,7 @@ class SendBatch(ModalScreen[bool]):
         lines = [f"{index}. {item.job.company}: {item.job.title}" for index, item in enumerate(self.items, 1)]
         with Vertical(id="dialog"):
             yield Static(f"Send {count} application{'' if count == 1 else 's'} now?", id="question", markup=False)
-            yield Static("They will be sent now, in the browser window. Enter sends them all; Escape cancels.", classes="hint")
+            yield Static("They will be sent now, in the browser window. Enter sends them all; Escape cancels; Ctrl+C quits.", classes="hint")
             with VerticalScroll(id="summary"):
                 yield Static("\n".join(lines), markup=False)
             yield Footer()
@@ -189,7 +190,7 @@ class SignIn(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
             yield Static("The browser window is open. Sign in there to your email, and to any site you apply on.", id="question", markup=False)
-            yield Static("Press Enter here when you are done. The window closes then.", classes="hint")
+            yield Static("Press Enter here when you are done. The window closes then. Ctrl+C quits.", classes="hint")
 
     def action_done(self) -> None:
         self.dismiss(None)
@@ -197,6 +198,8 @@ class SignIn(ModalScreen[None]):
 
 class AIHawk(App[None]):
     TITLE = "AIHawk"
+    # The footer of 80 columns has room for the keys only; with the palette's key, it hid Quit.
+    ENABLE_COMMAND_PALETTE = False
     CSS = """
     #heading { height: 1; padding: 0 1; background: $primary; color: $text; text-style: bold; }
     #jobs { height: 1fr; }
@@ -214,11 +217,13 @@ class AIHawk(App[None]):
         Binding("enter", "details", "Details"),
         Binding("a", "apply", "Apply"),
         Binding("s", "sent", "Sent"),
-        Binding("o", "open_link", "Open link"),
-        Binding("m", "more", "More jobs"),
+        Binding("o", "open_link", "Open"),
+        Binding("m", "more", "More"),
         Binding("r", "new_resume", "New resume"),
         Binding("l", "sign_in", "Sign in"),
         Binding("q", "quit", "Quit"),
+        # Textual's own Ctrl+C only says "press ctrl+q", and an input under it copies: at any prompt Ctrl+C now leaves.
+        Binding("ctrl+c", "quit", show=False, priority=True),
     ]
 
     def __init__(self, workspace: Path, resume: Path | None = None) -> None:
@@ -232,7 +237,8 @@ class AIHawk(App[None]):
     def compose(self) -> ComposeResult:
         yield Static("AIHawk", id="heading", markup=False)
         yield DataTable(id="jobs", cursor_type="row", zebra_stripes=True)
-        yield RichLog(id="log", wrap=True, markup=False)
+        # min_width=1: RichLog wraps at 78 columns by default, under its own scrollbar, so the last words were hidden.
+        yield RichLog(id="log", wrap=True, min_width=1, markup=False)
         yield Footer()
 
     def on_mount(self) -> None:
@@ -251,7 +257,19 @@ class AIHawk(App[None]):
     def say(self, line: str) -> None:
         self.query_one(RichLog).write(line)
 
+    def failed(self, error: Exception) -> None:
+        """Says what went wrong, in plain words. A key OrcaRouter refused is forgotten when it came from the file, and asked for again."""
+        if not refused(error):
+            self.say(explain(error))
+            return
+        self.say(self.session.refuse_key())
+        if self.session.needs_key():
+            self.start()
+
     def show_heading(self, progress: str = "") -> None:
+        # A flow that ends while the app quits finds its screen gone: there is no heading left to write to.
+        if not self.is_running:
+            return
         config = self.session.config
         wanted = config.filters.titles() or "no resume yet"
         place = ", ".join(config.filters.locations[:3])
@@ -326,7 +344,7 @@ class AIHawk(App[None]):
         except (ConfigError, DatabaseError) as error:
             self.say(str(error))
         except Exception as error:  # noqa: BLE001  The screen stays up and says what went wrong, instead of a traceback over it.
-            self.say(f"Something failed: {error}")
+            self.failed(error)
         finally:
             self.show_heading()
 
@@ -384,6 +402,8 @@ class AIHawk(App[None]):
     async def more_jobs(self) -> None:
         try:
             await self.judge()
+        except Exception as error:  # noqa: BLE001  Said on the screen, as in start.
+            self.failed(error)
         finally:
             self.show_heading()
 
@@ -456,6 +476,8 @@ class AIHawk(App[None]):
         self.show_heading("applying")
         try:
             await self.session.send(ready, self.answer, self.say, self.refresh_jobs)
+        except Exception as error:  # noqa: BLE001  Said on the screen, as in start; the batch stops where it failed.
+            self.failed(error)
         finally:
             self.busy = False
             self.selected -= {item.job.id for item in chosen}

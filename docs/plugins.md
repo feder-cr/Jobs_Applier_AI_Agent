@@ -21,7 +21,7 @@ AIHawk reads the plugins when it starts, so restart it after you change one.
 | `when` | Only `always`. The body is then added to every form's instructions, beside the site's own plugin. Such a plugin has no `hosts` and does not make a site count as one AIHawk can apply to. |
 | `reaches` | Only in a `when: always` plugin: the sites the model may visit with it, such as `[mail.google.com]`. A site plugin's `reaches` is read and ignored. |
 
-A file that does not parse (no front matter, `hosts` missing, a `when` other than `always`, empty instructions) stops AIHawk at start with a message that names the plugin. Save the file as UTF-8 without a byte-order mark: a file that starts with one is refused with "it must start with a front matter", because the first line must be `---`.
+A file that does not parse (no front matter, `hosts` missing, a `when` other than `always`, empty instructions) stops AIHawk at start with a message that names the plugin. Save the file as UTF-8. A byte-order mark at its start, as some Windows editors write, is fine: AIHawk skips it.
 
 ## The order of sections
 

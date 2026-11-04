@@ -9,7 +9,10 @@ readme = "README.md"
 keywords = ["jobs", "job-search", "resume", "job-applications", "browser-automation"]
 classifiers = [
     "Environment :: Console",
-    "Programming Language :: Python :: 3",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]

@@ -13,17 +13,18 @@ permissions:
 
 jobs:
   unit:
-    name: lint and unit tests (${{ matrix.os }})
+    name: lint and unit tests (${{ matrix.os }}, Python ${{ matrix.python }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
       - run: pip install -e ".[dev]"
       - run: ruff check .
       - run: pytest -m "not browser"
