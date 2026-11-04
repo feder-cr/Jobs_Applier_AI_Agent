@@ -20,6 +20,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -175,8 +176,17 @@ async def _element(session: Session, found: str) -> dict[str, Any] | None:
     return element if isinstance(element, dict) else None
 
 
-async def refusal(session: Session, name: str, arguments: dict[str, Any], form_touched: bool) -> str | None:
+def _host(url: str) -> str:
+    return (urlsplit(url).hostname or "").lower()
+
+
+async def refusal(session: Session, name: str, arguments: dict[str, Any], form_touched: bool, hosts: frozenset[str] = frozenset()) -> str | None:
     """Why the model may not make this call; None when it may."""
+    if name == "browser_navigate":
+        # A link can send a form (a GET that confirms), so the model goes only where the form and its mailbox are.
+        if _host(str(arguments.get("url", ""))) in hosts:
+            return None
+        return "Refused: that address is not the form's site or a mailbox a plugin uses. Go back to the form's own address."
     if name == "browser_press_key":
         # Every value, not the one argument: a name the server changes tomorrow must not let Enter through.
         key = " ".join(str(value) for value in arguments.values()).lower()
@@ -240,11 +250,42 @@ def _images(result: Any) -> list[dict[str, Any]]:
     ]
 
 
-async def fill_form(session: Session, tools: list[dict[str, Any]], client: AsyncOpenAI, model: str, brief: str, guidance: str = "", page_rules: str = "") -> dict[str, Any]:
+class LeftForm(Exception):
+    """A call of the model's moved the page to another site, or could not be checked: it may have sent the form."""
+
+
+# The calls that can change the page. A navigation is the model's own choice, so it is not checked after: `refusal` judges it.
+ACTING = {"browser_click", "browser_click_at", "browser_type", "browser_select_option", "browser_upload_files", "browser_press_key"}
+PAGE = "({url: location.href, text: document.body ? document.body.innerText : ''})"
+
+
+async def _page(session: Session) -> dict[str, str] | None:
+    """The page's address and text, as the server reads them; None when they cannot be read."""
+    result = await session.call_tool("browser_evaluate", {"expression": PAGE})
+    try:
+        page = None if result.isError else json.loads(tool_text(result))
+    except ValueError:
+        return None
+    return page if isinstance(page, dict) else None
+
+
+async def _after(session: Session, name: str, form_host: str) -> None:
+    """Stops the form when a call moved the page to another site. A same-site send is not detected: a multi-step form
+    advances by address too, so the address alone cannot tell the two apart."""
+    after = await _page(session)
+    if after is None:
+        raise LeftForm(f"After {name} the page could not be read, so it is not known whether the application went out. It is not retried.")
+    if _host(after.get("url", "")) != form_host:
+        raise LeftForm(f"After {name} the page went to {after.get('url')}, not the form. It is not known whether the application went out. It is not retried.")
+
+
+async def fill_form(session: Session, tools: list[dict[str, Any]], client: AsyncOpenAI, model: str, brief: str, guidance: str = "", page_rules: str = "", form_url: str = "", reaches: frozenset[str] = frozenset()) -> dict[str, Any]:
     """The model works on the open page until it calls finish_form; returns what it reported."""
     messages: list[Any] = [{"role": "system", "content": instructions(guidance, page_rules)}, {"role": "user", "content": brief}]
     form_touched = False
     allowed = MODEL_TOOLS | {tool["function"]["name"] for tool in tools}
+    form_host = _host(form_url)
+    hosts = frozenset({form_host, *reaches})
     for _ in range(MAX_STEPS):
         response = await client.chat.completions.create(model=model, messages=messages, tools=[*tools, FINISH_TOOL])
         message = response.choices[0].message
@@ -261,11 +302,14 @@ async def fill_form(session: Session, tools: list[dict[str, Any]], client: Async
                 continue
             if call.function.name == "finish_form":
                 return arguments
-            why = await refusal(session, call.function.name, arguments, form_touched) if call.function.name in allowed else "Refused: no such tool."
+            why = await refusal(session, call.function.name, arguments, form_touched, hosts) if call.function.name in allowed else "Refused: no such tool."
             if why:
                 content = why
             else:
+                before = await _page(session) if call.function.name in ACTING else None
                 result = await session.call_tool(call.function.name, arguments)
+                if before and _host(before.get("url", "")) == form_host:
+                    await _after(session, call.function.name, form_host)
                 seen += _images(result)
                 content = tool_text(result) or "Done: what it shows comes next."
                 if call.function.name in {"browser_type", "browser_select_option", "browser_upload_files"} and not result.isError:
@@ -299,12 +343,15 @@ async def submit_and_verify(session: Session, client: AsyncOpenAI, model: str, s
     return Outcome("unconfirmed", f"{summary}\nClicked, not confirmed by the page: {verdict['evidence']}")
 
 
-async def run_on_page(session: Session, tools: list[dict[str, Any]], client: AsyncOpenAI, model: str, job: Job, cv_text: str, answers: str, cv_file: Path, confirm: Confirm | None, guidance: str = "", page_rules: str = "") -> Outcome:
+async def run_on_page(session: Session, tools: list[dict[str, Any]], client: AsyncOpenAI, model: str, job: Job, cv_text: str, answers: str, cv_file: Path, confirm: Confirm | None, guidance: str = "", page_rules: str = "", reaches: frozenset[str] = frozenset()) -> Outcome:
     brief = (
         f"The form: {job.apply_url}\nThe job: {job.title} at {job.company}\nThe CV file to upload: {cv_file}\n\n"
         f"The CV:\n{cv_text}\n\nThe answers:\n{answers}"
     )
-    report = await fill_form(session, tools, client, model, brief, guidance, page_rules)
+    try:
+        report = await fill_form(session, tools, client, model, brief, guidance, page_rules, job.apply_url, reaches)
+    except LeftForm as error:
+        return Outcome("unconfirmed", str(error))
     status, summary = report.get("status"), str(report.get("summary", ""))
     if status == "needs_input":
         return Outcome("needs_input", summary, [str(question) for question in report.get("questions") or []])
@@ -359,7 +406,7 @@ async def _server(upload_dir: Path, home: Path) -> AsyncIterator[tuple[ClientSes
             yield session, started.instructions or ""
 
 
-async def apply_to_job(client: AsyncOpenAI, model: str, job: Job, cv_text: str, answers: str, cv_file: Path, data_dir: Path, profile: Path, confirm: Confirm | None, guidance: str = "") -> Outcome:
+async def apply_to_job(client: AsyncOpenAI, model: str, job: Job, cv_text: str, answers: str, cv_file: Path, data_dir: Path, profile: Path, confirm: Confirm | None, guidance: str = "", reaches: frozenset[str] = frozenset()) -> Outcome:
     """Open the browser on the person's profile, fill the job's form and send it as `confirm` decides; None sends without asking."""
     async with _server(cv_file.parent, data_dir / "browser") as (session, page_rules):
         listed = await session.list_tools()
@@ -373,7 +420,7 @@ async def apply_to_job(client: AsyncOpenAI, model: str, job: Job, cv_text: str, 
             navigated = await session.call_tool("browser_navigate", {"url": job.apply_url})
             if navigated.isError:
                 return Outcome("blocked", f"the form did not load: {tool_text(navigated)}")
-            return await run_on_page(session, tools, client, model, job, cv_text, answers, cv_file, confirm, guidance, page_rules)
+            return await run_on_page(session, tools, client, model, job, cv_text, answers, cv_file, confirm, guidance, page_rules, reaches)
         finally:
             await session.call_tool("browser_close", {})
 

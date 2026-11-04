@@ -160,9 +160,11 @@ class Session:
         for _ in range(MAX_ROUNDS):
             answers = self.config.answers.read_text(encoding="utf-8") if self.config.answers.is_file() else ""
             log(f"filling the form on {plugin.name}")
-            guidance = "\n\n".join([plugin.instructions, *(extra.instructions for extra in always_plugins(self.plugins))])
+            extras = always_plugins(self.plugins)
+            guidance = "\n\n".join([plugin.instructions, *(extra.instructions for extra in extras)])
+            reaches = frozenset(host for extra in extras for host in extra.reaches)
             try:
-                outcome = await apply_to_job(self.client, self.config.model, job, cv, answers, cv_file, self.config.data_dir, self.config.browser_profile, confirm, guidance)
+                outcome = await apply_to_job(self.client, self.config.model, job, cv, answers, cv_file, self.config.data_dir, self.config.browser_profile, confirm, guidance, reaches)
             except Exception as error:  # noqa: BLE001  One job's failure is reported and recorded; the next job still runs.
                 outcome = Outcome("failed", str(error) or type(error).__name__)
             if outcome.status != "needs_input":

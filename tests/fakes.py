@@ -38,16 +38,21 @@ class ScriptedModel:
 class ScriptedBrowser:
     """call_tool records every call; browser_evaluate says what the page's element is."""
 
-    def __init__(self, elements: dict[str, dict[str, Any]] | None = None) -> None:
+    def __init__(self, elements: dict[str, dict[str, Any]] | None = None, page: dict[str, str] | None = None) -> None:
         self.elements = elements or {}
+        self.page = page or {"url": "", "text": ""}  # the page's address and text; navigation moves the address
         self.calls: list[tuple[str, dict[str, Any]]] = []
 
     async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> SimpleNamespace:
         arguments = arguments or {}
         self.calls.append((name, arguments))
         text = "ok"
-        if name == "browser_evaluate":
+        if name == "browser_evaluate" and "location.href" in arguments["expression"]:
+            text = json.dumps(self.page)
+        elif name == "browser_evaluate":
             text = json.dumps(next((value for key, value in self.elements.items() if json.dumps(key) in arguments["expression"]), None))
+        elif name == "browser_navigate":
+            self.page = {"url": arguments["url"], "text": self.page["text"]}
         elif name == "browser_read_text":
             text = "Thank you, your application was received"
         return SimpleNamespace(isError=False, content=[SimpleNamespace(text=text)])

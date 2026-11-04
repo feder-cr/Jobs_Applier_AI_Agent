@@ -377,3 +377,90 @@ def test_sign_in_closes_the_browser_even_when_the_wait_fails(tmp_path: Path, mon
     with pytest.raises(RuntimeError, match="window was closed"):
         asyncio.run(sign_in(tmp_path / "browser-profile", tmp_path, broken))
     assert server.calls[-1] == ("browser_close", {})
+
+
+FORM_PAGE = {"url": "https://u/apply", "text": "Apply here"}
+SELECT = [tool_call("browser_select_option", selector="#pick", value="a")]
+
+
+class Moves(ScriptedBrowser):
+    """A form whose select, when changed, puts the page where the test says: a change event that leaves, or confirms."""
+
+    def __init__(self, after: dict[str, str] | None = None, reads_fail: bool = False) -> None:
+        super().__init__({"#send": SUBMIT}, page=FORM_PAGE)
+        self.after = after
+        self.reads_fail = reads_fail
+        self.changed = False
+
+    async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
+        if name == "browser_select_option":
+            self.changed = True
+            self.page = self.after or self.page
+        if name == "browser_evaluate" and self.reads_fail and self.changed:
+            return SimpleNamespace(isError=True, content=[SimpleNamespace(text="the page is gone")])
+        return await super().call_tool(name, arguments)
+
+
+def run_with(model: ScriptedModel, browser: ScriptedBrowser, confirm: Any = None, reaches: frozenset[str] = frozenset()) -> Outcome:
+    return asyncio.run(run_on_page(browser, [], model, "m", JOB, "cv", "answers", Path("cv.pdf"), confirm, reaches=reaches))  # type: ignore[arg-type]
+
+
+def test_the_model_may_go_to_the_forms_site_and_to_a_mailbox_a_plugin_reaches_and_nowhere_else() -> None:
+    browser = ScriptedBrowser()
+    mailbox = frozenset({"u", "mail.google.com"})
+    assert asyncio.run(refusal(browser, "browser_navigate", {"url": "https://u/other"}, False, mailbox)) is None
+    assert asyncio.run(refusal(browser, "browser_navigate", {"url": "https://mail.google.com/mail/u/0/"}, False, mailbox)) is None
+    assert asyncio.run(refusal(browser, "browser_navigate", {"url": "https://evil.example/confirm?action=submit"}, False, mailbox))
+
+
+def test_a_navigation_by_the_model_to_another_site_is_refused_and_never_reaches_the_browser() -> None:
+    browser = ScriptedBrowser({"#send": SUBMIT}, page=FORM_PAGE)
+    model = ScriptedModel([tool_call("browser_navigate", url="https://evil.example/")], ready(), VERIFIED)
+    assert run_with(model, browser).status == "submitted"
+    assert [args["url"] for name, args in browser.calls if name == "browser_navigate"] == []
+
+
+def test_a_change_event_that_moves_the_page_off_the_form_stops_as_unconfirmed_and_nothing_is_retried() -> None:
+    browser = Moves(after={"url": "https://thanks.example/ok", "text": "Thanks"})
+    model = ScriptedModel(SELECT, ready(), VERIFIED)
+    outcome = run_with(model, browser)
+    assert outcome.status == "unconfirmed"
+    assert "thanks.example" in outcome.summary
+    assert browser.clicks() == []
+    assert len(model.requests) == 1
+
+
+def test_a_change_that_stays_on_the_site_goes_on_to_the_form_so_a_same_site_send_is_not_detected() -> None:
+    # The address alone cannot tell a multi-step form from a send that stays on the site: this is the gap, written down.
+    browser = Moves(after={"url": "https://u/apply", "text": "Thank you, your application was received"})
+    model = ScriptedModel(SELECT, ready(), VERIFIED)
+    assert run_with(model, browser).status == "submitted"
+
+
+def test_a_page_that_cannot_be_read_after_a_change_is_unconfirmed_not_failed() -> None:
+    browser = Moves(after={"url": "https://u/apply", "text": "x"}, reads_fail=True)
+    outcome = run_with(ScriptedModel(SELECT), browser)
+    assert outcome.status == "unconfirmed"
+    assert browser.clicks() == []
+
+
+def test_a_mail_trip_to_the_mailbox_and_back_does_not_stop_the_form() -> None:
+    class Mail(ScriptedBrowser):
+        async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
+            if name == "browser_click":
+                self.page = {"url": "https://mail.google.com/mail/u/0/#inbox/1", "text": "Your code is 123456"}
+            return await super().call_tool(name, arguments)
+
+    steps = [
+        [tool_call("browser_navigate", url="https://mail.google.com/mail/u/0/")],
+        [tool_call("browser_click", selector="#msg")],
+        [tool_call("browser_navigate", url="https://u/apply")],
+        ready(),
+        VERIFIED,
+    ]
+    browser = Mail({"#send": SUBMIT, "#msg": {"tag": "a", "type": "", "in_form": False, "text": "Verification code"}}, page=FORM_PAGE)
+    model = ScriptedModel(*steps)
+    outcome = run_with(model, browser, reaches=frozenset({"mail.google.com"}))
+    assert outcome.status == "submitted"
+    # No verdict was asked for the mail click: the five requests are the four steps and the verdict on the submit.
+    assert len(model.requests) == 5
