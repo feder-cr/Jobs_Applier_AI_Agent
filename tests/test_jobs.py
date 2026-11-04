@@ -45,6 +45,24 @@ def test_search_keeps_what_the_filters_say_and_leaves_out_what_is_old(tmp_path: 
     assert [job.title for job in jobs] == titles
 
 
+def test_filters_match_whole_words_and_keep_symbols_literal(tmp_path: Path) -> None:
+    connection = duckdb.connect()
+    connection.execute("CREATE TABLE t (key VARCHAR, url VARCHAR, title VARCHAR, company VARCHAR, location VARCHAR, description VARCHAR, posted_at VARCHAR)")
+    connection.executemany(
+        "INSERT INTO t VALUES (?, 'https://a.example/', ?, 'c', ?, 'd', NULL)",
+        [("1", "Java Developer", "Roma, Italy"), ("2", "JavaScript Developer", "Roma"), ("3", "Java Lead", "Bucharest, Romania"), ("4", "C++ Developer", "Roma")],
+    )
+    connection.execute(f"COPY t TO '{(tmp_path / 'jobs_0.parquet').as_posix()}' (FORMAT parquet)")
+    manifest = {"rows_out": 4, "built_at": "x", "files": [{"name": "jobs_0.parquet"}]}
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    keys = lambda filters: {job.id for job in search(str(path), filters, 60)[1]}  # noqa: E731
+    assert keys(Filters(include=("java",))) == {"1", "3"}
+    assert keys(Filters(include=("java",), locations=("roma",))) == {"1"}
+    assert keys(Filters(include=("c++",))) == {"4"}
+    assert keys(Filters(include=("developer",), exclude=("JAVA",))) == {"2", "4"}
+
+
 def test_names_come_without_html_entities(tmp_path: Path) -> None:
     _, jobs = search(database(tmp_path), Filters(include=("accountant",)), max_age_days=60)
     assert [(job.title, job.company) for job in jobs] == [("Accountant & Clerk", "B&A")]

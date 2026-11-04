@@ -89,8 +89,11 @@ def file_locations(manifest: dict[str, Any], location: str) -> list[str]:
     return [f"{base}/{item['name']}" for item in manifest["files"]]
 
 
-def _any_like(column: str, words: tuple[str, ...]) -> tuple[str, list[str]]:
-    return "(" + " OR ".join(f"lower({column}) LIKE ?" for _ in words) + ")", [f"%{word.lower()}%" for word in words]
+def _any_word(column: str, words: tuple[str, ...]) -> tuple[str, list[str]]:
+    """Whole words, in any case: `java` is not `javascript`, and `roma` is not `Romania`."""
+    # Not \b: it finds no end after a symbol, as in `c++`, and takes accented letters for edges.
+    pattern = "(?i)(?:^|[^\\pL\\pN])(?:" + "|".join(re.escape(word) for word in words) + ")(?:$|[^\\pL\\pN])"
+    return f"regexp_matches({column}, ?)", [pattern]
 
 
 def search(location: str, filters: Filters, max_age_days: int) -> tuple[dict[str, Any], list[Job]]:
@@ -101,15 +104,15 @@ def search(location: str, filters: Filters, max_age_days: int) -> tuple[dict[str
     files = file_locations(manifest, location)
 
     clauses, parameters = [], []
-    clause, words = _any_like("title", filters.include)
+    clause, words = _any_word("title", filters.include)
     clauses.append(clause)
     parameters += words
     if filters.exclude:
-        clause, words = _any_like("title", filters.exclude)
+        clause, words = _any_word("title", filters.exclude)
         clauses.append(f"NOT {clause}")
         parameters += words
     if filters.locations:
-        clause, words = _any_like("coalesce(location, '')", filters.locations)
+        clause, words = _any_word("coalesce(location, '')", filters.locations)
         clauses.append(clause)
         parameters += words
     # A posting with no date is kept: many sources have none.
