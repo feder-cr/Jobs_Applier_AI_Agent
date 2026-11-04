@@ -100,6 +100,9 @@ You fill in one job application form in a browser, for the candidate, using only
 - You cannot send the application, and clicks on what would send it are refused. When every required field is filled,
   call finish_form with status ready and the CSS selector of the submit control. If that control is disabled, the form
   is not complete: find what it still wants, and if you cannot, call finish_form with status blocked and say so.
+- A click by selector is checked before it is made, and the check reads only a plain CSS selector of an element in the
+  page. A selector with `>>` (a control inside a shadow root, as browser_snapshot gives some) or `:has-text`/`text=` is
+  refused: click that control with browser_click_at on its centre instead, which is checked at the point it lands.
 - Run script in the page (browser_evaluate) only after selectors, coordinates and a screenshot have failed, and never to
   send the application.
 - A captcha shown as a box to tick, such as Turnstile or reCAPTCHA, is clicked once, as a person would: take a screenshot,
@@ -206,7 +209,32 @@ def tool_text(result: Any) -> str:
 
 
 def _by_selector(selector: str) -> str:
-    return f"document.querySelector({json.dumps(selector)})"
+    """The element a plain CSS selector picks, read the way the click reads it. A selector that also matches inside an
+    open shadow root is not read (None): the click may land in the shadow root, and this check could not see that element.
+    Playwright's own syntax (`>>`, `:has-text`) is a syntax error here, so it reads as nothing too."""
+    return (
+        "(() => { const sel = " + json.dumps(selector) + "; const light = document.querySelectorAll(sel); let shadow = 0;"
+        " const walk = root => { for (const e of root.querySelectorAll('*')) if (e.shadowRoot) {"
+        " shadow += e.shadowRoot.querySelectorAll(sel).length; walk(e.shadowRoot); } };"
+        " walk(document); return shadow ? null : (light[0] || null); })()"
+    )
+
+
+# The element a click at a point lands on: the innermost one, inside any open shadow roots, as the mouse reaches it.
+def _at(x: float, y: float) -> str:
+    point = f"{x}, {y}"
+    return (
+        "(() => { let el = document.elementFromPoint(" + point + "); while (el && el.shadowRoot) {"
+        " const inner = el.shadowRoot.elementFromPoint(" + point + "); if (!inner || inner === el) break; el = inner; } return el; })()"
+    )
+# The element that has the focus, inside any open shadow roots: the one a key press reaches.
+FOCUSED_JS = "(() => { let el = document.activeElement; while (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement; return el; })()"
+NOT_READABLE = (
+    "Refused: the check cannot read this selector, so it cannot tell what a click would hit. A selector with `>>` or "
+    "Playwright text syntax (`:has-text`, `text=`), or one that is also inside a shadow root, is not read. Click the control "
+    "by its centre instead: take a screenshot, then browser_click_at on that point."
+)
+NO_ELEMENT = "Refused: no element is at that point. Take a screenshot and aim browser_click_at at the centre of the control."
 
 
 async def _element(session: Session, found: str) -> dict[str, Any] | None:
@@ -235,17 +263,17 @@ async def refusal(session: Session, name: str, arguments: dict[str, Any], form_t
         key = " ".join(str(value) for value in arguments.values())
         if "enter" in key.lower() or "\n" in key or "return" in key.lower():
             # Only the bare Enter, and only in a field that asks for it: Control+Enter and the rest stay refused.
-            if key == "Enter" and _asks_for_enter(await _element(session, "document.activeElement") or {}):
+            if key == "Enter" and _asks_for_enter(await _element(session, FOCUSED_JS) or {}):
                 return None
             return "Refused: Enter can send the form. Finish with finish_form instead."
         if key.strip() and "space" not in key.lower():
             return None
         # Space presses the control that has the focus.
-        found = "document.activeElement"
+        found = FOCUSED_JS
     elif name == "browser_click":
         found = _by_selector(str(arguments.get("selector", "")))
     elif name == "browser_click_at":
-        found = f"document.elementFromPoint({float(arguments.get('x', 0))}, {float(arguments.get('y', 0))})"
+        found = _at(float(arguments.get("x", 0)), float(arguments.get("y", 0)))
     elif name == "browser_type" and "\n" in str(arguments.get("text", "")):
         element = await _element(session, _by_selector(str(arguments.get("selector", ""))))
         # A new line is the Enter key: in a text area it is a line, and in anything else it can send the form.
@@ -254,7 +282,7 @@ async def refusal(session: Session, name: str, arguments: dict[str, Any], form_t
         return None
     element = await _element(session, found)
     if element is None:
-        return "Refused: that selector matches nothing that can be checked. Use a CSS selector of an element on the page."
+        return NO_ELEMENT if name == "browser_click_at" else NOT_READABLE
     if sends_form(element, form_touched):
         return "Refused: that would send the application, which is not yours to do. If the form is complete, call finish_form with status ready and this selector."
     return None
@@ -328,13 +356,31 @@ async def _after(session: Session, name: str, form_host: str) -> None:
         raise LeftForm(f"After {name} the page went to {after.get('url')}, not the form. It is not known whether the application went out. It is not retried.")
 
 
+async def _stopped(client: AsyncOpenAI, model: str, messages: list[Any], reason: str, fallback: str) -> dict[str, Any]:
+    """The form is given up, and the model is asked once, with only finish_form, what is filled and what did not stick.
+    It never comes back `ready`: a stopped form is not sent. What it could not say is `fallback`."""
+    messages.append({"role": "user", "content": f"Stop here: {reason} Call finish_form now, and say in summary what you wrote in each field and what did not stick."})
+    report: dict[str, Any] = {}
+    with suppress(Exception):
+        response = await client.chat.completions.create(
+            model=model, messages=messages, tools=[FINISH_TOOL], tool_choice={"type": "function", "function": {"name": "finish_form"}}
+        )
+        report = json.loads(response.choices[0].message.tool_calls[0].function.arguments or "{}")
+    status = report.get("status") if report.get("status") in {"needs_input", "blocked"} else "blocked"
+    summary = str(report.get("summary") or fallback)
+    return {"status": status, "summary": f"Stopped: {reason}\n{summary}", "questions": report.get("questions") or []}
+
+
 async def fill_form(session: Session, tools: list[dict[str, Any]], client: AsyncOpenAI, model: str, brief: str, guidance: str = "", page_rules: str = "", form_url: str = "", reaches: frozenset[str] = frozenset()) -> dict[str, Any]:
-    """The model works on the open page until it calls finish_form; returns what it reported."""
+    """The model works on the open page until it calls finish_form; returns what it reported. A form it cannot finish is
+    stopped with a report of what it did, rather than left to run on."""
     messages: list[Any] = [{"role": "system", "content": instructions(guidance, page_rules)}, {"role": "user", "content": brief}]
     form_touched = False
     allowed = MODEL_TOOLS | {tool["function"]["name"] for tool in tools}
     form_host = _host(form_url)
     hosts = frozenset({form_host, *reaches})
+    refused_times: dict[str, int] = {}
+    last = ""
     for _ in range(MAX_STEPS):
         response = await client.chat.completions.create(model=model, messages=messages, tools=[*tools, FINISH_TOOL])
         message = response.choices[0].message
@@ -343,7 +389,12 @@ async def fill_form(session: Session, tools: list[dict[str, Any]], client: Async
             messages.append({"role": "user", "content": "Use the tools, and end with finish_form."})
             continue
         seen: list[dict[str, Any]] = []
+        stopped = ""
         for call in message.tool_calls:
+            if stopped:
+                # Every call of this message gets its answer, so the record stays whole; none of them runs.
+                messages.append({"role": "tool", "tool_call_id": call.id, "content": "Not run: the form is stopped."})
+                continue
             try:
                 arguments = json.loads(call.function.arguments or "{}")
             except ValueError:
@@ -352,8 +403,18 @@ async def fill_form(session: Session, tools: list[dict[str, Any]], client: Async
             if call.function.name == "finish_form":
                 return arguments
             why = await refusal(session, call.function.name, arguments, form_touched, hosts) if call.function.name in allowed else "Refused: no such tool."
+            last = f"{call.function.name} {call.function.arguments}"
             if why:
-                content = why
+                # The same refused call again: told once to change approach, and a third time the form is stopped.
+                key = f"{call.function.name} {json.dumps(arguments, sort_keys=True)}"
+                refused_times[key] = refused_times.get(key, 0) + 1
+                if refused_times[key] >= 3:
+                    stopped = f"the same call was refused three times: {last}."
+                    content = f"{why}\nThe form is stopped now."
+                else:
+                    content = why if refused_times[key] == 1 else f"{why}\nYou have made this call twice and it is refused again. Change approach now, or call finish_form with what is missing."
+                messages.append({"role": "tool", "tool_call_id": call.id, "content": content})
+                continue
             else:
                 before = await _page(session) if call.function.name in ACTING else None
                 result = await session.call_tool(call.function.name, arguments)
@@ -364,9 +425,11 @@ async def fill_form(session: Session, tools: list[dict[str, Any]], client: Async
                 if call.function.name in {"browser_type", "browser_select_option", "browser_upload_files"} and not result.isError:
                     form_touched = True
             messages.append({"role": "tool", "tool_call_id": call.id, "content": content})
+        if stopped:
+            return await _stopped(client, model, messages, stopped, f"Stopped after a refused call. Last call: {last}")
         if seen:
             messages.append({"role": "user", "content": seen})
-    raise RuntimeError(f"the model did not finish the form in {MAX_STEPS} steps")
+    return await _stopped(client, model, messages, f"the form was not finished in {MAX_STEPS} steps.", f"The form was not finished in {MAX_STEPS} steps. Last call: {last}")
 
 
 async def _where(session: Session, shot: Path) -> tuple[str, str]:

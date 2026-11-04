@@ -57,6 +57,16 @@ SAME_SITE_SELECT = b"""<!doctype html><title>Pick</title>
 <option value="">Choose</option><option value="a">A</option></select>"""
 
 
+# The send control sits inside an open shadow root of a custom element, as SmartRecruiters' form does. The host is the only
+# thing a document-level look at that point finds, so the check must read into the root to see what the mouse reaches.
+SHADOW_FORM = b"""<!doctype html><title>Shadow</title>
+<x-field id="host" style="position:absolute;left:100px;top:100px;display:block;width:200px;height:60px"></x-field>
+<script>
+document.getElementById('host').attachShadow({mode: 'open'}).innerHTML =
+  '<form method="post" action="/"><button id="send" type="submit" style="width:200px;height:60px;margin:0">Submit application</button></form>';
+</script>"""
+
+
 class Elsewhere(BaseHTTPRequestHandler):
     """Another host of the loopback: a form that leaves the site lands here."""
 
@@ -93,6 +103,8 @@ class Site(BaseHTTPRequestHandler):
             self._page(SELECT_FORM % Site.leave_to.encode())
         elif self.path == "/skills":
             self._page(TAG_FORM)
+        elif self.path == "/shadow":
+            self._page(SHADOW_FORM)
         else:
             self._page(FORM)
 
@@ -145,6 +157,20 @@ def test_the_form_is_sent_once_with_the_name_and_the_cv_and_what_the_page_said_i
     assert b"harmless-click-reached-the-page" in Site.posts[0]
     assert outcome.proof.verdict == "submitted" and "Thank you" in outcome.proof.text
     assert Path(outcome.proof.screenshot).read_bytes().startswith(b"\x89PNG")
+
+
+def test_a_send_control_inside_a_shadow_root_is_refused_by_the_point_it_is_at_and_by_its_selector(site: str, tmp_path: Path) -> None:
+    model = ScriptedModel(
+        [tool_call("browser_click_at", x=200, y=130)],  # the centre of the send button, inside the shadow root
+        [tool_call("browser_click", selector="#send")],  # the same button by a selector the check cannot read
+        [tool_call("finish_form", status="needs_input", summary="nothing sent", submit_selector="", questions=["Which?"])],
+    )
+    job = Job("t:2", "Acme", "Engineer", "Rome", site, site + "shadow", "d")
+    outcome = asyncio.run(apply_to_job(model, "m", job, "cv", "answers", tmp_path / "cv.pdf", tmp_path, tmp_path / "browser-profile"))  # type: ignore[arg-type]
+    assert outcome.status == "needs_input", outcome.summary
+    assert Site.posts == []
+    refused = [m["content"] for m in model.requests[1]["messages"] if m.get("role") == "tool"]
+    assert "would send" in refused[0] and "cannot read" in refused[1]
 
 
 def test_enter_in_a_tag_field_adds_the_tag_and_the_form_is_not_posted(site: str, tmp_path: Path) -> None:

@@ -367,10 +367,32 @@ def test_the_servers_way_of_driving_a_page_comes_after_the_rules_and_before_the_
     assert text.index(SYSTEM) < text.index("Try selectors first.") < text.index("About a site.")
 
 
-def test_a_model_that_never_finishes_fails() -> None:
-    model = ScriptedModel(*["thinking"] * 80)
-    with pytest.raises(RuntimeError, match="did not finish"):
-        asyncio.run(fill_form(ScriptedBrowser(), [], model, "m", "brief"))  # type: ignore[arg-type]
+def test_a_model_that_never_finishes_is_stopped_with_what_it_did_and_nothing_is_sent() -> None:
+    told = tool_call("finish_form", status="blocked", summary="typed Test into First name", submit_selector="", questions=[])
+    model = ScriptedModel(*["thinking"] * 80, [told])
+    report = asyncio.run(fill_form(ScriptedBrowser(), [], model, "m", "brief"))  # type: ignore[arg-type]
+    assert report["status"] == "blocked"
+    assert report["summary"].startswith("Stopped: the form was not finished in 80 steps.") and "typed Test into First name" in report["summary"]
+    assert model.requests[-1]["tool_choice"]["function"]["name"] == "finish_form"
+
+
+def test_the_same_refused_call_three_times_stops_the_form_with_its_questions_and_is_never_run() -> None:
+    click = [tool_call("browser_click", selector="#a >> #b")]
+    told = tool_call("finish_form", status="needs_input", summary="typed Test", submit_selector="", questions=["Which office?"])
+    model = ScriptedModel(click, click, click, [told])
+    browser = ScriptedBrowser()
+    report = asyncio.run(fill_form(browser, [], model, "m", "brief"))  # type: ignore[arg-type]
+    assert (report["status"], report["questions"]) == ("needs_input", ["Which office?"])
+    assert report["summary"].startswith("Stopped: the same call was refused three times")
+    assert not [name for name, _ in browser.calls if name == "browser_click"]
+    # The model's list is kept whole, so the second refusal is the second tool message, and only that one is told once.
+    answers = [m["content"] for m in model.requests[-1]["messages"] if m.get("role") == "tool"]
+    assert "twice" in answers[1] and "twice" not in answers[0] and "stopped" in answers[2]
+
+
+def test_a_refused_selector_is_told_to_be_clicked_by_its_centre_instead() -> None:
+    message = asyncio.run(refusal(ScriptedBrowser(), "browser_click", {"selector": "#a >> #b"}, False))
+    assert message and "browser_click_at" in message and "shadow" in message
 
 
 def test_the_plugins_text_reaches_the_verifying_model_as_its_rules_while_the_page_stays_text_to_check(tmp_path: Path) -> None:
