@@ -16,3 +16,5 @@ Questions a company adds come under "Questions" (Vragen). Yes and No questions a
 A required field has a * with the title "This field is required and can not be left empty".
 
 The submit control has `data-testid="submit-application-form-button"`, labelled "Send" or "Versturen".
+
+After sending: Recruitee usually sends an auto-confirmation email only for applications made on the careers site, not for applications by email or added by hand (documentation only). Its wording is written per job. No confirmation text was recorded, so read the page: if the form is still there, the application was not received.

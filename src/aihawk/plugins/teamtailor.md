@@ -10,3 +10,5 @@ Questions are inputs named `candidate[answers_attributes][N][...]`. A yes/no is 
 Phone: `input[name="candidate[phone]"]`, with the country set by the button "Change country" beside it. Location: `candidate[location][query]` is a combobox with "Start typing your address". Type and pick from the suggestions, then check it was taken.
 
 Upload the CV to `#candidate_resume_remote_url` ("Upload resume"). Do not click "Apply with LinkedIn". The cookie banner is open on the page: decline or leave it, do not treat it as a question. Sign-in is not needed. The send control is `input[name=commit]`, "Submit application": report ready only on the page before it.
+
+After sending: Teamtailor usually sends a "thank you for your application" email, for applications through the job's application email and through the career site (documentation only). No confirmation text was recorded, so read the page: if the form is still there, the application was not received.

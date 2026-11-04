@@ -14,3 +14,5 @@ The location field, `#location-input`, suggests places as you type: pick one of 
 Some forms show a captcha when sending: if the page asks for one, report the form as blocked.
 
 The submit control is `#btn-submit`, "Submit application".
+
+After sending: the "Success!" shown after the CV upload is the upload, not the send. No confirmation text was recorded after a real Lever send, so read the page after submitting. Lever usually emails a confirmation with the candidate's name, the company and the posting title (documentation only). If the form is still on the page, the application was not received.

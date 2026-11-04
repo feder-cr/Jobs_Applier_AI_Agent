@@ -11,3 +11,5 @@ The resume is attached with the link `#resumator-choose-upload` ("Attach resume"
 Questions the company adds are native selects `select[name^="resumator-questionnaire"]`, default "-- No answer --" (value `resumator_no_selection`), or yes/no selects with value "0". Choose the option by its visible label and read back the value. Free questions are text inputs or textareas with the same name prefix. EEO radio groups (`resumator-eeoc_*-value`) and selects (`resumator-eeo_*-value`) are optional; do not guess them.
 
 The send control is `#resumator-submit-resume` (`input[type=button]`, value "Submit Application"). It is not a real submit button: it is driven by script. The page carries a reCAPTCHA iframe; do not try to solve it.
+
+After sending: nothing is established for JazzHR. No saved page, real send or documentation shows what follows a submit. Read the page: if the form is still there, the application was not received.

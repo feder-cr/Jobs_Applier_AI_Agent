@@ -16,3 +16,5 @@ Questions a company adds have names like `section_..._question_0`, as radio butt
 Race, gender and veteran questions (`race_ethnicity`, `gender`, `eeoc.veteran_status`) have an "unspecified" choice: pick that. Their ids do not match their labels (`#race_hispanic` is labelled "asian"), so choose by the label, not the id.
 
 The send control is the button "Invia candidatura" (submit application), the form's last control.
+
+After sending: a submitted application can show as applied while the candidate's email is still unverified, because Breezy counts it as applied at submit (documentation only). Breezy may send a four-digit verification code by email. No confirmation text was recorded, so read the page: if the form is still there, the application was not received.

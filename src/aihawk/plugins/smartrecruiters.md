@@ -9,3 +9,5 @@ The form is in steps. Fill the fields of the step you see, go on with the footer
 Do not use "Apply With Indeed" or "Apply with LinkedIn": they fill the form from another account. Upload the CV with the file input inside `data-test="resume-upload"`. Leave the one inside `apply-with-resume-container` alone.
 
 Name and email: `#first-name-input`, `#last-name-input`, `#email-input`, `#confirm-email-input` where present. The phone is a combobox labelled "Country code" next to `input[type=tel]` labelled "Phone number". Ids such as `spl-form-element_5` are generated: find fields by their label.
+
+After sending: nothing is established for SmartRecruiters. No saved page, real send or documentation shows what follows a submit. Read the page: if the form is still there, the application was not received.

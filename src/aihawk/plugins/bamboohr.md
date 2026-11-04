@@ -15,3 +15,5 @@ Yes/no and multiple-choice questions are `role="radiogroup"` groups with `input[
 Leave `#nickname_hpcsaf` empty: it is a hidden trap labelled "Please leave this field blank".
 
 Resume: "Choose File" buttons: read the page to find the file input behind them. The send control is the `button[type=submit]` labelled "Submit Application".
+
+After sending: nothing is established for BambooHR. No saved page, real send or documentation shows what follows a submit. Read the page: if the form is still there, the application was not received.

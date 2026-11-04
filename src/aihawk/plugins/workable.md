@@ -20,3 +20,5 @@ Radio answers have generated ids. Select them by `input[name="CA_41201"]` with t
 A `gdpr` checkbox states that the person read the privacy notice and consents to the processing of their data. Tick it only if the answers file says they accept such notices; otherwise ask.
 
 The submit control is the button "Submit application" (in Portuguese, "Enviar candidatura").
+
+After sending: nothing is established for Workable. No saved page, real send or documentation shows what follows a submit. Read the page: if the form is still there, the application was not received.

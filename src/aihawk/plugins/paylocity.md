@@ -19,3 +19,5 @@ Dropdowns are `div[role="combobox"]` showing "--" until a choice is made, such a
 "Add Work History" and "Add Education" add rows, with the same fields numbered `.0`, `.1`. "Select Cover Letter" is a file: leave it empty unless required.
 
 Demographic questions on the last steps are voluntary: choose the option that declines to answer.
+
+After sending: nothing is established for Paylocity. No saved page, real send or documentation shows what follows a submit. Read the page: if the form is still there, the application was not received.

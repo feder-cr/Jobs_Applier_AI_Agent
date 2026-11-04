@@ -12,3 +12,5 @@ Location is a combobox with the placeholder "Start typing...": type, then pick t
 Yes and No questions, such as work authorization or visa sponsorship, are answered by clicking a button labelled Yes or No. Each Yes and No pair follows its question's label. Selectors for those buttons must be specific to that question. After clicking, read the page to check that the answer is selected.
 
 The submit control is the button "Submit Application".
+
+After sending: on two real sends (ElevenLabs and XYZ Reality) the Submit Application button stayed disabled and the click did not land, so the form was not sent. No confirmation text was recorded for a received application. Ashby usually sends a confirmation email only for applications made through the job board, set per posting (documentation only). If the form is still on the page, the application was not received.
