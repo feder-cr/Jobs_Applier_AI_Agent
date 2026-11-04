@@ -10,7 +10,7 @@ import duckdb
 import pytest
 
 from aihawk.config import Arc, ConfigError, Filters, Form, Node, Plan, load_config
-from aihawk.database import DatabaseError, Job, page_text, rarity, search, with_description
+from aihawk.database import DatabaseError, Job, page_text, rarity, search, stored_description, stored_descriptions, with_description
 from aihawk.store import Store
 
 JOB = Job("g:a:1", "Acme", "Senior Python Engineer", "Rome, Italy", "u", "a", "d")
@@ -279,6 +279,15 @@ def test_a_job_being_judged_gets_its_description_from_the_database(tmp_path: Pat
     _, jobs = search(database(tmp_path), Filters(include=("intern",)), 60, tmp_path)
     assert jobs[0].description == ""
     assert with_description(jobs[0]).description == "Learn"
+
+
+def test_many_descriptions_come_in_order_and_empty_where_there_is_no_reference(tmp_path: Path) -> None:
+    _, jobs = search(database(tmp_path), Filters(include=("python",)), 60, tmp_path)
+    refs = [job.ref for job in jobs] + ["", "no-reference"]
+    counts: list[int] = []
+    texts = stored_descriptions(refs, counts.append)
+    assert texts == [stored_description(ref) for ref in refs[:-2]] + ["", ""]
+    assert sorted(texts[:-2]) == ["Build", "Learn"] and counts[-1] == len(refs)
 
 
 def test_a_job_with_a_description_reads_no_page() -> None:

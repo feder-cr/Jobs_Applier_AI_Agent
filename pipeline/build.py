@@ -8,7 +8,7 @@ work/sources/<name>.parquet in the columns of COMMON. A source that fails is lef
 the manifest; publish.py refuses a database that lost too much of itself. Postings are the same posting when their links
 are the same after `KEY`, and of those the row with the longest description is kept, the other rows adding their source's
 name. The output is cut in files under GitHub's limit of 2 GiB per release file, with index.parquet beside them: every posting without its
-description, and where to find that description. A search reads the index; only a job being judged reads a description.
+description, and where to find that description. A search reads the index; only the jobs being judged read descriptions.
 """
 
 from __future__ import annotations
@@ -31,7 +31,12 @@ import duckdb
 HF = "https://huggingface.co/datasets"
 HF_API = "https://huggingface.co/api/datasets"
 RAW = "https://raw.githubusercontent.com"
-MAX_FILE = "1800MB"
+# Files of about 128 MB and row groups of 2048 rows, measured on 100 postings of a 1.8 GB file read over HTTP through one
+# connection per search: 111 MB per search, against 231 MB with 5000-row groups and 470 MB with one connection per posting.
+# Any file size gives the same reads; 128 MB keeps the release at about 40 files. A group is a whole description column
+# chunk, which DuckDB cannot write below 2048 rows.
+MAX_FILE = "128MB"
+ROW_GROUP = 2048
 INDEX = "index.parquet"
 
 COMMON = (
@@ -309,7 +314,7 @@ def merge(connection: duckdb.DuckDBPyConnection, work: Path) -> dict[str, int]:
             FROM {every_row} AS row
             JOIN best ON row.filename = best.winner.filename AND row.file_row_number = best.winner.row
         ) TO '{out.as_posix()}' (
-            FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 5000, FILE_SIZE_BYTES '{MAX_FILE}', FILENAME_PATTERN 'jobs_{{i}}'
+            FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE {ROW_GROUP}, FILE_SIZE_BYTES '{MAX_FILE}', FILENAME_PATTERN 'jobs_{{i}}'
         )
     """)
     rows_out = connection.execute(f"SELECT count(*) FROM read_parquet('{out.as_posix()}/jobs_*.parquet')").fetchone()[0]
