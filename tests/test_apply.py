@@ -384,20 +384,22 @@ SELECT = [tool_call("browser_select_option", selector="#pick", value="a")]
 
 
 class Moves(ScriptedBrowser):
-    """A form whose select, when changed, puts the page where the test says: a change event that leaves, or confirms."""
+    """A form whose select, when changed, puts the page where the test says: a change event that leaves, or confirms.
+    The first `unreadable` reads of the page after the change fail, as a page that is still loading does."""
 
-    def __init__(self, after: dict[str, str] | None = None, reads_fail: bool = False) -> None:
+    def __init__(self, after: dict[str, str] | None = None, unreadable: int = 0) -> None:
         super().__init__({"#send": SUBMIT}, page=FORM_PAGE)
         self.after = after
-        self.reads_fail = reads_fail
+        self.unreadable = unreadable
         self.changed = False
 
     async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
         if name == "browser_select_option":
             self.changed = True
             self.page = self.after or self.page
-        if name == "browser_evaluate" and self.reads_fail and self.changed:
-            return SimpleNamespace(isError=True, content=[SimpleNamespace(text="the page is gone")])
+        if name == "browser_evaluate" and self.changed and self.unreadable and "location.href" in str(arguments):
+            self.unreadable -= 1
+            return SimpleNamespace(isError=True, content=[SimpleNamespace(text="the page is loading")])
         return await super().call_tool(name, arguments)
 
 
@@ -437,11 +439,51 @@ def test_a_change_that_stays_on_the_site_goes_on_to_the_form_so_a_same_site_send
     assert run_with(model, browser).status == "submitted"
 
 
-def test_a_page_that_cannot_be_read_after_a_change_is_unconfirmed_not_failed() -> None:
-    browser = Moves(after={"url": "https://u/apply", "text": "x"}, reads_fail=True)
-    outcome = run_with(ScriptedModel(SELECT), browser)
+@pytest.fixture
+def no_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(apply_module, "READ_WAIT_S", 0)
+
+
+def test_a_page_still_loading_after_a_change_is_read_again_until_its_host_shows(no_wait: None) -> None:
+    browser = Moves(after={"url": "https://thanks.example/ok", "text": "Thanks"}, unreadable=2)
+    model = ScriptedModel(SELECT)
+    outcome = run_with(model, browser)
     assert outcome.status == "unconfirmed"
+    assert "thanks.example" in outcome.summary
     assert browser.clicks() == []
+    assert len(model.requests) == 1
+
+
+def test_a_page_that_stays_unreadable_after_a_change_does_not_end_the_form(no_wait: None) -> None:
+    browser = Moves(after={"url": "https://u/apply", "text": "x"}, unreadable=100)
+    model = ScriptedModel(SELECT, ready(), VERIFIED)
+    assert run_with(model, browser).status == "submitted"
+    assert browser.clicks() == ["#send"]
+
+
+class Typing(ScriptedBrowser):
+    """A form still being typed into, as on Breezy: its page cannot be read for a while after the text is typed."""
+
+    def __init__(self) -> None:
+        super().__init__({"#send": SUBMIT}, page=FORM_PAGE)
+        self.busy = 0
+
+    async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
+        if name == "browser_type":
+            self.busy = 3
+        if name == "browser_evaluate" and self.busy and "location.href" in str(arguments):
+            self.busy -= 1
+            return SimpleNamespace(isError=True, content=[SimpleNamespace(text="still typing")])
+        return await super().call_tool(name, arguments)
+
+
+def test_a_read_that_fails_after_a_type_does_not_end_the_form_and_the_form_is_sent(no_wait: None) -> None:
+    browser = Typing()
+    model = ScriptedModel([tool_call("browser_type", selector="#name", text="Ada Rossi")], ready(), VERIFIED)
+    outcome = run(model, browser, None)
+    assert outcome.status == "submitted"
+    assert browser.clicks() == ["#send"]
+    assert len(model.requests) == 3
 
 
 def test_a_mail_trip_to_the_mailbox_and_back_does_not_stop_the_form() -> None:

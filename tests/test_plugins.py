@@ -41,6 +41,21 @@ def test_the_form_url_is_reached_once(url: str, form: str) -> None:
     assert PLUGIN.form_url(url) == form
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://zahneinsgmbh.jobs.personio.com/job/2013915",
+        "https://tierarztpluspartner.jobs.personio.de/job/2873557",
+        "https://roman-klis-design-gmbh.jobs.personio.de/job/1789583",
+        "https://partou.jobs.personio.de/job/2873902",
+    ],
+)
+def test_a_personio_posting_goes_straight_to_its_form(url: str) -> None:
+    plugin = plugin_for(url, load_plugins())
+    assert plugin is not None and plugin.name == "personio"
+    assert plugin.form_url(url) == url + "/apply"
+
+
 def test_no_apply_path_keeps_the_link() -> None:
     assert Plugin("g", ("g.example",), "x").form_url("https://g.example/1") == "https://g.example/1"
 

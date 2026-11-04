@@ -162,12 +162,12 @@ def run_select(site: str, path: str, tmp_path: Path, model: ScriptedModel) -> An
 
 def test_a_select_whose_form_leaves_for_another_host_is_unconfirmed_and_the_post_is_counted(site: str, elsewhere: str, tmp_path: Path) -> None:
     Site.leave_to = elsewhere + "sent"
-    # The change submits the form, and the page navigates away. The address cannot be read while it loads, so the
-    # check stops it as unconfirmed on that read failure; the host check itself is not what fires here.
+    # The change submits the form, and the page navigates away. While it loads the page cannot be read: the check reads
+    # it again until it can, and the host of the page it then shows is what stops the form.
     model = ScriptedModel([tool_call("browser_select_option", selector="#pick", value="a")])
     outcome = run_select(site, "leave", tmp_path, model)
     assert outcome.status == "unconfirmed", outcome.summary
-    assert "not known whether the application went out" in outcome.summary
+    assert "the page went to" in outcome.summary and "127.0.0.2" in outcome.summary
     assert len(model.requests) == 1  # asked for the select, and never again
     assert len(Elsewhere.posts) == 1
     assert b"pick=a" in Elsewhere.posts[0]

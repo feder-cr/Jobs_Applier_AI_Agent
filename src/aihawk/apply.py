@@ -32,6 +32,9 @@ from aihawk.llm import structured
 OPEN_DEADLINE_S = 900.0
 OPEN_RETRY_S = 10.0
 MAX_STEPS = 80
+# A page can be loading after a change: a read that fails is tried again this many times, this far apart.
+READ_TRIES = 5
+READ_WAIT_S = 1.0
 
 # The server's tools that act and that `refusal` checks against the rule that the model does not send the form. A tool
 # the server says only reads is offered as well, so one it adds tomorrow just works; one it adds that acts stays out
@@ -251,7 +254,7 @@ def _images(result: Any) -> list[dict[str, Any]]:
 
 
 class LeftForm(Exception):
-    """A call of the model's moved the page to another site, or could not be checked: it may have sent the form."""
+    """A call of the model's moved the page to another site: it may have sent the form."""
 
 
 # The calls that can change the page. A navigation is the model's own choice, so it is not checked after: `refusal` judges it.
@@ -269,13 +272,22 @@ async def _page(session: Session) -> dict[str, str] | None:
     return page if isinstance(page, dict) else None
 
 
+async def _readable_page(session: Session) -> dict[str, str] | None:
+    """The page once it can be read: a page can be loading after a change, so a read that fails is tried again."""
+    page = await _page(session)
+    for _ in range(READ_TRIES):
+        if page is not None:
+            return page
+        await asyncio.sleep(READ_WAIT_S)
+        page = await _page(session)
+    return None
+
+
 async def _after(session: Session, name: str, form_host: str) -> None:
     """Stops the form when a call moved the page to another site. A same-site send is not detected: a multi-step form
-    advances by address too, so the address alone cannot tell the two apart."""
-    after = await _page(session)
-    if after is None:
-        raise LeftForm(f"After {name} the page could not be read, so it is not known whether the application went out. It is not retried.")
-    if _host(after.get("url", "")) != form_host:
+    advances by address too, so the address alone cannot tell the two apart. A page that stays unreadable says nothing."""
+    after = await _readable_page(session)
+    if after is not None and _host(after.get("url", "")) != form_host:
         raise LeftForm(f"After {name} the page went to {after.get('url')}, not the form. It is not known whether the application went out. It is not retried.")
 
 
