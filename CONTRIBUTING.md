@@ -4,7 +4,7 @@ AIHawk is a command-line program in Python. The most useful contribution is a pl
 
 ## Setup
 
-You need Python 3.11 or newer. CI runs 3.12.
+You need Python 3.11 or newer. CI runs the unit tests on 3.11 and 3.12, on Ubuntu, Windows and macOS.
 
 ```sh
 git clone https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk
@@ -36,13 +36,13 @@ The browser tests run the real `invisible-playwright-mcp` and its Firefox agains
 ruff check .
 ```
 
-Ruff reads its settings from `[tool.ruff]` in `pyproject.toml` (line length 160, no extra rule sets). CI runs this exact command.
+Ruff reads its settings from `[tool.ruff]` in `pyproject.toml`: the default rules only. The line length of 160 is set there but not enforced, because `ruff check` does not run E501; 39 lines in the repository are longer than 160 today. CI runs this exact command.
 
 ## What CI runs
 
 The workflow is `.github/workflows/tests.yml`. It runs on every push to `main`, on every pull request, and every day at 05:41 UTC.
 
-- **unit**, on Ubuntu and on Windows, Python 3.12: `pip install -e ".[dev]"`, then `ruff check .`, then `pytest -m "not browser"`.
+- **unit**, on Ubuntu, Windows and macOS, Python 3.11 and 3.12: `pip install -e ".[dev]"`, then `ruff check .`, then `pytest -m "not browser"`.
 - **browser**, on Ubuntu: installs the Firefox libraries and xvfb, then `xvfb-run -a -s "-screen 0 1920x1080x24" pytest -m browser`.
 - **gate**: passes only if both jobs pass.
 

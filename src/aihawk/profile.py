@@ -18,7 +18,7 @@ from aihawk.llm import structured
 
 _WORD_TEXT = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
-# Adapted from the planner of the owner's LLDB engine, whose measurements on job search set these rules: keep the words a
+# Adapted from the planner of the author's earlier job-search engine, whose measurements on job search set these rules: keep the words a
 # posting uses, span every register, weight by how telling a word is, and drop what belongs to a neighbouring job.
 PROFILE_SCHEMA: dict[str, Any] = {
     "type": "object",

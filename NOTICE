@@ -6,7 +6,7 @@ src/aihawk/documents.py
   MIT License, Copyright (c) 2026 Santiago Fernandez de Valderrama. No file was copied.
 
 src/aihawk/profile.py, src/aihawk/database.py
-  The search plan's rules and the rarity weight follow the planner of the LLDB engine by the same author.
+  The search plan's rules and the rarity weight follow the planner of the author's earlier job-search engine; the credit is to that work.
 
 The published job database
   Is merged from the public sources named in pipeline/build.py, each with its home and licence as far as
