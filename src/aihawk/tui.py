@@ -21,15 +21,19 @@ from aihawk.llm import explain, refused
 from aihawk.session import Session
 from aihawk.store import SUBMITTED, Sent, Stored, said, sent_word
 
+# Below this width there is no room for the location beside the company and the role.
+WIDE_ENOUGH = 100
+RESUME_QUESTION = "Where is your resume? PDF, .docx or text."
+RESUME_HINT = "Enter reads it · Esc for later · Ctrl+C quits"
 STATUS_TEXT = {
     "new": "",
     "scored": "",
     "shortlisted": "",
     "passed_over": "passed over",
     "submitted": "sent",
-    "unconfirmed": "clicked, not confirmed",
-    "refused": "refused by the form",
-    "needs_input": "needs an answer",
+    "unconfirmed": "not confirmed",
+    "refused": "refused",
+    "needs_input": "needs answer",
     "blocked": "blocked",
     "failed": "failed",
 }
@@ -40,17 +44,18 @@ class TextPrompt(ModalScreen[str | None]):
 
     BINDINGS: ClassVar = [Binding("escape", "skip", "Skip")]
 
-    def __init__(self, question: str, *, placeholder: str = "", password: bool = False) -> None:
+    def __init__(self, question: str, *, placeholder: str = "", password: bool = False, hint: str = "Enter answers · Esc leaves this form for later · Ctrl+C quits") -> None:
         super().__init__()
         self.question = question
         self.placeholder = placeholder
         self.password = password
+        self.hint = hint
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
             yield Static(self.question, id="question", markup=False)
             yield Input(placeholder=self.placeholder, password=self.password, id="answer")
-            yield Static("Enter to answer · Esc to skip · Ctrl+C quits", classes="hint")
+            yield Static(self.hint, classes="hint")
 
     @on(Input.Submitted)
     def answered(self, event: Input.Submitted) -> None:
@@ -63,7 +68,7 @@ class TextPrompt(ModalScreen[str | None]):
 class SendBatch(ModalScreen[bool]):
     """The one question before anything is sent: these jobs, now. Enter sends them all, Escape cancels."""
 
-    BINDINGS: ClassVar = [Binding("enter", "answer(True)", "Send them"), Binding("escape", "answer(False)", "Cancel")]
+    BINDINGS: ClassVar = [Binding("enter", "answer(True)", "Send"), Binding("escape", "answer(False)", "Cancel")]
 
     def __init__(self, items: list[Stored]) -> None:
         super().__init__()
@@ -74,7 +79,7 @@ class SendBatch(ModalScreen[bool]):
         lines = [f"{index}. {item.job.company}: {item.job.title}" for index, item in enumerate(self.items, 1)]
         with Vertical(id="dialog"):
             yield Static(f"Send {count} application{'' if count == 1 else 's'} now?", id="question", markup=False)
-            yield Static("They will be sent now, in the browser window. Enter sends them all; Escape cancels; Ctrl+C quits.", classes="hint")
+            yield Static("In your name, in the browser window. Enter sends; Esc cancels; Ctrl+C quits.", classes="hint")
             with VerticalScroll(id="summary"):
                 yield Static("\n".join(lines), markup=False)
             yield Footer()
@@ -85,6 +90,11 @@ class SendBatch(ModalScreen[bool]):
 
 def short(text: str) -> str:
     return " ".join(text.split())[:110]
+
+
+def when_short(when: str) -> str:
+    """A time as a person reads it: 2026-11-05 10:00."""
+    return when[:16].replace("T", " ")
 
 
 class SentList(ModalScreen[None]):
@@ -98,17 +108,21 @@ class SentList(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="wide"):
-            yield Static("Sent", id="question", markup=False)
+            yield Static("Applications", id="question", markup=False)
             yield DataTable(id="sent", cursor_type="row")
             yield Static("Enter opens a job in full · Esc goes back", classes="hint")
             yield Footer()
 
     def on_mount(self) -> None:
         table = self.query_one(DataTable)
-        for label, width in (("When", 17), ("Company", 18), ("Role", 26), ("Status", 20), ("What the page said", 46)):
+        # What is left beside the time and the status, inside this screen's 95% and its padding, goes to the words.
+        wide = self.app.size.width >= WIDE_ENOUGH
+        left = int(self.app.size.width * 0.95) - 8 - 2 * (5 if wide else 3) - 16 - 19
+        words = [("Company", left // 5), ("Role", left * 3 // 10)] if wide else [("Company", left)]
+        for label, width in (("When", 16), *words, ("Status", 19), *([("What the page said", left // 2)] if wide else [])):
             table.add_column(label, key=label, width=width)
         for item in self.items:
-            cells = (item.when, item.job.company, item.job.title, sent_word(item), short(said(item)))
+            cells = (when_short(item.when), item.job.company, *([item.job.title] if wide else []), sent_word(item), *([short(said(item))] if wide else []))
             table.add_row(*(Text(cell) for cell in cells), key=item.job.id)
         table.focus()
 
@@ -157,7 +171,7 @@ class SentDetails(ModalScreen[None]):
 
 
 class JobDetails(ModalScreen[None]):
-    BINDINGS: ClassVar = [Binding("escape,enter,q", "close", "Back")]
+    BINDINGS: ClassVar = [Binding("space", "select", "Select"), Binding("o", "open_link", "Open"), Binding("escape,enter,q", "close", "Back")]
 
     def __init__(self, item: Stored) -> None:
         super().__init__()
@@ -181,6 +195,13 @@ class JobDetails(ModalScreen[None]):
     def action_close(self) -> None:
         self.dismiss(None)
 
+    def action_select(self) -> None:
+        self.dismiss(None)
+        self.app.action_toggle()  # type: ignore[attr-defined]
+
+    def action_open_link(self) -> None:
+        webbrowser.open(self.item.job.url)
+
 
 class SignIn(ModalScreen[None]):
     """The browser window is open for the person to sign in. Nothing is typed for them; a key here says they are done."""
@@ -203,7 +224,7 @@ class AIHawk(App[None]):
     CSS = """
     #heading { height: 1; padding: 0 1; background: $primary; color: $text; text-style: bold; }
     #jobs { height: 1fr; }
-    #log { height: 7; border-top: solid $primary; padding: 0 1; }
+    #log { height: 7; border-top: solid $primary; padding: 0 1; scrollbar-size-vertical: 1; }
     ModalScreen { align: center middle; background: $background 60%; }
     #dialog { width: 80%; max-width: 100; height: auto; max-height: 85%; padding: 1 2; background: $surface; border: thick $primary; }
     #wide { width: 95%; height: auto; max-height: 85%; padding: 1 2; background: $surface; border: thick $primary; }
@@ -233,6 +254,8 @@ class AIHawk(App[None]):
         self.selected: set[str] = set()
         self.busy = False
         self.signing_in = False
+        self.columns_for = 0
+        self.with_location = True
 
     def compose(self) -> ComposeResult:
         yield Static("AIHawk", id="heading", markup=False)
@@ -242,12 +265,29 @@ class AIHawk(App[None]):
         yield Footer()
 
     def on_mount(self) -> None:
-        table = self.query_one(DataTable)
-        for label, width in (("", 2), ("Score", 5), ("Apply", 5), ("Company", 22), ("Role", 44), ("Location", 24), ("Status", 20)):
-            table.add_column(label, key=label or "mark", width=width)
-        table.focus()
+        self.query_one(DataTable).focus()
         self.show_heading()
         self.start()
+
+    def on_resize(self) -> None:
+        self.fit_columns()
+
+    def fit_columns(self) -> None:
+        """The columns for this screen's width: all of them from WIDE_ENOUGH up, and below it no location, which the details show."""
+        width = self.size.width
+        if width == self.columns_for:
+            return
+        self.columns_for = width
+        current = self.current_id()
+        table = self.query_one(DataTable)
+        table.clear(columns=True)
+        self.with_location = width >= WIDE_ENOUGH
+        # A column's padding is 2, and the scrollbar takes 2.
+        left = width - 2 - 2 * (7 if self.with_location else 6) - 2 - 5 - 5 - 14
+        words = [("Company", left // 4), ("Role", left // 2), ("Location", left // 4)] if self.with_location else [("Company", left // 3), ("Role", left - left // 3)]
+        for label, size in (("", 2), ("Score", 5), ("Apply", 5), *words, ("Status", 14)):
+            table.add_column(label, key=label or "mark", width=size)
+        self.refresh_jobs(current)
 
     def on_unmount(self) -> None:
         self.session.close()
@@ -273,24 +313,26 @@ class AIHawk(App[None]):
         config = self.session.config
         wanted = config.filters.titles() or "no resume yet"
         place = ", ".join(config.filters.locations[:3])
-        left = " · ".join(part for part in (config.name, wanted, place) if part)
+        chosen = f"{len(self.selected)} selected" if self.selected else ""
+        left = " · ".join(part for part in (config.name, wanted, place, chosen) if part)
         self.query_one("#heading", Static).update(f"AIHawk  {left}" + (f"   [{progress}]" if progress else ""))
 
     def row(self, item: Stored) -> tuple[Text | str, ...]:
         mark = "●" if item.job.id in self.selected else ""
         score = f"{item.score:.1f}" if item.score is not None else "-"
-        can_apply = "auto" if self.session.plugin(item) else "link"
+        can_apply = "auto" if self.session.plugin(item) else "hand"
         status = STATUS_TEXT.get(item.status, item.status)
         # A score from the title and the place alone: the person should know the posting's text was not read.
         if item.score is not None and not item.job.description.strip():
-            status = ", ".join(part for part in (status, "no text") if part)
+            status = ", ".join(part for part in (status, "title only") if part)
         # Text, because a string cell is read as markup, and a posting's words are a source's: "[/x] Engineer" would stop the screen.
-        return (Text(mark, style="bold green"), score, can_apply, Text(item.job.company), Text(item.job.title), Text(item.job.location), status)
+        place = (Text(item.job.location),) if self.with_location else ()
+        return (Text(mark, style="bold green"), score, can_apply, Text(item.job.company), Text(item.job.title), *place, status)
 
-    def refresh_jobs(self) -> None:
+    def refresh_jobs(self, current: str | None = None) -> None:
         """The list, best first. The cursor stays on the job it was on."""
         table = self.query_one(DataTable)
-        current = self.current_id()
+        current = current or self.current_id()
         table.clear()
         for item in self.session.store.all():
             table.add_row(*self.row(item), key=item.job.id)
@@ -315,7 +357,9 @@ class AIHawk(App[None]):
         session = self.session
         try:
             if session.needs_key():
-                key = await self.push_screen_wait(TextPrompt("Your OrcaRouter API key (from orcarouter.ai). It stays on this computer.", placeholder="sk-orca-...", password=True))
+                key = await self.push_screen_wait(
+                    TextPrompt("Your OrcaRouter key. Get one at orcarouter.ai; it stays on this computer.", placeholder="sk-orca-...", password=True, hint="Enter saves it · Esc stops here · Ctrl+C quits")
+                )
                 if not key:
                     self.say("AIHawk needs a model key to read your resume and judge jobs. Quit and start again when you have one.")
                     return
@@ -323,7 +367,7 @@ class AIHawk(App[None]):
             if self.resume or session.needs_resume():
                 path = self.resume
                 while path is None:
-                    answer = await self.push_screen_wait(TextPrompt("Where is your resume? PDF, .docx or text.", placeholder="C:/Users/you/resume.pdf"))
+                    answer = await self.push_screen_wait(TextPrompt(RESUME_QUESTION, placeholder=str(Path.home() / "resume.pdf"), hint=RESUME_HINT))
                     if not answer:
                         self.say("Press r when you have a resume to give me.")
                         return
@@ -366,8 +410,9 @@ class AIHawk(App[None]):
             self.refresh_jobs()
 
         self.show_heading(f"scoring 0/{len(items)}")
-        self.say(f"Jev picked {len(items)} postings to score. Press m for the next batch when they are done.")
+        self.say(f"Scoring the {len(items)} that look best.")
         await session.score(items, scored, self.say)
+        self.say("Done. Enter shows why, space selects, a sends the selected, m scores the next ones.")
 
     # The keys.
 
@@ -379,6 +424,7 @@ class AIHawk(App[None]):
             self.selected.discard(item.job.id)
         else:
             self.selected.add(item.job.id)
+        self.show_heading()
         self.query_one(DataTable).update_cell(item.job.id, "mark", self.row(item)[0])
         self.query_one(DataTable).action_cursor_down()
 
@@ -409,14 +455,18 @@ class AIHawk(App[None]):
             self.show_heading()
 
     def action_sent(self) -> None:
-        self.push_screen(SentList(self.session.store.sent()))
+        sent = self.session.store.sent()
+        if sent:
+            self.push_screen(SentList(sent))
+        else:
+            self.say("Nothing has been sent yet. Space selects a job, a sends it.")
 
     def action_new_resume(self) -> None:
         self.new_resume()
 
     @work(exclusive=True, group="flow")
     async def new_resume(self) -> None:
-        answer = await self.push_screen_wait(TextPrompt("Where is your resume? PDF, .docx or text.", placeholder="C:/Users/you/resume.pdf"))
+        answer = await self.push_screen_wait(TextPrompt(RESUME_QUESTION, placeholder=str(Path.home() / "resume.pdf"), hint=RESUME_HINT))
         if answer:
             self.resume = Path(answer.strip("\"' ")).expanduser()
             self.start()
@@ -484,6 +534,7 @@ class AIHawk(App[None]):
             self.selected -= {item.job.id for item in chosen}
             self.refresh_jobs()
             self.show_heading()
+            self.say("Press s for every application and what each page said.")
 
     def can_send(self, item: Stored) -> bool:
         """Whether the job goes in the batch; one that cannot says why."""

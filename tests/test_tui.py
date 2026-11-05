@@ -136,7 +136,7 @@ def test_a_judged_posting_with_no_text_says_so_in_its_status_and_keeps_its_score
     app = AIHawk(home)
     judged = Stored(Job("x", "Co", "Engineer", "Milan", "u", "u", ""), "scored", 3.0, None, None, None)
     read = Stored(Job("y", "Co", "Engineer", "Milan", "u", "u", "A posting."), "scored", 3.0, None, None, None)
-    assert app.row(judged)[1] == "3.0" and app.row(judged)[-1] == "no text"
+    assert app.row(judged)[1] == "3.0" and app.row(judged)[-1] == "title only"
     assert app.row(read)[-1] == ""
 
 
@@ -154,7 +154,7 @@ def test_a_resume_is_all_it_takes_to_get_the_best_jobs_first(home: Path, resume:
             table = app.query_one(DataTable)
             assert table.get_row_at(0)[1] == "4.5"
             assert table.get_row_at(0)[2] == "auto"
-            assert table.get_row_at(2)[2] == "link"
+            assert table.get_row_at(2)[2] == "hand"
 
     asyncio.run(run())
     config = load_config(home)
@@ -377,7 +377,7 @@ def test_a_question_skipped_stops_trying_and_is_recorded(home: Path, resume: Pat
             await wait_for_screen(pilot, TextPrompt)
             await pilot.press("escape")
             await wait_for_apply(pilot, app)
-            assert app.query_one(DataTable).get_row_at(0)[6] == "needs an answer"
+            assert app.query_one(DataTable).get_row_at(0)[6] == "needs answer"
 
     asyncio.run(run())
     assert len(calls) == 1
@@ -418,15 +418,66 @@ def test_s_lists_what_was_tried_newest_first_and_enter_opens_one_in_full(home: P
     asyncio.run(run())
 
 
-def test_s_with_nothing_tried_shows_an_empty_list(home: Path, resume: Path) -> None:
+def logged(app: AIHawk) -> str:
+    return "\n".join(strip.text for strip in app.query_one(RichLog).lines)
+
+
+def test_s_with_nothing_tried_says_how_to_send(home: Path, resume: Path) -> None:
     async def run() -> None:
         app = scripted_app(home, resume)
         async with app.run_test(size=(140, 40)) as pilot:
             await settle(pilot, app)
             await pilot.press("s")
-            await wait_for_screen(pilot, SentList)
-            assert app.screen.query_one(DataTable).row_count == 0
-            await pilot.press("escape")
+            await pilot.pause(0.1)
+            assert not isinstance(app.screen, SentList)
+            assert "Nothing has been sent yet" in logged(app)
+
+    asyncio.run(run())
+
+
+def test_each_send_says_how_it_went_and_where_to_read_more(home: Path, resume: Path, restored_apply: Any) -> None:
+    calls: list[Any] = []
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        fake_apply(app, [Outcome("submitted", "Filled.", proof=Proof("2026-11-05T10:00:00+00:00", "u", "submitted", "The page says thank you.", "t", ""))], calls)
+        async with app.run_test(size=(200, 40)) as pilot:
+            await settle(pilot, app)
+            await pilot.press("a")
+            await wait_for_screen(pilot, SendBatch)
+            await pilot.press("enter")
+            await wait_for_apply(pilot, app)
+            log = logged(app)
+            assert "Bestco: sent and confirmed. The page says thank you." in log
+            assert "Press s for every application" in log
+
+    asyncio.run(run())
+
+
+def test_at_80_columns_the_status_shows_and_at_100_the_location_too(home: Path, resume: Path) -> None:
+    async def run() -> None:
+        for width, labels in ((80, 6), (100, 7)):
+            app = scripted_app(home, resume)
+            async with app.run_test(size=(width, 24)) as pilot:
+                await settle(pilot, app)
+                table = app.query_one(DataTable)
+                assert len(table.ordered_columns) == labels and str(table.ordered_columns[-1].label) == "Status"
+                assert sum(column.width + 2 for column in table.ordered_columns) <= width - 2
+
+    asyncio.run(run())
+
+
+def test_a_jobs_details_can_select_it_and_the_heading_counts_the_selection(home: Path, resume: Path) -> None:
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
+            await pilot.press("enter")
+            await wait_for_screen(pilot, JobDetails)
+            await pilot.press("space")
+            await pilot.pause(0.1)
+            assert not isinstance(app.screen, JobDetails) and len(app.selected) == 1
+            assert "1 selected" in str(app.query_one("#heading", Static).render())
 
     asyncio.run(run())
 
@@ -807,4 +858,31 @@ def test_a_posting_with_no_stored_text_is_scored_on_its_own_pages_text(home: Pat
     assert session.store.get("bare").job.description == "The text of its page."  # type: ignore[union-attr]
     asked = " ".join(request["messages"][1]["content"] for request in session._client.requests)  # type: ignore[union-attr]
     assert "The text of its page." in asked and "Stored text." in asked
+    session.close()
+
+
+def test_a_form_tried_again_sends_the_cv_it_wrote_the_first_time(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    session = Session(home)
+    session._client = ScriptedModelForApp()  # type: ignore[assignment]
+    asyncio.run(session.load_resume(resume))
+    session.store.add(Job("one", "Firm", "Python Engineer", "Milan", "https://jobs.lever.co/a/1", "https://jobs.lever.co/a/1", "A posting.", "", 1.0))
+    outcomes = [Outcome("needs_input", "missing", ["Your salary?"]), Outcome("submitted", "Filled.")]
+    written: list[str] = []
+    files: list[Path] = []
+
+    async def tailor(*_: Any) -> str:
+        written.append("cv")
+        return "# Ada Rossi"
+
+    async def fill(_client: Any, _model: str, _job: Any, _cv: str, _answers: str, cv_file: Path, *_rest: Any, **_options: Any) -> Outcome:
+        files.append(cv_file)
+        return outcomes.pop(0)
+
+    async def answer(_: str) -> str:
+        return "1"
+
+    monkeypatch.setattr(session_module, "tailor_cv", tailor)
+    monkeypatch.setattr(session_module, "apply_to_job", fill)
+    asyncio.run(session.send([session.store.get("one")], answer, lambda _: None, lambda: None))  # type: ignore[list-item]
+    assert written == ["cv"] and files[0] == files[1]
     session.close()

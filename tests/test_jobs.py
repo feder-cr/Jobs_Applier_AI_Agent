@@ -464,12 +464,20 @@ def test_a_link_too_malformed_to_ask_for_leaves_the_job_as_it_is() -> None:
 
 
 def test_a_full_disk_while_the_index_downloads_says_the_disk_is_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    def full(*_: object) -> None:
-        raise OSError(errno.ENOSPC, "No space left on device")
+    class Unreadable(io.BytesIO):
+        def read(self, *_: object) -> bytes:
+            raise OSError(errno.ENOSPC, "No space left on device")
 
-    monkeypatch.setattr("urllib.request.urlopen", lambda *_, **__: io.BytesIO(b"index"))
-    monkeypatch.setattr("shutil.copyfileobj", full)
+    monkeypatch.setattr("urllib.request.urlopen", lambda *_, **__: Unreadable())
     manifest = {"index": {"name": "index.parquet", "bytes": 740_000_000}, "built_at": "2026-11-05T00:00:00+00:00", "base_url": "https://a.example"}
     with pytest.raises(DatabaseError, match="The disk is full: the job index needs 740 MB"):
         local_index(manifest, "https://a.example/manifest.json", tmp_path)
     assert not list(tmp_path.glob("*.part"))
+
+
+def test_the_index_download_says_how_far_it_has_come(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("urllib.request.urlopen", lambda *_, **__: io.BytesIO(b"x" * (4 << 20)))
+    manifest = {"index": {"name": "index.parquet", "bytes": 4 << 20}, "built_at": "2026-11-05T00:00:00+00:00", "base_url": "https://a.example"}
+    lines: list[str] = []
+    assert local_index(manifest, "https://a.example/manifest.json", tmp_path, lines.append).read_bytes() == b"x" * (4 << 20)
+    assert [line.strip() for line in lines[1:]] == ["25%", "50%", "75%"]

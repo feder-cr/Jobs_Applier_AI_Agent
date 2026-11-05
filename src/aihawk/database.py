@@ -7,7 +7,6 @@ import html
 import json
 import math
 import re
-import shutil
 import urllib.request
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
@@ -178,7 +177,14 @@ def local_index(manifest: dict[str, Any], location: str, cache: Path, log: Calla
     partial = path.with_suffix(".part")
     try:
         with urllib.request.urlopen(source, timeout=120) as response, partial.open("wb") as out:
-            shutil.copyfileobj(response, out, 1 << 20)
+            copied = told = 0
+            while chunk := response.read(1 << 20):
+                out.write(chunk)
+                copied += len(chunk)
+                # A quarter at a time: this takes minutes on a slow line, and must not look stuck.
+                if copied * 4 // manifest["index"]["bytes"] > told and copied < manifest["index"]["bytes"]:
+                    told = copied * 4 // manifest["index"]["bytes"]
+                    log(f"  {told * 25}%")
     except OSError as error:
         partial.unlink(missing_ok=True)
         if error.errno == errno.ENOSPC:

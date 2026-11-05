@@ -16,6 +16,7 @@
 - A full disk while the job index downloads says the disk is full.
 - A job whose source published no text is scored on the text of its own page where that can be read, which also finds postings that have closed.
 - The README shows real captures of the screen.
+- Sending says, per job, how it went, and the screen says what to do next. The list fits an 80-column terminal, the index download shows its progress, and a job's details can select it or open it.
 - A setting of the wrong type in `aihawk.yaml` is one plain line instead of a traceback.
 - The send check knows more languages' send words, and no longer refuses "Confirm email address", "Complete your profile" or "Send code".
 
