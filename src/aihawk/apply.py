@@ -30,7 +30,7 @@ from aihawk.store import Proof, safe_name
 
 OPEN_DEADLINE_S = 900.0
 OPEN_RETRY_S = 10.0
-MAX_STEPS = 80
+MAX_STEPS = 150
 # The server's tools that are ours to call, to open and close the browser around the model's work. The model gets the rest,
 # so a tool the server adds tomorrow just works.
 OURS = {"browser_open", "browser_close"}

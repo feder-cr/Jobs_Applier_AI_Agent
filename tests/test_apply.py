@@ -193,9 +193,9 @@ def test_the_servers_way_of_driving_a_page_comes_after_the_rules_and_before_the_
 
 
 def test_a_model_that_never_finishes_is_blocked_and_nothing_is_sent() -> None:
-    model = ScriptedModel(*["thinking"] * 80)
+    model = ScriptedModel(*["thinking"] * 150)
     report = asyncio.run(fill_form(ScriptedBrowser(), [], model, "m", "brief"))  # type: ignore[arg-type]
-    assert report == {"status": "blocked", "summary": "The form was not finished in 80 steps."}
+    assert report == {"status": "blocked", "summary": "The form was not finished in 150 steps."}
 
 
 def test_the_plugins_text_reaches_the_verifying_model_as_its_rules_while_the_page_stays_text_to_check(tmp_path: Path) -> None:
