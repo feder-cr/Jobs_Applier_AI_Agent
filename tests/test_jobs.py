@@ -251,7 +251,10 @@ def test_filters_match_whole_words_and_keep_symbols_literal(tmp_path: Path) -> N
         [("1", "Java Developer", "Roma, Italy"), ("2", "JavaScript Developer", "Roma"), ("3", "Java Lead", "Bucharest, Romania"), ("4", "C++ Developer", "Roma")],
     )
     path = publish_locally(connection, tmp_path)
-    keys = lambda filters: {job.id for job in search(path, filters, 60, tmp_path)[1]}
+
+    def keys(filters: Filters) -> set[str]:
+        return {job.id for job in search(path, filters, 60, tmp_path)[1]}
+
     assert keys(Filters(include=("java",))) == {"1", "3"}
     assert keys(Filters(include=("java",), locations=("roma",))) == {"1"}
     assert keys(Filters(include=("c++",))) == {"4"}
