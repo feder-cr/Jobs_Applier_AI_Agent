@@ -153,7 +153,12 @@ class Session:
         async def one(item: Stored) -> None:
             async with limit:
                 try:
-                    report = await score_job(self.client, self.config.judge_model, item.job, cv, self.config.goals)
+                    job = item.job
+                    if not job.description.strip():
+                        # Many sources publish no text, and a score from the title alone says little: the posting's own page often has it.
+                        job = await asyncio.to_thread(with_description, job)
+                        self.store.set_description(job.id, job.description)
+                    report = await score_job(self.client, self.config.judge_model, job, cv, self.config.goals)
                 except Exception as error:
                     # One posting that cannot be judged must not stop the others.
                     if refused(error):

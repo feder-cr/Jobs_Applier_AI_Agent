@@ -1,6 +1,6 @@
 ---
 name: lever
-hosts: [jobs.lever.co]
+hosts: [jobs.lever.co, jobs.eu.lever.co]
 apply_path: /apply
 ---
 The form is one page, under the heading "Submit your application". A closed posting shows "Sorry, we couldn't find anything here" (a 404 page): report the form as blocked.

@@ -14,17 +14,11 @@ aihawk-env/bin/pip install git+https://github.com/feder-cr/Jobs_Applier_AI_Agent
 aihawk-env/bin/aihawk resume.pdf
 ```
 
-The resume can be anywhere on your disk: a PDF, a `.docx` or a text file. A scanned PDF has no text to read; export it with text, or save it as `.docx`. The list below is a mockup with invented data, not a capture.
+The resume can be anywhere on your disk: a PDF, a `.docx` or a text file. A scanned PDF has no text to read; export it with text, or save it as `.docx`. Captured from a test search, with an invented CV:
 
-```
- AIHawk  Ada Rossi · Python Engineer, Backend Developer · Milano, Italy      [scoring 12/40]
- ┌───┬───────┬───────┬──────────┬─────────────────────────┬──────────┬────────┐
- │   │ Score │ Apply │ Company  │ Role                    │ Location │ Status │
- │ ● │ 4.8   │ auto  │ Acme     │ Senior Python Engineer  │ Milan    │        │
- │   │ 4.5   │ auto  │ Beta     │ Backend Developer       │ Remote   │ sent   │
- │   │ 4.1   │ link  │ Gamma    │ Python Developer        │ Rome     │        │
- └───┴───────┴───────┴──────────┴─────────────────────────┴──────────┴────────┘
-```
+![The list of jobs, best first, with their scores](docs/demo-list.svg)
+
+![One job: its score, gaps and reasons](docs/demo-job.svg)
 
 The first time, AIHawk asks for an [OrcaRouter](https://orcarouter.ai) key and keeps it in `~/.aihawk/key`; after that, `aihawk` alone reopens your list. To change the key, edit or delete that file, or set `ORCAROUTER_API_KEY`, which wins over the file. If OrcaRouter refuses a key from the file, AIHawk forgets it and asks again.
 
