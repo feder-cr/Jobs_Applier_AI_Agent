@@ -75,12 +75,12 @@ The screen asks for your key and your resume, then shows the jobs, best first.
 
 ## Where it applies
 
-Postings are counted in the job index. One send each so far, so read "confirmed" as "it can send", not "it sends reliably": [what has really been seen](docs/sites.md).
+Postings are counted in the job index. One send each so far, the last of them, on Lever, made by the app as it is now. So read "confirmed" as "it can send", not "it sends reliably": [what has really been seen](docs/sites.md).
 
 | | Sites | Postings |
 |---|---|---|
-| **Sent and confirmed by the page** | Greenhouse, Ashby, Breezy, Recruitee, Teamtailor | ~383k |
-| **Reaches the send button, send not confirmed yet** | SmartRecruiters, Paylocity, Lever, Workable | ~883k |
+| **Sent and confirmed by the page** | Greenhouse, Ashby, Lever, Breezy, Recruitee, Teamtailor | ~484k |
+| **Reaches the send button, send not confirmed yet** | SmartRecruiters, Paylocity, Workable | ~782k |
 | **Often stopped by a captcha** | JazzHR, BambooHR, Personio | ~305k |
 | **By hand, for now: they need an account** | Workday, iCIMS | ~2,103k |
 
