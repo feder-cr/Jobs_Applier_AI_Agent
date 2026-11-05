@@ -3,10 +3,9 @@
   <source media="(max-width: 767px) and (prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/assets/banner-phone-dark.gif">
   <source media="(max-width: 767px)" srcset="https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/assets/banner-phone-light.gif">
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/assets/banner-dark.gif">
-  <img alt="AIHawk, a short film. Your name typed into one form, then another, then the CV you just attached. Nobody wants to apply for a job. You want the job. 10,213,067 postings narrow to 25, each with its reasons. You pick, you say yes once, and a browser you can watch fills the form and sends it. An illustration, with invented companies and an invented person." src="https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/assets/banner-light.gif" width="100%">
+  <img alt="AIHawk, a short film. Your name typed into one form, then another, then the CV you just attached. Nobody wants to apply for a job. You want the job. 10,213,067 postings narrow to 25. You say yes once, and a browser fills the form and sends it, while you sleep. An illustration, with invented companies and an invented person." src="https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/assets/banner-light.gif" width="100%">
 </picture>
-<h3 align="center">Other job bots apply to everything.<br>
-This one applies where you fit.</h3>
+<h3 align="center">An AI web agent that applies to jobs for you while you sleep.</h3>
 
 <sub>THE EARLIER AIHAWK WAS FEATURED IN</sub><br>
 <a href="https://www.businessinsider.com/aihawk-applies-jobs-for-you-linkedin-risks-inaccuracies-mistakes-2024-11"><b>Business Insider</b></a> ·
@@ -34,43 +33,21 @@ Linux:
 curl -LsSf https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/run.sh | sh
 ```
 
-The same command starts and updates it. You need a key: [get one from OrcaRouter](https://www.orcarouter.ai/ref/ref_accd17afb78fc95ac4d7).
+You need a key: [get one from OrcaRouter](https://www.orcarouter.ai/ref/ref_accd17afb78fc95ac4d7).
 
 ---
 
 ## How it works
 
-1. **It finds the jobs.** About 10 million postings, rebuilt daily, narrowed to your resume on your computer. [Jev](https://github.com/feder-cr/jev) reads the best 100.
-2. **It scores them.** The best 25, from 1 to 5, with the gaps and the reasons.
-3. **You say yes once.** It fills the forms you picked, attaches your CV and sends, in [a Firefox](https://github.com/feder-cr/invisible_playwright_mcp) you can watch.
+1. It searches 10 million jobs for the ones that fit your resume.
+2. It scores the best 25 and tells you why.
+3. You pick, say yes once, and it fills the forms and sends them.
 
 ---
 
-## Usage
+[Sites](docs/sites.md) · [Configuration](docs/configuration.md) · [Writing a plugin](docs/plugins.md) · [Wiki](https://github.com/feder-cr/Jobs_Applier_AI_Agent/wiki) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
 
-| Key | What it does |
-|---|---|
-| `enter` | why this score |
-| `space` | select a job |
-| `a` | send the selected jobs, after one yes |
-| `s` | every application, and what each page said |
-| `m` | score the next ones |
-| `e` | settings |
-
----
-
-## Before you send
-
-- **It goes out in your name, unread.** Where your resume says nothing, the model writes "Please see my attached CV", picks the closest option or a plausible number, and ticks the boxes the form requires, the right to work included. You answer for all of it, and some sites do not allow this.
-- **Nothing checks the model in the browser.** It could send early or half filled: [SECURITY.md](SECURITY.md).
-- **Your data.** Your CV and the pages go to OrcaRouter and its providers. The rest stays in `~/.aihawk`.
-- **Downloads.** About 740 MB of job index and 268 MB of browser. Windows and Linux.
-- **The job data is not ours.** Some sources state no licence, and one asks not to be republished: [every source](docs/data-sources.md).
-
----
-
-[Sites](docs/sites.md) · [Configuration](docs/configuration.md) · [Writing a plugin](docs/plugins.md) · [Wiki](https://github.com/feder-cr/Jobs_Applier_AI_Agent/wiki) · [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md)
-
-Built with [OrcaRouter](https://www.orcarouter.ai/ref/ref_accd17afb78fc95ac4d7). Its links here and on the screen are referral links: AIHawk gets 6% of what you spend through them.
-
-[MIT](LICENSE) for the code, see [NOTICE](NOTICE). Provided as-is, with no warranties. Applications go out in your name, and you answer for them and for following each site's terms and the laws of your jurisdiction.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=feder-cr/Jobs_Applier_AI_Agent&type=Date&theme=dark">
+  <img alt="Star history of AIHawk" src="https://api.star-history.com/svg?repos=feder-cr/Jobs_Applier_AI_Agent&type=Date" width="100%">
+</picture>
