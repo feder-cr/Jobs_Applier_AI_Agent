@@ -65,6 +65,6 @@ One send each so far, so "it can send", not "it sends reliably": [what has reall
 
 [Configuration](docs/configuration.md) · [Wiki](https://github.com/feder-cr/Jobs_Applier_AI_Agent/wiki) · [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Notice](NOTICE) · [MIT](LICENSE)
 
-Built with [OrcaRouter](https://www.orcarouter.ai/ref/ref_accd17afb78fc95ac4d7). Its links here are referral links: AIHawk gets 6% of what you spend through them.
+Built with [OrcaRouter](https://www.orcarouter.ai/ref/ref_accd17afb78fc95ac4d7). Its links here and on the screen are referral links: AIHawk gets 6% of what you spend through them.
 
 The former Dots project is at [feder-cr/invisible_dots](https://github.com/feder-cr/invisible_dots).

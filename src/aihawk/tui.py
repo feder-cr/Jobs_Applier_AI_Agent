@@ -14,7 +14,7 @@ from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Input, RichLog, Static
 
-from aihawk.config import KEY_ENV, ConfigError
+from aihawk.config import KEY_ENV, KEY_URL, ConfigError
 from aihawk.database import DatabaseError
 from aihawk.documents import QUESTIONS
 from aihawk.llm import explain, refused
@@ -395,7 +395,7 @@ class AIHawk(App[None]):
         try:
             if session.needs_key():
                 key = await self.push_screen_wait(
-                    TextPrompt("Your OrcaRouter key. Get one at orcarouter.ai; it stays on this computer.", placeholder="sk-orca-...", password=True, hint="Enter saves it Â· Esc stops here Â· Ctrl+C quits")
+                    TextPrompt(f"Your OrcaRouter key. Get one at {KEY_URL} ; it stays on this computer.", placeholder="sk-orca-...", password=True, hint="Enter saves it Â· Esc stops here Â· Ctrl+C quits")
                 )
                 if not key:
                     self.say("AIHawk needs a model key to read your resume and judge jobs. Quit and start again when you have one.")
@@ -555,7 +555,7 @@ class AIHawk(App[None]):
         if config.key_from_environment():
             self.say(f"The key comes from the {KEY_ENV} variable, which wins over one typed here.")
             return
-        key = await self.push_screen_wait(TextPrompt("Your OrcaRouter key. Get one at orcarouter.ai; it stays on this computer.", placeholder="sk-orca-...", password=True, hint="Enter saves it Â· Esc leaves it as it was"))
+        key = await self.push_screen_wait(TextPrompt(f"Your OrcaRouter key. Get one at {KEY_URL} ; it stays on this computer.", placeholder="sk-orca-...", password=True, hint="Enter saves it Â· Esc leaves it as it was"))
         if key:
             self.session.save_key(key)
 

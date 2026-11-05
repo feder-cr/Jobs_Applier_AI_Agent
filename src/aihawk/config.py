@@ -14,6 +14,8 @@ KEY_FILE = "key"
 DEFAULT_BASE_URL = "https://api.orcarouter.ai/v1"
 # The variable that holds the model key, unless the settings name another. The browser is given no variable that holds a key.
 KEY_ENV = "ORCAROUTER_API_KEY"
+# Where a person gets a key. A referral link, as the README says: AIHawk gets a share of what is spent through it.
+KEY_URL = "https://www.orcarouter.ai/ref/ref_accd17afb78fc95ac4d7"
 # Fills the forms and reads their screenshots. Chosen over z-ai/glm-5.3-flash, which was slower and dearer on the same forms.
 DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash"
 # For the plan and the other short calls of a search. deepseek-v4.1-flash did not keep the plan's nested schema, and

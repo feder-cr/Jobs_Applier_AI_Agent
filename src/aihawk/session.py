@@ -11,7 +11,7 @@ from openai import AsyncOpenAI
 
 from aihawk.apply import Outcome, apply_to_job
 from aihawk.apply import sign_in as sign_in_browser
-from aihawk.config import KEY_ENV, Config, ConfigError, load_config
+from aihawk.config import KEY_ENV, KEY_URL, Config, ConfigError, load_config
 from aihawk.database import built_at, search, stored_descriptions, with_description
 from aihawk.documents import score_job
 from aihawk.judge import evidence, fuse, questions
@@ -56,9 +56,9 @@ class Session:
         """OrcaRouter refused the key. One typed in is forgotten, so the next question asks for another; one from the environment is named."""
         self._client = None
         if self.config.key_from_environment():
-            return f"OrcaRouter refused the key in the {KEY_ENV} variable. Set it to a key from https://orcarouter.ai, then start AIHawk again."
+            return f"OrcaRouter refused the key in the {KEY_ENV} variable. Set it to a key from {KEY_URL}, then start AIHawk again."
         self.config.key_file.unlink(missing_ok=True)
-        return "OrcaRouter refused the key, so AIHawk forgot it. Get one at https://orcarouter.ai and type it in again."
+        return f"OrcaRouter refused the key, so AIHawk forgot it. Get one at {KEY_URL} and type it in again."
 
     def needs_resume(self) -> bool:
         return not self.config.cv.is_file() or not self.config.filters.include
