@@ -19,10 +19,11 @@ What AIHawk can do on each site, from the real forms it has been run on. Posting
 | Workday (myworkdayjobs.com, myworkdaysite.com) | ~1,481k | not supported | Needs an account. |
 | iCIMS (icims.com) | ~622k | not supported | Needs an account. |
 
-Postings per status, in the index: sent and confirmed ~383k; filled, send not confirmed ~101k; filled, no send tried yet ~782k; stops at a captcha most or half of the time ~305k; not supported ~2,103k.
+Postings per status, in the index: sent and confirmed ~383k; reaches the send button, send not confirmed ~101k; reaches the send button, no send tried yet ~782k; stops at a captcha most or half of the time ~305k; not supported ~2,103k.
 
 Notes:
 
+- A form no longer stops at what the CV does not say. The sends behind "sent and confirmed" were made before that change, when other forms on those sites stopped at required questions.
 - "Sent and confirmed" rests on one send per site. Treat it as "it can send", not "it sends reliably".
 - A form asks the person for whatever the CV and answers do not cover, then tries again. In trials with test answers most forms stopped there, as they should.
 - Greenhouse's confirmation page was not saved, so its plugin keeps generic wording. Ashby's, Breezy's, Recruitee's and Teamtailor's are quoted in their plugins.
