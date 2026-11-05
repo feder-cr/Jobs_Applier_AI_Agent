@@ -33,3 +33,11 @@ AIHawk reads job pages written by strangers, fills their forms, and sends applic
 - **The mail plugins read the mailbox that the browser is signed into.** That is how a code or a link is taken from the mail. It is limited by the instructions in those plugins, not enforced by the browser or by the code.
 - **A captcha or a sign-in is not bypassed.** The model reports the form as blocked, and the person deals with it.
 - **The model is a third-party service.** Everything sent to it, including the CV and what the pages say, leaves the machine. The model's output is not trusted: the person selects, and the send is checked by AIHawk.
+
+## Before you send
+
+- **It goes out in your name, unread.** Where your resume says nothing, the model writes "Please see my attached CV", picks the closest option or a plausible number, and ticks the boxes the form requires, the right to work included. You answer for all of it, and some sites do not allow this.
+- **Nothing checks the model in the browser.** It could send early or half filled: [SECURITY.md](SECURITY.md).
+- **Your data.** Your CV and the pages go to OrcaRouter and its providers. The rest stays in `~/.aihawk`.
+- **Downloads.** About 740 MB of job index and 268 MB of browser. Windows and Linux.
+- **The job data is not ours.** Some sources state no licence, and one asks not to be republished: [every source](docs/data-sources.md).
