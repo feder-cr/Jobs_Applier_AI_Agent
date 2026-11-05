@@ -2,6 +2,8 @@
 name: smartrecruiters
 hosts: [jobs.smartrecruiters.com]
 ---
+On real postings this form has not reached its end yet: in the trials the CV did not attach and the phone number was refused. When either happens, report what the page shows.
+
 The job page shows the posting and an "I'm interested" link. Follow it: the form opens as "Easy Apply" on an oneclick-ui page.
 
 The form is in steps. Fill the fields of the step you see, go on with the footer "Next" button, and read the page again. Report ready only on the last step, with the control that sends the form.

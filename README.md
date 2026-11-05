@@ -58,7 +58,7 @@ The model fills the form and names the submit button; it is told not to send, an
 
 ## Sites
 
-Plugins cover Ashby, BambooHR, Breezy, Greenhouse, JazzHR, Lever, Paylocity, Personio, Recruitee, SmartRecruiters, Teamtailor and Workable. Other postings are listed for applying by hand. The Gmail and Outlook plugins take a code or a link from your mailbox, read only; they have not been tried on a real mailbox yet.
+Sites vary a lot: Greenhouse and Ashby have one confirmed real send each, the others fill forms without sending, stop at a captcha or at questions, or need an account. [docs/sites.md](docs/sites.md) gives each site's status and what stops it. Other postings are listed for applying by hand. The Gmail and Outlook plugins take a code or a link from your mailbox, read only; they have not been tried on a real mailbox yet.
 
 A plugin is a Markdown file in [`src/aihawk/plugins/`](src/aihawk/plugins) that explains one site's form to the model. Add a site with a file and no code: see [docs/plugins.md](docs/plugins.md). Your own go in `~/.aihawk/plugins/`.
 
