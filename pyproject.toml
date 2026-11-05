@@ -41,9 +41,9 @@ dev = ["pytest>=8", "ruff>=0.6"]
 aihawk = "aihawk.cli:run"
 
 [project.urls]
-Homepage = "https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk"
-Issues = "https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk/issues"
-Changelog = "https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/feder-cr/Jobs_Applier_AI_Agent"
+Issues = "https://github.com/feder-cr/Jobs_Applier_AI_Agent/issues"
+Changelog = "https://github.com/feder-cr/Jobs_Applier_AI_Agent/blob/main/CHANGELOG.md"
 
 [tool.hatch.version]
 path = "src/aihawk/__init__.py"

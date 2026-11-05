@@ -7,8 +7,8 @@ AIHawk is a command-line program in Python. The most useful contribution is a pl
 You need Python 3.11 or newer. CI runs the unit tests on 3.11 and 3.12, on Ubuntu, Windows and macOS.
 
 ```sh
-git clone https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk
-cd Jobs_Applier_AI_Agent_AIHawk
+git clone https://github.com/feder-cr/Jobs_Applier_AI_Agent
+cd Jobs_Applier_AI_Agent
 python -m venv .venv
 . .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
@@ -60,7 +60,7 @@ The other workflow, `.github/workflows/jobs-database.yml`, builds the job databa
 - Anything that weakens what the person controls: a change that lets the model send a form or an email without the person's yes, that lets a page's text steer the model past the rules in `apply.py`, that reads mail beyond what the mail plugins allow, or that gets around a captcha or a login.
 - Real personal data in fixtures or examples: no real CVs, names, e-mail addresses, phone numbers or screenshots of someone's application. Invent the data.
 
-Use the issue templates for bugs and plugin requests. For a security problem, do not open an issue: follow [SECURITY.md](SECURITY.md). Questions go to [Discussions](https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk/discussions).
+Use the issue templates for bugs and plugin requests. For a security problem, do not open an issue: follow [SECURITY.md](SECURITY.md). Questions go to [Discussions](https://github.com/feder-cr/Jobs_Applier_AI_Agent/discussions).
 
 ## License
 

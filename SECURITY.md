@@ -5,7 +5,7 @@
 Do not open a public issue or a pull request for a security problem. Report it privately with GitHub's private vulnerability reporting:
 
 1. Open the repository's **Security** tab.
-2. Choose **Report a vulnerability**. Direct link: https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk/security/advisories/new
+2. Choose **Report a vulnerability**. Direct link: https://github.com/feder-cr/Jobs_Applier_AI_Agent/security/advisories/new
 
 Say what you found, how to reproduce it, and what you think a person could lose. Do not include a real person's CV, e-mail or sign-in, or a working API key. Replace them with invented ones.
 

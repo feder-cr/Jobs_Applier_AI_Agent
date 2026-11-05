@@ -23,13 +23,13 @@
 Windows, in PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk/main/run.ps1 | iex
+irm https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/run.ps1 | iex
 ```
 
 Linux:
 
 ```bash
-curl -LsSf https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk/main/run.sh | sh
+curl -LsSf https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/run.sh | sh
 ```
 
 That is the only command, now and every time after: it installs what is missing, updates AIHawk and starts it. Everything else is on the screen.
@@ -63,6 +63,6 @@ One send each so far, so "it can send", not "it sends reliably": [what has reall
 
 ---
 
-[Configuration](docs/configuration.md) · [Wiki](https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk/wiki) · [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Notice](NOTICE) · [MIT](LICENSE)
+[Configuration](docs/configuration.md) · [Wiki](https://github.com/feder-cr/Jobs_Applier_AI_Agent/wiki) · [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Notice](NOTICE) · [MIT](LICENSE)
 
 The former Dots project is at [feder-cr/invisible_dots](https://github.com/feder-cr/invisible_dots).
