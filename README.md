@@ -74,6 +74,6 @@ Models go through OrcaRouter: `model` (default `deepseek/deepseek-v4.1-flash`) w
 - **Uninstall:** `pipx uninstall aihawk` (or `uv tool uninstall aihawk`), then delete `~/.aihawk`, which holds your CV, key and sign-ins.
 - **The search:** the plan is `filters.plan` in `~/.aihawk/aihawk.yaml`; restart `aihawk` after editing it.
 
-More: the [wiki](https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk/wiki), [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), [CHANGELOG.md](CHANGELOG.md). The job database merges public sources, whose licences and posting links are in [NOTICE](NOTICE); each posting belongs to its employer. The report's shape is adapted from [career-ops](https://github.com/santifer/career-ops) (MIT).
+More: the [wiki](https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk/wiki), [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), [CHANGELOG.md](CHANGELOG.md). The job database merges public sources, whose licences and posting links are in [NOTICE](NOTICE) and [docs/data-sources.md](docs/data-sources.md); each posting belongs to its employer. The report's shape is adapted from [career-ops](https://github.com/santifer/career-ops) (MIT).
 
 [MIT](LICENSE). The former Dots project is at [feder-cr/invisible_dots](https://github.com/feder-cr/invisible_dots).

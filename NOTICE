@@ -12,3 +12,4 @@ The published job database
   Is merged from the public sources named in pipeline/build.py, each with its home and licence as far as
   it states one; each release's manifest.json lists them, with the rows each gave or the error that left
   it out that day, and every row names the sources that carried it. Each posting belongs to its employer and links back to the original.
+  [docs/data-sources.md](docs/data-sources.md) lists each source with its licence and how to ask for its removal.
