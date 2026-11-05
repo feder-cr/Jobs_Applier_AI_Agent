@@ -3,10 +3,10 @@
   <source media="(max-width: 767px) and (prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/assets/banner-phone-dark.gif">
   <source media="(max-width: 767px)" srcset="https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/assets/banner-phone-light.gif">
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/assets/banner-dark.gif">
-  <img alt="AIHawk. An animation: 10 million job postings narrow to the 600 whose titles fit a resume, 100 read by a decision model, 25 scored from 1 to 5, then one yes, and an application submitted." src="https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/assets/banner-light.gif" width="100%">
+  <img alt="AIHawk, a short film. Your name typed into one form, then another, then the CV you just attached. Nobody wants to apply for a job. You want the job. 10,213,067 postings narrow to 25, each with its reasons. You pick, you say yes once, and a browser you can watch fills the form and sends it. An illustration, with invented companies and an invented person." src="https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/assets/banner-light.gif" width="100%">
 </picture>
 <h3 align="center">Applying by hand takes days, and most postings do not fit you.<br>
-AIHawk reads 10 million of them against your resume, and applies to the ones you pick, in a browser you can watch.</h3>
+AIHawk narrows 10 million of them down to the ones that fit your resume, and applies to those you pick, in a browser you can watch.</h3>
 
 <sub>THE EARLIER AIHAWK WAS FEATURED IN</sub><br>
 <a href="https://www.businessinsider.com/aihawk-applies-jobs-for-you-linkedin-risks-inaccuracies-mistakes-2024-11"><b>Business Insider</b></a> ·
@@ -19,8 +19,6 @@ AIHawk reads 10 million of them against your resume, and applies to the ones you
 </div>
 
 <br>
-
-![AIHawk: the jobs that fit, why each one fits, select, and send. A test search with an invented CV.](docs/demo.gif)
 
 ## How it works
 
@@ -72,19 +70,6 @@ The screen asks for your key and your resume, then shows the jobs, best first.
 | `e` | settings: resume, sign-in to your mail and job sites, what to look for, where, models |
 
 ---
-
-## Where it applies
-
-Postings are counted in the job index. One send each so far, the last of them, on Lever, made by the app as it is now. So read "confirmed" as "it can send", not "it sends reliably": [what has really been seen](docs/sites.md).
-
-| | Sites | Postings |
-|---|---|---|
-| **Sent and confirmed by the page** | Greenhouse, Ashby, Lever, Breezy, Recruitee, Teamtailor | ~484k |
-| **Reaches the send button, send not confirmed yet** | SmartRecruiters, Paylocity, Workable | ~782k |
-| **Often stopped by a captcha** | JazzHR, BambooHR, Personio | ~305k |
-| **Tried with no plugin** | Workday, iCIMS and every other site. A sign-in or a puzzle stops the form: sign in with `e`, and it can go on | ~2,103k and more |
-
-A site is one Markdown file that explains its pages to the model, with no code: [add yours](docs/plugins.md).
 
 ## Measured
 
