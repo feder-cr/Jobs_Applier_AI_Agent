@@ -21,6 +21,28 @@
 
 ---
 
+## How it works
+
+Give it your resume. It finds the jobs that fit, you pick, and it applies.
+
+| Step | What happens |
+|---|---|
+| **1. Reads your resume** | Turns it into a search: the titles, the skills and the places that fit you. |
+| **2. Searches** | 10 million postings from 24 public sources, rebuilt every day, searched on your computer. |
+| **3. Scores** | Reads the best 100 against your resume, then scores the top 25 from 1 to 5, with the gaps and the reasons. |
+| **4. You pick** | Select the jobs you want and say yes once. |
+| **5. Applies** | A real Firefox opens the company's form, fills every required field, attaches your CV and sends. |
+| **6. Keeps the answer** | What each page said, with a screenshot, for every application. |
+
+## Why AIHawk
+
+- **The company's own form.** No LinkedIn account and no Easy Apply: it applies where the company takes applications.
+- **Every posting is tried.** There is no list of sites it refuses, and a site can be taught in one Markdown file: [what has been confirmed](docs/sites.md).
+- **A browser built to look like yours.** [invisible-playwright-mcp](https://github.com/feder-cr/invisible_playwright_mcp) is a real Firefox with a person's hands, in a window you can watch.
+- **One command.** It installs what it needs, and everything else happens on the screen.
+
+---
+
 ## Install
 
 Windows, in PowerShell:
@@ -37,13 +59,6 @@ curl -LsSf https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main
 
 You need a key: [get one from OrcaRouter](https://www.orcarouter.ai/ref/ref_accd17afb78fc95ac4d7).
 
----
-
-## How it works
-
-1. It searches 10 million jobs for the ones that fit your resume.
-2. It scores the best 25 and tells you why.
-3. You pick, say yes once, and it fills the forms and sends them.
 
 ---
 
