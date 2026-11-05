@@ -102,12 +102,31 @@ def _inline(text: str) -> str:
     return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", escape(text))
 
 
-def write_cv_pdf(markdown: str, path: Path) -> None:
-    """The CV as a PDF with selectable text, in the Vera font reportlab ships: Latin scripts only."""
+class MissingGlyphs(ValueError):
+    """The text has characters the CV's font cannot draw. Its characters are the message."""
+
+
+def _register_fonts() -> None:
     if "Vera" not in pdfmetrics.getRegisteredFontNames():
         pdfmetrics.registerFont(TTFont("Vera", "Vera.ttf"))
         pdfmetrics.registerFont(TTFont("VeraBd", "VeraBd.ttf"))
         pdfmetrics.registerFontFamily("Vera", normal="Vera", bold="VeraBd", italic="Vera", boldItalic="VeraBd")
+
+
+def missing_glyphs(markdown: str) -> str:
+    """The characters of the text that the CV's font has no glyph for, each once: a PDF would show them as blanks."""
+    _register_fonts()
+    drawn = pdfmetrics.getFont("Vera").face.charToGlyph
+    return "".join(dict.fromkeys(char for char in markdown if not char.isspace() and ord(char) not in drawn))
+
+
+def write_cv_pdf(markdown: str, path: Path) -> None:
+    """The CV as a PDF with selectable text, in the Vera font reportlab ships: Latin scripts only. Text it cannot draw
+    raises MissingGlyphs, and no file is written."""
+    missing = missing_glyphs(markdown)
+    if missing:
+        raise MissingGlyphs(missing)
+    _register_fonts()
     body = ParagraphStyle("body", fontName="Vera", fontSize=10, leading=14, spaceAfter=4)
     title = ParagraphStyle("title", parent=body, fontName="VeraBd", fontSize=18, leading=22, spaceAfter=8)
     section = ParagraphStyle("section", parent=body, fontName="VeraBd", fontSize=12, leading=16, spaceBefore=8)

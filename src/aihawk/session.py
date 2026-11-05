@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 from openai import AsyncOpenAI
@@ -12,8 +13,8 @@ from openai import AsyncOpenAI
 from aihawk.apply import Outcome, apply_to_job
 from aihawk.apply import sign_in as sign_in_browser
 from aihawk.config import Config, ConfigError, load_config
-from aihawk.database import search, stored_descriptions, with_description
-from aihawk.documents import score_job, tailor_cv, write_cv_pdf
+from aihawk.database import built_at, search, stored_descriptions, with_description
+from aihawk.documents import MissingGlyphs, score_job, tailor_cv, write_cv_pdf
 from aihawk.judge import evidence, fuse, questions
 from aihawk.llm import explain, make_client, refused
 from aihawk.plugins import Plugin, always_plugins, load_plugins, plugin_for
@@ -27,6 +28,10 @@ SCORING_AT_ONCE = 5
 # A form that asks something is tried again with the answers, this many rounds at most.
 MAX_ROUNDS = 3
 ASKED = ("needs_input", "refused")
+# A job database built longer ago than this is said to be stale: the person is told no newer one has been published.
+STALE_DAYS = 7
+# An age limit no posting can pass: the search with it shows what the age limit alone leaves out.
+NO_AGE_LIMIT = 36500
 
 Log = Callable[[str], None]
 Ask = Callable[[str], Awaitable[str | None]]
@@ -79,14 +84,24 @@ class Session:
         await sign_in_browser(self.config.browser_profile, self.config.data_dir / "browser", wait, self.config.api_key_env)
 
     async def find(self, log: Log) -> int:
-        """Bring today's postings for this search into the store; how many are new."""
+        """Bring the postings for this search from the job database into the store; how many are new."""
         loop = asyncio.get_running_loop()
+        index = self.config.data_dir / "index"
         # search runs in a thread, and the screen may be touched only from the loop: its lines are handed over to it.
         manifest, jobs = await asyncio.to_thread(
-            search, self.config.database, self.config.filters, self.config.max_age_days, self.config.data_dir / "index", lambda line: loop.call_soon_threadsafe(log, line)
+            search, self.config.database, self.config.filters, self.config.max_age_days, index, lambda line: loop.call_soon_threadsafe(log, line)
         )
         new = sum(self.store.add(job) for job in jobs)
-        log(f"{len(jobs)} postings fit your search, of {manifest['rows_out']:,} in today's database; {new} new")
+        built = built_at(manifest)
+        age = (datetime.now(UTC) - built).days
+        log(f"{len(jobs)} postings fit your search, of {manifest['rows_out']:,} in the job database built {built:%Y-%m-%d}; {new} new")
+        if age > STALE_DAYS:
+            log(f"The job database is {age} days old, and no newer one has been published.")
+        if not jobs:
+            # The same search with no age limit: if postings fit it, the age limit is why none are shown.
+            _, unaged = await asyncio.to_thread(search, self.config.database, self.config.filters, NO_AGE_LIMIT, index)
+            if unaged:
+                log(f"{len(unaged)} postings fit your search but were posted more than {self.config.max_age_days} days ago, so none are shown.")
         return new
 
     async def funnel(self, log: Log, status: Log) -> int:
@@ -104,17 +119,20 @@ class Session:
         def shown(done: int) -> None:
             status(f"Jev reads {done}/{len(jobs)}")
 
+        reasons: list[str] = []
         try:
             # The client is read here: with no key every verdict fails, the title alone decides, and the log says so once.
-            values = await evidence(self.client, self.config.decision_model, cv, jobs, asked, shown)
+            values = await evidence(self.client, self.config.decision_model, cv, jobs, asked, shown, reasons.append)
         except Exception as error:
             # Only the client can fail here; a batch that fails is a failed verdict inside evidence.
             if refused(error):
                 raise
             values = [None] * len(jobs)
+            reasons.append(explain(error))
         failed = sum(value is None for value in values)
         if failed:
-            log(f"Jev could not read {failed} of {len(jobs)} postings: they are ranked by their title alone")
+            why = "; ".join(dict.fromkeys(reasons))
+            log(f"Jev could not read {failed} of {len(jobs)} postings: {why}; they are ranked by their title alone")
         for job, value in zip(jobs, values, strict=True):
             if value is not None:
                 self.store.set_evidence(job.id, value)
@@ -154,10 +172,24 @@ class Session:
         tailored = await tailor_cv(self.client, self.config.model, job, cv)
         path = self.config.data_dir / "cvs" / f"{safe_name(item.job.id)}.pdf"
         path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            write_cv_pdf(tailored, path)
+        except MissingGlyphs as error:
+            # The font cannot draw this posting's language, and a PDF with blanks where the text is must not be uploaded.
+            own = self._own_cv()
+            log(f"the CV written for this job cannot show {str(error)[:12]!r}, which the PDF font does not have: your own CV is sent with this application")
+            self.store.set_cv(item.job.id, own)
+            return own
         path.with_suffix(".md").write_text(tailored, encoding="utf-8")
-        write_cv_pdf(tailored, path)
         self.store.set_cv(item.job.id, path)
         return path
+
+    def _own_cv(self) -> Path:
+        """The person's CV as they gave it, kept by install_resume beside the tailored ones."""
+        kept = sorted((self.config.data_dir / "cvs").glob("original-cv.*"))
+        if not kept:
+            raise ConfigError("the CV for this posting cannot be written in its language, and your own CV file is not kept: load your resume again")
+        return kept[0]
 
     async def send(self, items: list[Stored], ask: Ask, log: Log, done: Callable[[], None]) -> None:
         """Send each application once. A form's questions are put to the person after the others are sent, so a form that

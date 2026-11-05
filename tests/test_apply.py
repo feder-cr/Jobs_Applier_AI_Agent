@@ -15,6 +15,7 @@ import pytest
 from pypdf import PdfReader
 
 from aihawk import apply as apply_module
+from aihawk import session as session_module
 from aihawk.apply import (
     FINISH_TOOL,
     MODEL_TOOLS,
@@ -33,6 +34,7 @@ from aihawk.apply import (
 )
 from aihawk.database import Job
 from aihawk.documents import score_from, score_job, tailor_cv, write_cv_pdf
+from aihawk.session import Session
 from fakes import ScriptedBrowser, ScriptedModel, tool_call
 
 JOB = Job("g:a:1", "Acme", "Engineer", "Rome", "https://u", "https://u/apply", "Build things")
@@ -743,6 +745,26 @@ def test_the_goals_reach_the_model_and_the_score_is_computed_not_asked() -> None
 def test_tailor_drops_a_code_fence() -> None:
     model = ScriptedModel("```markdown\n# Name\n```")
     assert asyncio.run(tailor_cv(model, "m", JOB, "cv")) == "# Name"  # type: ignore[arg-type]
+
+
+def test_a_cv_in_a_script_the_font_cannot_draw_is_not_uploaded_and_the_persons_own_is_sent_instead(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def tailored(client: Any, model: str, job: Job, cv: str) -> str:
+        return "# Иван Петров\n\n- Опыт работы"
+
+    monkeypatch.setattr(session_module, "tailor_cv", tailored)
+    session = Session(tmp_path)
+    session._client = SimpleNamespace()  # type: ignore[assignment]  # tailor_cv is stubbed, so no call is made
+    own = tmp_path / "data" / "cvs" / "original-cv.pdf"
+    own.parent.mkdir(parents=True)
+    own.write_bytes(b"%PDF-1.4 the person's CV")
+    session.store.add(JOB)
+    said: list[str] = []
+    path = asyncio.run(session._cv_for(session.store.with_status("new")[0], "cv", said.append))
+    session.close()
+    assert path == own
+    assert list((tmp_path / "data" / "cvs").glob("*.pdf")) == [own]
+    assert said[0] == "writing a CV for this job"
+    assert len(said) == 2 and said[1].startswith("the CV written for this job cannot show ") and "your own CV is sent" in said[1]
 
 
 def test_the_pdf_holds_the_text_accents_and_markup_safely(tmp_path: Path) -> None:

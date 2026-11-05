@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -167,6 +168,12 @@ async def install_resume(client: AsyncOpenAI, config: Config, path: Path) -> dic
     profile = await structured(client, config.quick_model, PROFILE_SYSTEM, cv, "search_profile", PROFILE_SCHEMA)
     config.workspace.mkdir(parents=True, exist_ok=True)
     config.cv.write_text(cv, encoding="utf-8")
+    # The file as the person gave it: the CV an application sends when its own CV cannot be written in the posting's language.
+    kept = config.data_dir / "cvs"
+    kept.mkdir(parents=True, exist_ok=True)
+    for old in kept.glob("original-cv.*"):
+        old.unlink()
+    shutil.copyfile(path, kept / f"original-cv{path.suffix.lower()}")
 
     settings_path = config.workspace / CONFIG_FILE
     settings = (yaml.safe_load(settings_path.read_text(encoding="utf-8-sig")) or {}) if settings_path.is_file() else {}

@@ -111,6 +111,13 @@ def test_a_plugin_saved_with_a_byte_order_mark_is_read(tmp_path: Path) -> None:
     assert plugin_for("https://my.example/1", load_plugins(tmp_path)).instructions == "Mine."
 
 
+def test_a_plugin_that_is_not_utf8_is_refused_by_its_name(tmp_path: Path) -> None:
+    (tmp_path / "plugins").mkdir()
+    (tmp_path / "plugins" / "mysite.md").write_bytes(b"---\nhosts: [my.example]\n---\nCaf\xe9 instructions.")
+    with pytest.raises(PluginError, match="plugin mysite.md: it is not UTF-8 text"):
+        load_plugins(tmp_path)
+
+
 def test_a_site_no_plugin_knows_has_no_plugin() -> None:
     assert plugin_for("https://nobody.example/1", load_plugins()) is None
 
