@@ -2,7 +2,7 @@
 
 AIHawk's job database merges 24 public sources. `pipeline/build.py` reads each one every day, and the release keeps the postings that survive the merge. Each posting names the sources that carried it.
 
-The licence column says what the source's own page or dataset card states. "Not stated" means no licence was found on that page or in the repository's files. Nothing here is a legal opinion. Postings belong to their employers, and the link in each row goes to the page this table relies on.
+The licence column says what the source's own page or dataset card states. "Not stated" means no licence was found on that page or in the repository's files. Nothing here is a legal opinion. Postings belong to their employers, and the link in each row goes to the page this table relies on. AIHawk's MIT licence covers its code, not this data.
 
 The repository does not state how many postings each source gives. The total in [README.md](../README.md) is for the whole database.
 
@@ -18,7 +18,7 @@ The repository does not state how many postings each source gives. The total in 
 | `headcount-internships` | Internship postings | Hugging Face `HeadcountLabs/internships` | ODbL 1.0 | [dataset card](https://huggingface.co/datasets/HeadcountLabs/internships) |
 | `headcount-healthcare` | Healthcare job postings | Hugging Face `HeadcountLabs/healthcare-jobs` | ODbL 1.0 | [dataset card](https://huggingface.co/datasets/HeadcountLabs/healthcare-jobs) |
 | `eu-tech-jobs` | EU tech job postings, latest snapshot | Hugging Face `Aramente/eu-tech-jobs` | CC-BY-4.0 | [dataset card](https://huggingface.co/datasets/Aramente/eu-tech-jobs) |
-| `minmaxxxer` | Job postings with salaries | Hugging Face `minmaxxxer/job-postings-with-salaries` | Not stated. The card says "research-use" and gives no terms. It also says job descriptions belong to their employers. | [dataset card](https://huggingface.co/datasets/minmaxxxer/job-postings-with-salaries) |
+| `minmaxxxer` | Job postings with salaries | Hugging Face `minmaxxxer/job-postings-with-salaries` | Its own `LICENSE`: research, analysis, teaching and model development; "Do not republish the postings as job listings of your own." | [LICENSE](https://huggingface.co/datasets/minmaxxxer/job-postings-with-salaries/blob/main/LICENSE) |
 | `lookin4jobs` | Open job data in one JSON file | `lookin4jobs/open-jobs-data`, `data/jobs.json` | MIT (the repository's licence). The README says postings belong to their employers. | [open-jobs-data](https://github.com/lookin4jobs/open-jobs-data) |
 | `conorscode` | Open job data in one JSON file | `ConorsCode/open-jobs-data`, `data/jobs.json` | MIT (the repository's licence). The README says postings belong to their employers. | [open-jobs-data](https://github.com/ConorsCode/open-jobs-data) |
 | `fecklesspleb` | New jobs from ATS boards, in CSV | `fecklesspleb/ats-new-jobs-feed`, `data/jobs.csv` | MIT | [ats-new-jobs-feed](https://github.com/fecklesspleb/ats-new-jobs-feed) |
@@ -27,11 +27,15 @@ The repository does not state how many postings each source gives. The total in 
 | `vanshb03-new-grad` | New-grad job listings for 2027 | `vanshb03/New-Grad-2027`, `.github/scripts/listings.json` | MIT (`LICENSE.txt`) | [New-Grad-2027](https://github.com/vanshb03/New-Grad-2027) |
 | `vanshb03-internships` | Summer 2026 internship listings | `vanshb03/Summer2026-Internships`, `.github/scripts/listings.json` | MIT (`LICENSE.txt`) | [Summer2026-Internships](https://github.com/vanshb03/Summer2026-Internships) |
 | `simplify-trabaho` | Job listings in `data/listings.json` | `yanicells/SimplifyTrabaho` | MIT for the code. The README says the dataset is CC0 1.0 (public domain). | [SimplifyTrabaho](https://github.com/yanicells/SimplifyTrabaho) |
-| `headcount-engineering-interns` | Engineering internship postings, in CSV | `HeadcountLabs/engineering-internships`, `data/jobs.csv` | ODbL 1.0 for the job data (the repository's `LICENSE`). Job descriptions belong to their employers. | [engineering-internships](https://github.com/HeadcountLabs/engineering-internships) |
-| `headcount-software-interns` | Software engineering internship postings, in CSV | `HeadcountLabs/software-engineering-internships`, `data/jobs.csv` | ODbL 1.0 for the list data. Headcount Labs' own values are under DbCL 1.0. Job descriptions belong to their employers. | [software-engineering-internships](https://github.com/HeadcountLabs/software-engineering-internships) |
+| `headcount-engineering-interns` | Engineering internship postings, in CSV | `HeadcountLabs/engineering-internships`, `data/jobs.csv` | ODbL 1.0 for the job data (the repository's `LICENSE`). Job descriptions belong to their employers. Takedowns: [headcountlabs.com/remove](https://headcountlabs.com/remove/). | [engineering-internships](https://github.com/HeadcountLabs/engineering-internships) |
+| `headcount-software-interns` | Software engineering internship postings, in CSV | `HeadcountLabs/software-engineering-internships`, `data/jobs.csv` | ODbL 1.0 for the list data. Headcount Labs' own values are under DbCL 1.0. Job descriptions belong to their employers. Takedowns: [headcountlabs.com/remove](https://headcountlabs.com/remove/). | [software-engineering-internships](https://github.com/HeadcountLabs/software-engineering-internships) |
 | `applyguy` | 2027 new-grad jobs | `ApplyGuy/2027-New-Grad-Jobs`, `data/new-grad-jobs.json` | Not stated. No LICENSE file was found. | [2027-New-Grad-Jobs](https://github.com/ApplyGuy/2027-New-Grad-Jobs) |
 | `fde-jobs` | Forward-deployed engineer job list, in CSV | `stephanelx88/forward-deployed-engineer-jobs`, `data/fde-jobs.csv` | CC BY 4.0 | [forward-deployed-engineer-jobs](https://github.com/stephanelx88/forward-deployed-engineer-jobs) |
 | `remote-india` | Remote jobs open to India, in one JSON file | `raghavendra81422-boop/remote-jobs-open-to-india`, `data.json` | MIT (the repository's `LICENSE` file) | [LICENSE](https://raw.githubusercontent.com/raghavendra81422-boop/remote-jobs-open-to-india/HEAD/LICENSE) |
+
+## Credit
+
+Credit the sources ask for: job data from [Headcount Labs](https://headcountlabs.com), ODbL 1.0, with location data from OpenStreetMap contributors (ODbL) and Overture Maps; Forward Deployed Engineer jobs from FDE Times, CC BY 4.0.
 
 ## Removing a source
 
