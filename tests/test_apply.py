@@ -178,6 +178,29 @@ def test_the_model_is_not_offered_what_cannot_be_checked() -> None:
     assert FINISH_TOOL["function"]["name"] == "finish_form"
 
 
+@pytest.fixture(autouse=True)
+def no_wait_for_a_send(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(apply_module, "SEND_POLL_S", 0)
+
+
+class SlowSend(ScriptedBrowser):
+    """The form stays on the page for some reads after the click, then the address moves and the text changes."""
+
+    def __init__(self, reads_until_moved: int) -> None:
+        super().__init__({"#send": SUBMIT}, page={"url": "https://u/apply", "text": "the form"})
+        self.reads_until_moved = reads_until_moved
+
+    async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
+        if self.clicks() and name == "browser_evaluate" and "location.href" in (arguments or {}).get("expression", ""):
+            self.reads_until_moved -= 1
+            if self.reads_until_moved <= 0:
+                self.page = {"url": "https://u/thanks", "text": "Application received"}
+        if name == "browser_read_text":
+            self.calls.append((name, arguments or {}))
+            return SimpleNamespace(isError=False, content=[SimpleNamespace(text=self.page["text"])])
+        return await super().call_tool(name, arguments)
+
+
 def run(model: ScriptedModel, browser: Any, shot: Path, guidance: str = "", reaches: frozenset[str] = frozenset()) -> Outcome:
     return asyncio.run(run_on_page(browser, [], model, "m", JOB, "cv", "answers", Path("cv.pdf"), shot, guidance, reaches=reaches))  # type: ignore[arg-type]
 
@@ -478,7 +501,16 @@ def test_the_plugins_text_reaches_the_verifying_model_as_its_rules_while_the_pag
     run(model, ScriptedBrowser({"#send": SUBMIT}), tmp_path / "proof.png", guidance)
     verifying = model.requests[-1]["messages"]
     assert guidance in verifying[0]["content"]
-    assert verifying[1]["content"] == "Thank you, your application was received"
+    assert verifying[1]["content"].endswith("Thank you, your application was received")
+    assert guidance not in verifying[1]["content"]
+
+
+def test_a_send_slow_to_show_is_judged_on_the_page_it_reached_with_its_address(tmp_path: Path) -> None:
+    model = ScriptedModel(ready(), json.dumps({"outcome": "submitted", "evidence": "the page"}))
+    outcome = run(model, SlowSend(reads_until_moved=8), tmp_path / "shot.png")
+    judged = model.requests[-1]["messages"][-1]["content"]
+    assert "https://u/thanks" in judged and "Application received" in judged and "the form" not in judged
+    assert outcome.proof.text == "Application received" and outcome.proof.url == "https://u/thanks"
 
 
 @pytest.mark.parametrize(
