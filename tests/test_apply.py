@@ -803,7 +803,14 @@ def test_asking_for_a_sign_in_code_is_not_a_send_but_submitting_one_is() -> None
     def button(text: str) -> dict[str, object]:
         return {"tag": "button", "type": "submit", "in_form": True, "text": text}
 
-    for text in ("Send code", "Send verification code", "Invia codice", "Enviar código", "Code senden"):
+    for text in (
+        "Send code", "Send verification code", "Send me a code", "Invia codice", "Enviar código", "Code senden",
+        "Solicitar código de verificación",
+    ):
         assert not sends_form(button(text), True), text
-    for text in ("Submit code", "Send", "Send application"):
+    # A send word beside the code request still sends: the request is taken out and the rest is judged.
+    for text in (
+        "Submit code", "Send", "Send application", "Submit application and send code", "Send application and code",
+        "Solicitar empleo", "Solicitar",
+    ):
         assert sends_form(button(text), True), text
