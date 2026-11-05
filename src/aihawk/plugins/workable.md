@@ -21,4 +21,6 @@ A `gdpr` checkbox states that the person read the privacy notice and consents to
 
 The submit control is `form > button[type='submit']`, the button "Submit application" (in Portuguese, "Enviar candidatura").
 
+A Cloudflare box "verifying you are not a robot" can sit above the submit button. Seen on a real form with the button stuck on "Submitting…" beside the box, unticked: if it shows before sending, tick it first.
+
 After sending: read the page: if the form is still there, the application was not received.
