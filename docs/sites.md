@@ -28,3 +28,11 @@ Notes:
 - A form asks the person for whatever the CV and answers do not cover, then tries again. In trials with test answers most forms stopped there, as they should.
 - Greenhouse's confirmation page was not saved, so its plugin keeps generic wording. Ashby's, Breezy's, Recruitee's and Teamtailor's are quoted in their plugins.
 - A captcha shown as a box is clicked, twice at most, as a person would. It is not solved: on a puzzle the form stops as blocked, for the person to do by hand.
+
+## Measured
+
+| What | Result |
+|---|---|
+| Ranking, graded blind on real postings | nDCG@10 of 0.683, against 0.569 before Jev; 0.4 wrong jobs in the top 10 |
+| Form model, on a local course of hard forms, of 100 | DeepSeek v4.1 flash 87, GLM 83, Gemini 81 |
+| A form, on real sites | 0.4 to 3.3 cents in model calls; 3 to 27 minutes |
