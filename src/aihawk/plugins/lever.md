@@ -9,9 +9,9 @@ Upload the CV first. The "ATTACH RESUME/CV" link wraps the file input `#resume-u
 
 Fields are named: `name`, `email`, `phone`, `location`, `org` for the current company. Questions a company adds come after them, often in `name="cards[...]"` fields. A required field has a ✱ after its label.
 
-The location field, `#location-input`, suggests places as you type: pick one of the suggestions.
+The location field, `#location-input`, suggests places as you type: pick one of the suggestions. The field may then show it shortened, such as "Milan, ITA", which is correct.
 
-Some forms show a captcha when sending: a box to tick is handled as the rules say; a puzzle means the form is blocked.
+Some forms show a captcha when sending, from an hCaptcha widget with no size that is already on the page: a box to tick is handled as the rules say; a puzzle means the form is blocked.
 
 The submit control is `#btn-submit`, "Submit application".
 

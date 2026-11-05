@@ -7,13 +7,13 @@ The form loads a moment after the page: if it looks empty, read the page again. 
 
 The sections are headed "Personal information", "Profile", "Resume", "Details" and "Cover letter", and some have "(Optional)" after the title.
 
-`#firstname`, `#lastname`, `#email` and `#input_phone` are the basics, and the phone has a country button before it. Some forms also ask for an address: `#address`, `#city`, `#postcode` and `#country`.
+`#firstname`, `#lastname`, `#email` and `#input_phone` are the basics, and the phone has a country button before it: choose the country there and type the national number. An "invalid phone" error that shows while typing can clear when the number is typed again whole. Some forms also ask for an address: `#address`, `#city`, `#postcode` and `#country`.
 
 Upload the CV to the file input under the "Resume" heading, which has an id like `#input_files_input_...`: select it with `input[type="file"]` in that section. Do not use "Autofill application" or "Import resume from".
 
 "Experience" and "Education" with a "+ Add" button are usually optional: leave them empty unless required.
 
-Questions a company adds have names like `CA_30078` or `QA_11839078`: find each by its label. A field showing "Select an option…" is a list: type, then click the option; its input has an id like `#input_CA_30080_input`.
+Questions a company adds have names like `CA_30078` or `QA_11839078`: find each by its label. A required "Work Authorization" list is common, with options that depend on the job's country: what the files do not say goes back to the person. A field showing "Select an option…" is a list: type, then click the option; its input has an id like `#input_CA_30080_input`.
 
 Radio answers have generated ids. Select them by `input[name="CA_41201"]` with the right position, or by the `div[role="radio"]` beside it that shows YES or NO, and check the result by reading the page.
 
