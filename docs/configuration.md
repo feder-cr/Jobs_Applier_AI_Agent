@@ -10,7 +10,7 @@ Loading a resume rewrites this file, and the rewrite drops the comments you put 
 | `goals` | empty | What you are looking for, in your own words. The decision model and the judge read it. |
 | `database` | `https://github.com/feder-cr/Jobs_Applier_AI_Agent/releases/download/jobs-latest/manifest.json` | Where the job database is: the URL of its `manifest.json`, or the path of a local one. The files it names sit beside it, unless its `base_url` says otherwise. |
 | `max_age_days` | `60` | Postings posted more than this many days ago are left out. A posting with no date is kept. |
-| `model` | `deepseek/deepseek-v4.1-flash` | Writes the tailored CV and fills the application forms. |
+| `model` | `deepseek/deepseek-v4.1-flash` | Fills the application forms. |
 | `quick_model` | `google/gemini-3.5-flash` | Writes the search plan from your CV, and the other short calls of a search. |
 | `judge_model` | `deepseek/deepseek-v4.1-flash` | Writes the score and the report of each shortlisted posting. |
 | `decision_model` | `typesafe/jev-1.14` | Jev, which answers the six questions that shortlist the postings. |

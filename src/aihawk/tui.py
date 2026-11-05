@@ -508,7 +508,7 @@ class AIHawk(App[None]):
             ("places", "Where", ", ".join(config.filters.locations)),
             ("exclude", "Leave out", ", ".join(config.filters.exclude)),
             ("max_age_days", "Posted within (days)", str(config.max_age_days)),
-            ("model", "Forms and CVs model", config.model),
+            ("model", "Forms model", config.model),
             ("judge_model", "Scoring model", config.judge_model),
             ("quick_model", "Search plan model", config.quick_model),
             ("decision_model", "Shortlist model", config.decision_model),

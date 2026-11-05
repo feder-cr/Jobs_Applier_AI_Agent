@@ -18,6 +18,8 @@ Menus (the country list, City suggestions, a dropdown's answers) open a list und
 
 The footer "Next" button has no selector in browser_snapshot: read its centre the same way (browser_evaluate reads, then browser_click_at). Leave "Add" under Experience and Education alone unless the page requires an entry: "Please provide at least one work experience entry" under Experience means it does. Then add one from the CV: Title, Company and Office location suggest as you type, and From and To take MM/YYYY.
 
+The form scrolls inside its own container, so PageUp and PageDown move nothing: seen on a real form, 40 steps lost pressing them. To reach a field, call its `scrollIntoView()` with browser_evaluate, walking the shadow roots.
+
 The "Preliminary questions" step often asks for the right to work, sponsorship, and a block of required boxes with the person's name and today's date, stating that the answers are true.
 
 The last step's footer control sends the application: `[data-test='footer-submit']`, labelled "Submit". Its label is what the page says, for example "Submit application". Never click it. If a plain CSS selector matches only that control, name it as the submit control; if none does, call finish_form with status blocked and say that the send control could not be named.
