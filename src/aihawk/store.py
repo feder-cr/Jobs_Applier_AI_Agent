@@ -189,14 +189,6 @@ class Store:
         rest = [item for _, item in sorted(zip(order, rest, strict=True), key=lambda pair: (-pair[0], pair[1].job.id))]
         return judged + rest
 
-    def to_apply(self, threshold: float, limit: int) -> list[Stored]:
-        """The best scored jobs at or above the threshold that were not tried yet or are waiting on an answer."""
-        rows = self._db.execute(
-            "SELECT * FROM jobs WHERE status IN ('scored', 'needs_input') AND score >= ? ORDER BY score DESC, id LIMIT ?",
-            (threshold, limit),
-        ).fetchall()
-        return [self._stored(row) for row in rows]
-
     def set_evidence(self, job_id: str, evidence: float) -> None:
         self._db.execute("UPDATE jobs SET evidence = ?, updated = ? WHERE id = ?", (evidence, _now(), job_id))
         self._db.commit()

@@ -12,17 +12,18 @@ import yaml
 CONFIG_FILE = "aihawk.yaml"
 KEY_FILE = "key"
 DEFAULT_BASE_URL = "https://api.orcarouter.ai/v1"
+# The variable that holds the model key, unless the settings name another. The browser is given no variable that holds a key.
+KEY_ENV = "ORCAROUTER_API_KEY"
 # Fills the forms and reads their screenshots. Chosen over z-ai/glm-5.3-flash, which was slower and dearer on the same forms.
 DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash"
 # For the plan and the other short calls of a search. deepseek-v4.1-flash did not keep the plan's nested schema, and
 # z-ai/glm-5.3-flash was too slow for a search.
 DEFAULT_QUICK_MODEL = "google/gemini-3.5-flash"
-# Scores the postings the funnel picks. Chosen against the title's fit on five people's searches: see judge.py.
+# Writes the score and the report of each posting the funnel shortlists.
 DEFAULT_JUDGE_MODEL = "deepseek/deepseek-v4.1-flash"
-# Answers the six questions that shortlist the postings. Kept as the default because the thresholds of judge.evidence() were set on this
-# model's answers, and another model answers differently, so a change needs those thresholds set again.
+# Answers the six questions that shortlist the postings. Kept as the default: judge.py turns its answers into evidence by rules
+# that were checked on this model, and another model answers differently, so those rules need checking again.
 DEFAULT_DECISION_MODEL = "typesafe/jev-1.14"
-DEFAULT_THRESHOLD = 4.0
 DEFAULT_DATABASE = "https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk/releases/download/jobs-latest/manifest.json"
 DEFAULT_MAX_AGE_DAYS = 60
 
@@ -90,8 +91,7 @@ class Config:
     judge_model: str = DEFAULT_JUDGE_MODEL
     decision_model: str = DEFAULT_DECISION_MODEL
     base_url: str = DEFAULT_BASE_URL
-    api_key_env: str = "ORCAROUTER_API_KEY"
-    threshold: float = DEFAULT_THRESHOLD
+    api_key_env: str = KEY_ENV
     filters: Filters = field(default_factory=Filters)
 
     @property
@@ -225,10 +225,6 @@ def load_config(workspace: Path) -> Config:
         raise ConfigError(f"{path} must be a mapping of settings")
 
     filters = raw.get("filters") or {}
-    threshold = raw.get("threshold", DEFAULT_THRESHOLD)
-    if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or not 1 <= threshold <= 5:
-        raise ConfigError(f"threshold must be a number from 1 to 5, not {threshold!r}")
-
     return Config(
         workspace=workspace,
         name=str(raw.get("name") or ""),
@@ -240,8 +236,7 @@ def load_config(workspace: Path) -> Config:
         judge_model=str(raw.get("judge_model") or DEFAULT_JUDGE_MODEL),
         decision_model=str(raw.get("decision_model") or DEFAULT_DECISION_MODEL),
         base_url=str(raw.get("base_url") or DEFAULT_BASE_URL),
-        api_key_env=str(raw.get("api_key_env") or "ORCAROUTER_API_KEY"),
-        threshold=float(threshold),
+        api_key_env=str(raw.get("api_key_env") or KEY_ENV),
         filters=Filters(
             _words(filters.get("include"), "filters.include"),
             _words(filters.get("exclude"), "filters.exclude"),

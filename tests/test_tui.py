@@ -200,7 +200,7 @@ def test_no_key_asks_for_one_and_keeps_it_on_this_computer(home: Path, resume: P
 
 
 def fake_apply(app: AIHawk, outcomes: list[Outcome], calls: list[Any]) -> None:
-    async def apply_to_job(client: Any, model: str, job: Any, cv: str, answers: str, cv_file: Path, data_dir: Path, profile: Path, guidance: str = "", reaches: frozenset[str] = frozenset()) -> Outcome:
+    async def apply_to_job(client: Any, model: str, job: Any, cv: str, answers: str, cv_file: Path, data_dir: Path, profile: Path, guidance: str = "", reaches: frozenset[str] = frozenset(), key_env: str = "") -> Outcome:
         calls.append({"job": job, "answers": answers, "guidance": guidance, "cv_file": cv_file, "profile": profile})
         return outcomes.pop(0)
 
@@ -518,6 +518,14 @@ def test_a_new_resume_never_invents_a_contact_detail(home: Path, resume: Path) -
     assert "phone" not in read_answers(config)
 
 
+def test_a_new_resume_replaces_the_plan_and_keeps_what_the_person_excluded(home: Path, resume: Path) -> None:
+    (home / "aihawk.yaml").write_text("filters:\n  exclude: [intern]\n", encoding="utf-8")
+    asyncio.run(install_resume(ScriptedModelForApp(), load_config(home), resume))  # type: ignore[arg-type]
+    config = load_config(home)
+    assert config.filters.exclude == ("intern",)
+    assert config.filters.include == tuple(node.id for node in config.filters.plan.nodes)
+
+
 def test_the_mail_plugins_join_every_form_after_the_sites_own_and_the_profile_is_the_workspaces(home: Path, resume: Path, restored_apply: Any) -> None:
     calls: list[Any] = []
 
@@ -546,7 +554,7 @@ class ScriptedServer(ScriptedBrowser):
 
 def scripted_server(monkeypatch: pytest.MonkeyPatch, server: ScriptedServer) -> None:
     @asynccontextmanager
-    async def started(upload_dir: Path, home: Path) -> AsyncIterator[tuple[ScriptedServer, str]]:
+    async def started(upload_dir: Path, home: Path, key_env: str = "") -> AsyncIterator[tuple[ScriptedServer, str]]:
         yield server, ""
 
     monkeypatch.setattr(apply_module, "_server", started)
@@ -587,7 +595,7 @@ def test_the_sign_in_key_is_refused_while_an_application_runs(home: Path, resume
     async def run() -> None:
         release = asyncio.Event()
 
-        async def slow_apply(client: Any, model: str, job: Any, cv: str, answers: str, cv_file: Path, data_dir: Path, profile: Path, guidance: str = "", reaches: frozenset[str] = frozenset()) -> Outcome:
+        async def slow_apply(client: Any, model: str, job: Any, cv: str, answers: str, cv_file: Path, data_dir: Path, profile: Path, guidance: str = "", reaches: frozenset[str] = frozenset(), key_env: str = "") -> Outcome:
             await release.wait()
             return Outcome("blocked", "not sent")
 

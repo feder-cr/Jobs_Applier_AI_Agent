@@ -303,6 +303,23 @@ def test_many_descriptions_come_in_order_and_empty_where_there_is_no_reference(t
     assert sorted(texts[:-2]) == ["Build", "Learn"] and counts[-1] == len(refs)
 
 
+def test_a_database_that_cannot_be_read_is_reported_once_and_the_search_has_no_descriptions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, jobs = search(database(tmp_path), Filters(include=("python",)), 60, tmp_path)
+    refs = [job.ref for job in jobs]
+
+    class Unreadable:
+        def execute(self, *args: object) -> None:
+            raise duckdb.Error("the extension cannot be downloaded")
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(duckdb, "connect", lambda: Unreadable())
+    reported: list[str] = []
+    assert stored_descriptions(refs, problem=reported.append) == [""] * len(refs)
+    assert len(reported) == 1 and "job database" in reported[0]
+
+
 def test_a_job_with_a_description_reads_no_page() -> None:
     job = Job("a", "c", "t", "l", "http://127.0.0.1:9/never", "u", "Already here")
     assert with_description(job) is job
@@ -321,17 +338,6 @@ def test_a_job_seen_again_keeps_its_score_and_status(tmp_path: Path) -> None:
     assert store.add(JOB) is False
     item = store.get(JOB.id)
     assert item is not None and (item.status, item.score, item.report) == ("needs_input", 4.5, {"score": 4.5})
-
-
-def test_only_what_is_good_enough_and_not_sent_is_applied_to_best_first(tmp_path: Path) -> None:
-    store = Store(tmp_path / "jobs.db")
-    for number, score in enumerate((3.9, 4.0, 4.8, 4.9)):
-        job = Job(f"j{number}", "A", "T", "L", "u", "a", "d")
-        store.add(job)
-        store.set_score(job.id, score, {})
-    store.set_status("j3", "submitted")
-    assert [item.job.id for item in store.to_apply(4.0, 5)] == ["j2", "j1"]
-    assert [item.job.id for item in store.to_apply(4.0, 1)] == ["j2"]
 
 
 def test_what_was_tried_is_listed_newest_first_in_plain_words_with_what_the_page_said(tmp_path: Path) -> None:
@@ -417,7 +423,7 @@ def test_a_new_folder_defaults_to_orcarouter_and_the_published_database(tmp_path
 
 @pytest.mark.parametrize(
     "text",
-    ["threshold: 9", "filters: {include: python}", "a: [", "- a"],
+    ["filters: {include: python}", "a: [", "- a"],
 )
 def test_settings_that_cannot_be_used_are_refused(tmp_path: Path, text: str) -> None:
     (tmp_path / "aihawk.yaml").write_text(text, encoding="utf-8")

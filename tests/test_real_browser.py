@@ -326,6 +326,17 @@ def test_a_select_that_sends_on_the_same_site_is_not_detected_and_the_model_goes
     assert len(model.requests) == 2
 
 
+def test_the_browser_starts_with_the_model_key_kept_out_of_its_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORCAROUTER_API_KEY", "sk-test-not-real")
+
+    async def check() -> None:
+        async with _server(tmp_path, tmp_path / "browser") as (session, _):
+            await _open_browser(session, tmp_path / "browser-profile")
+            assert not (await session.call_tool("browser_navigate", {"url": "about:blank"})).isError
+
+    asyncio.run(check())
+
+
 def test_the_newest_server_still_has_what_aihawk_relies_on(tmp_path: Path) -> None:
     async def check() -> None:
         async with stdio_client(server_parameters(tmp_path, tmp_path), errlog=sys.stderr) as (read, write), ClientSession(read, write) as session:

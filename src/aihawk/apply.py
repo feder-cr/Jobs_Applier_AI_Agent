@@ -29,6 +29,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from openai import AsyncOpenAI
 
+from aihawk.config import KEY_ENV
 from aihawk.database import Job
 from aihawk.llm import structured
 from aihawk.store import Proof, safe_name
@@ -143,9 +144,11 @@ def verify_system(guidance: str) -> str:
 _SENDS = re.compile(
     r"\b(submit|send|invia|inviar|candidati|candidatura|bewerben|absenden|senden|abschicken|envoyer|postuler|soumettre|enviar|solicitar|aplicar"
     r"|verzenden|versturen|indienen|solliciteren|skicka|ansök|ansøg|sende|lähetä|wyślij|aplikuj|odeslat|odoslať|küldés|trimite|gönder|başvur"
-    r"|отправить|откликнуться|إرسال)\b"
+    r"|confirm|finish|complete|conferma|confermare|completa|completare|termina|confirmar|completar|finalizar|terminar|bestätigen|abschließen"
+    r"|fertigstellen|beenden|confirmer|terminer|finaliser|bevestigen|voltooien|bekräfta|slutför|bekreft|bekræft|fullfør|fuldfør|potwierdź|zakończ"
+    r"|potvrdit|dokončit|confirmă|finalizează|onayla|tamamla|подтвердить|завершить|отправить|откликнуться|إرسال)\b"
     # These scripts write no space between words, so a word has no edge to look for: 送信する is still 送信.
-    r"|送信|応募|发送|提交|申请|제출|보내기",
+    r"|送信|応募|发送|提交|申请|제출|보내기|確認|完了|确认|完成|확인|완료",
     re.IGNORECASE,
 )
 _APPLY = re.compile(r"\b(apply|applica)\b", re.IGNORECASE)
@@ -186,7 +189,9 @@ def _asks_for_enter(element: dict[str, Any]) -> bool:
 
 
 def sends_form(element: dict[str, Any], form_touched: bool) -> bool:
-    """Whether clicking this element would send the application. In doubt, it would."""
+    """Whether clicking this element would send the application. Its words decide first: a send word in one of the languages
+    `_SENDS` has, or Apply once the form is touched or the element is in one. A link is judged by its words alone. Otherwise
+    a submit button, or a button with no type inside a form, sends unless its words name a step, an answer or a file."""
     tag, kind, text = element.get("tag", ""), element.get("type", ""), element.get("text", "")
     if _SENDS.search(text):
         return True
@@ -200,7 +205,7 @@ def sends_form(element: dict[str, Any], form_touched: bool) -> bool:
     return bool(submits) and not _STEPS.search(text)
 
 
-class Session(Protocol):
+class Browser(Protocol):
     async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any: ...
 
 
@@ -241,7 +246,7 @@ NOT_READABLE = (
 NO_ELEMENT = "Refused: no element is at that point. Take a screenshot and aim browser_click_at at the centre of the control."
 
 
-async def _element(session: Session, found: str) -> dict[str, Any] | None:
+async def _element(session: Browser, found: str) -> dict[str, Any] | None:
     """What the page says about that element; None when it cannot be told."""
     result = await session.call_tool("browser_evaluate", {"expression": _inspect(found)})
     try:
@@ -255,7 +260,7 @@ def _host(url: str) -> str:
     return (urlsplit(url).hostname or "").lower()
 
 
-async def refusal(session: Session, name: str, arguments: dict[str, Any], form_touched: bool, hosts: frozenset[str] = frozenset()) -> str | None:
+async def refusal(session: Browser, name: str, arguments: dict[str, Any], form_touched: bool, hosts: frozenset[str] = frozenset()) -> str | None:
     """Why the model may not make this call; None when it may."""
     if name == "browser_navigate":
         # A link can send a form (a GET that confirms), so the model goes only where the form and its mailbox are.
@@ -336,7 +341,7 @@ NAV_TRIES = 10
 NAV_WAIT_S = 0.2
 
 
-async def _page(session: Session) -> dict[str, str] | None:
+async def _page(session: Browser) -> dict[str, str] | None:
     """The page's address and text, as the server reads them; None when they cannot be read."""
     result = await session.call_tool("browser_evaluate", {"expression": PAGE})
     try:
@@ -346,7 +351,7 @@ async def _page(session: Session) -> dict[str, str] | None:
     return page if isinstance(page, dict) else None
 
 
-async def _readable_page(session: Session) -> dict[str, str] | None:
+async def _readable_page(session: Browser) -> dict[str, str] | None:
     """The page once it can be read: a page can be loading after a change, so a read that fails is tried again."""
     page = await _page(session)
     for _ in range(READ_TRIES):
@@ -357,7 +362,7 @@ async def _readable_page(session: Session) -> dict[str, str] | None:
     return None
 
 
-async def _after(session: Session, name: str, form_host: str, before: dict[str, str] | None = None) -> None:
+async def _after(session: Browser, name: str, form_host: str, before: dict[str, str] | None = None) -> None:
     """Stops the form when a call moved the page to another site. A same-site send is not detected: a multi-step form
     advances by address too, so the address alone cannot tell the two apart. A page that stays unreadable says nothing.
     A call that can navigate returns before the navigation has begun, so the page is read again, for a short while, until
@@ -396,7 +401,7 @@ async def _stopped(client: AsyncOpenAI, model: str, messages: list[Any], reason:
     return {"status": status, "summary": f"Stopped: {reason}\n{summary}", "questions": report.get("questions") or []}
 
 
-async def fill_form(session: Session, tools: list[dict[str, Any]], client: AsyncOpenAI, model: str, brief: str, guidance: str = "", page_rules: str = "", form_url: str = "", reaches: frozenset[str] = frozenset()) -> dict[str, Any]:
+async def fill_form(session: Browser, tools: list[dict[str, Any]], client: AsyncOpenAI, model: str, brief: str, guidance: str = "", page_rules: str = "", form_url: str = "", reaches: frozenset[str] = frozenset()) -> dict[str, Any]:
     """The model works on the open page until it calls finish_form; returns what it reported. A form it cannot finish is
     stopped with a report of what it did, rather than left to run on."""
     messages: list[Any] = [{"role": "system", "content": instructions(guidance, page_rules)}, {"role": "user", "content": brief}]
@@ -458,7 +463,7 @@ async def fill_form(session: Session, tools: list[dict[str, Any]], client: Async
     return await _stopped(client, model, messages, f"the form was not finished in {MAX_STEPS} steps.", f"The form was not finished in {MAX_STEPS} steps. Last call: {last}")
 
 
-async def _where(session: Session, shot: Path) -> tuple[str, str]:
+async def _where(session: Browser, shot: Path) -> tuple[str, str]:
     """The address the page is on now, and a picture of it, kept at `shot`. What cannot be had is left out: the verdict stands."""
     url, screenshot = "", ""
     with suppress(Exception):
@@ -471,7 +476,7 @@ async def _where(session: Session, shot: Path) -> tuple[str, str]:
     return url, screenshot
 
 
-async def submit_and_verify(session: Session, client: AsyncOpenAI, model: str, selector: str, summary: str, guidance: str, shot: Path) -> Outcome:
+async def submit_and_verify(session: Browser, client: AsyncOpenAI, model: str, selector: str, summary: str, guidance: str, shot: Path) -> Outcome:
     at = datetime.now(UTC).isoformat(timespec="seconds")
     click = await session.call_tool("browser_click", {"selector": selector})
     # An error does not say it stayed: a form that disables its button while sending answers the click with one. What
@@ -495,7 +500,7 @@ async def submit_and_verify(session: Session, client: AsyncOpenAI, model: str, s
     return Outcome("unconfirmed", f"{summary}\nClicked, not confirmed by the page: {verdict['evidence']}", proof=proof)
 
 
-async def run_on_page(session: Session, tools: list[dict[str, Any]], client: AsyncOpenAI, model: str, job: Job, cv_text: str, answers: str, cv_file: Path, shot: Path, guidance: str = "", page_rules: str = "", reaches: frozenset[str] = frozenset()) -> Outcome:
+async def run_on_page(session: Browser, tools: list[dict[str, Any]], client: AsyncOpenAI, model: str, job: Job, cv_text: str, answers: str, cv_file: Path, shot: Path, guidance: str = "", page_rules: str = "", reaches: frozenset[str] = frozenset()) -> Outcome:
     brief = (
         f"The form: {job.apply_url}\nThe job: {job.title} at {job.company}\nThe CV file to upload: {cv_file}\n\n"
         f"The CV:\n{cv_text}\n\nThe answers:\n{answers}"
@@ -516,7 +521,7 @@ async def run_on_page(session: Session, tools: list[dict[str, Any]], client: Asy
     return await submit_and_verify(session, client, model, str(report["submit_selector"]), summary, guidance, shot)
 
 
-async def _open_browser(session: Session, profile: Path) -> None:
+async def _open_browser(session: Browser, profile: Path) -> None:
     # While the engine downloads, the server answers with its progress instead of a browser. Its words are its own to
     # change: the browser is ready when it can go to a page, and an action on one that is not open is an error.
     # The profile keeps the sign-ins between opens, and the server keeps the seed with it: the same person each time.
@@ -533,9 +538,11 @@ async def _open_browser(session: Session, profile: Path) -> None:
         await asyncio.sleep(OPEN_RETRY_S)
 
 
-def server_parameters(upload_dir: Path, home: Path) -> StdioServerParameters:
+def server_parameters(upload_dir: Path, home: Path, key_env: str = KEY_ENV) -> StdioServerParameters:
+    # The browser is given the environment without the model's key: nothing it does needs that key.
+    keys = {key_env, KEY_ENV}
     environment = {
-        **os.environ,
+        **{name: value for name, value in os.environ.items() if name not in keys},
         "INVISIBLE_MCP_HOST_MANAGED": "1",
         "INVISIBLE_MCP_UPLOAD_DIRS": str(upload_dir),
         "INVISIBLE_MCP_HOME": str(home),
@@ -546,20 +553,22 @@ def server_parameters(upload_dir: Path, home: Path) -> StdioServerParameters:
 
 
 @asynccontextmanager
-async def _server(upload_dir: Path, home: Path) -> AsyncIterator[tuple[ClientSession, str]]:
+async def _server(upload_dir: Path, home: Path, key_env: str = KEY_ENV) -> AsyncIterator[tuple[ClientSession, str]]:
     """The browser server, started: a session on it, and the instructions it gives about driving a page."""
     home.mkdir(parents=True, exist_ok=True)
     # The server's own messages go to a file: on the person's terminal they would draw over the screen.
     with (home / "server.log").open("a", encoding="utf-8") as server_log:
-        async with stdio_client(server_parameters(upload_dir, home), errlog=server_log) as (read, write), ClientSession(read, write) as session:
+        async with stdio_client(server_parameters(upload_dir, home, key_env), errlog=server_log) as (read, write), ClientSession(read, write) as session:
             started = await session.initialize()
             yield session, started.instructions or ""
 
 
-async def apply_to_job(client: AsyncOpenAI, model: str, job: Job, cv_text: str, answers: str, cv_file: Path, data_dir: Path, profile: Path, guidance: str = "", reaches: frozenset[str] = frozenset()) -> Outcome:
+async def apply_to_job(
+    client: AsyncOpenAI, model: str, job: Job, cv_text: str, answers: str, cv_file: Path, data_dir: Path, profile: Path, guidance: str = "", reaches: frozenset[str] = frozenset(), key_env: str = KEY_ENV
+) -> Outcome:
     """Open the browser on the person's profile, fill the job's form and send it: the person's selection and Enter came before."""
     shot = data_dir / "proofs" / f"{safe_name(job.id)}.png"
-    async with _server(cv_file.parent, data_dir / "browser") as (session, page_rules):
+    async with _server(cv_file.parent, data_dir / "browser", key_env) as (session, page_rules):
         listed = await session.list_tools()
         tools = [
             {"type": "function", "function": {"name": tool.name, "description": tool.description or tool.name, "parameters": tool.inputSchema}}
@@ -576,12 +585,12 @@ async def apply_to_job(client: AsyncOpenAI, model: str, job: Job, cv_text: str, 
             await session.call_tool("browser_close", {})
 
 
-async def sign_in(profile: Path, home: Path, wait: Callable[[], Awaitable[None]]) -> None:
+async def sign_in(profile: Path, home: Path, wait: Callable[[], Awaitable[None]], key_env: str = KEY_ENV) -> None:
     """Open the profile's browser on a blank page so the person can sign in; once `wait` returns, the browser closes.
 
     Nothing is typed for the person and no model is involved: the sign-ins are kept in the profile for the applications.
     """
-    async with _server(home, home) as (session, _):
+    async with _server(home, home, key_env) as (session, _):
         try:
             await _open_browser(session, profile)
             await wait()
