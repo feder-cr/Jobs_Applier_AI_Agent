@@ -19,6 +19,7 @@ from pypdf import PdfWriter
 from textual.widgets import DataTable, Input, RichLog, Static
 
 from aihawk import apply as apply_module
+from aihawk import session as session_module
 from aihawk.apply import Outcome
 from aihawk.cli import main as cli_main
 from aihawk.config import ConfigError, load_config
@@ -140,7 +141,7 @@ def test_a_judged_posting_with_no_text_says_so_in_its_status_and_keeps_its_score
 
 def companies(app: AIHawk) -> list[str]:
     table = app.query_one(DataTable)
-    return [table.get_row_at(index)[3] for index in range(table.row_count)]
+    return [str(table.get_row_at(index)[3]) for index in range(table.row_count)]
 
 
 def test_a_resume_is_all_it_takes_to_get_the_best_jobs_first(home: Path, resume: Path) -> None:
@@ -755,3 +756,33 @@ def test_at_80_columns_a_message_wraps_whole_and_quit_is_on_the_footer(home: Pat
             assert any("q Quit" in row for row in rows)
 
     asyncio.run(run())
+
+
+def test_a_posting_whose_words_look_like_markup_is_shown_as_it_is(home: Path) -> None:
+    async def run() -> None:
+        app = AIHawk(home)
+        app.session.store.add(Job("odd", "Co [/y]", "[/x] Engineer", "Milan [bold", "https://a.example/", "https://a.example/", ""))
+        app.start = lambda: None  # type: ignore[method-assign]
+        async with app.run_test(size=(140, 40)) as pilot:
+            app.refresh_jobs()
+            await pilot.pause()
+            row = app.query_one(DataTable).get_row_at(0)
+            assert (str(row[3]), str(row[4]), str(row[5])) == ("Co [/y]", "[/x] Engineer", "Milan [bold")
+
+    asyncio.run(run())
+
+
+def test_a_cv_that_cannot_be_written_fails_that_job_alone(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    session = Session(home)
+    session._client = ScriptedModelForApp()  # type: ignore[assignment]
+    asyncio.run(session.load_resume(resume))
+    session.store.add(Job("one", "Firm", "Python Engineer", "Milan", "https://jobs.lever.co/a/1", "https://jobs.lever.co/a/1", "A posting.", "", 1.0))
+
+    async def no_cv(*_: Any) -> str:
+        raise RuntimeError("the model is down")
+
+    monkeypatch.setattr(session_module, "tailor_cv", no_cv)
+    outcome = asyncio.run(session.apply(session.store.get("one"), lambda _: None))  # type: ignore[arg-type]
+    assert outcome.status == "failed" and "the model is down" in outcome.summary
+    assert session.store.get("one").status == "failed"  # type: ignore[union-attr]
+    session.close()

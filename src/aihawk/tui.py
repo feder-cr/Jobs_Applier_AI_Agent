@@ -284,7 +284,8 @@ class AIHawk(App[None]):
         # A score from the title and the place alone: the person should know the posting's text was not read.
         if item.score is not None and not item.job.description.strip():
             status = ", ".join(part for part in (status, "no text") if part)
-        return (Text(mark, style="bold green"), score, can_apply, item.job.company, item.job.title, item.job.location, status)
+        # Text, because a string cell is read as markup, and a posting's words are a source's: "[/x] Engineer" would stop the screen.
+        return (Text(mark, style="bold green"), score, can_apply, Text(item.job.company), Text(item.job.title), Text(item.job.location), status)
 
     def refresh_jobs(self) -> None:
         """The list, best first. The cursor stays on the job it was on."""

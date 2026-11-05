@@ -10,6 +10,10 @@
 - After a new resume is loaded, no CV written from the old one is sent. Jobs already sent keep theirs.
 - A posting the judge could not read is no longer passed over for good: a later search judges it.
 - After a send, the page is read once it has changed and stopped changing, up to 30 seconds, and the verdict sees its address: a slow confirmation page is no longer judged on the old form.
+- A posting whose title or company looks like screen markup, such as `[/x]`, no longer stops the screen.
+- A CV that cannot be written fails that job alone, and the others in the selection still go.
+- A posting whose address is not `http` or `https` is left out of a search: a source could not make AIHawk read a file on your computer.
+- A full disk while the job index downloads says the disk is full.
 - A setting of the wrong type in `aihawk.yaml` is one plain line instead of a traceback.
 - The send check knows more languages' send words, and no longer refuses "Confirm email address", "Complete your profile" or "Send code".
 
