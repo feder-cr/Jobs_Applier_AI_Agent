@@ -7,6 +7,9 @@
 - A CV written in a script its font cannot draw is no longer uploaded with blanks: your own CV goes instead, and you are told.
 - A model error that a smaller batch cannot cure stops at once and says why, instead of ranking by title almost silently.
 - The job database is shown with its real date, with a warning when it is over 7 days old, and a search emptied by the age limit says so.
+- After a new resume is loaded, no CV written from the old one is sent. Jobs already sent keep theirs.
+- A posting the judge could not read is no longer passed over for good: a later search judges it.
+- A setting of the wrong type in `aihawk.yaml` is one plain line instead of a traceback.
 - The send check knows more languages' send words, and no longer refuses "Confirm email address", "Complete your profile" or "Send code".
 
 ## 1.0.0 - 2026-11-04
