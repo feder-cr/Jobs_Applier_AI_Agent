@@ -16,8 +16,8 @@ No response time is promised. The report stays private until it is fixed or unti
 AIHawk reads job pages written by strangers, fills their forms, and sends applications for a person. The problems that matter most are these:
 
 1. **A posting's page steering the model.** The page's text, scripts and hidden fields reach the model as the content of tool results. Anything that lets a page make the model fill something the person did not give, click a control outside the form, or visit a site the plugin does not name is a serious problem.
-2. **Sending without the person's yes.** An application or an e-mail goes out only after the person selects the jobs, presses `a` and Enter. Anything that sends one another way, or gets past the refusal in `src/aihawk/apply.py` that stops clicks and Enter from sending a form, matters most.
-3. **Reading mail.** The mail plugins (`gmail.md`, `outlook.md`) tell the model to read only: a code or a link from the site the person applied to, received in the last few minutes. That is an instruction, not a guarantee. The code refuses only clicks that look like sending, Enter, and visits to sites other than the form's and the mailbox's; a click that deletes or archives mail is not refused. Anything that reads, sends, deletes or opens other mail matters.
+2. **Sending without the person's yes.** The model is told to leave the send to AIHawk, which clicks after the person selects the jobs and presses `a` and Enter. Nothing checks the model's own calls, so a way to make it send more often than that matters most.
+3. **Reading mail.** The mail plugins (`gmail.md`, `outlook.md`) tell the model to read only: a code or a link from the site the person applied to, received in the last few minutes. That is an instruction, not a guarantee, and nothing in the code holds it to that.
 4. **Keys and sign-ins.** See below.
 
 ## Where keys and sign-ins are kept
@@ -28,9 +28,8 @@ AIHawk reads job pages written by strangers, fills their forms, and sends applic
 
 ## Known and accepted
 
-- **A script can send a form.** As a last resort, the model may run a script in the page (`browser_evaluate`). The refusal in `apply.py` does not check a script, so a script can send a form without the person's yes. This is accepted on purpose: a script is the last rung, offered only when the other browser tools cannot do the job. After each call that changes the page, AIHawk checks whether the page left the form's site; it cannot tell a send on the same site. Report a case where a script sends something the person did not select as a vulnerability.
-- **The refusal of clicks reads words.** A final button that only says Continue is taken for the next step of a form, and a control worded in a way the check does not know can get past it. Refusing every Continue would stop every multi-step form.
-- **Enter in a tag field can send the form.** Enter is allowed in a text field whose placeholder or label says to press Enter, and it is allowed on the assumption that the page's script catches it; where the script does not, the browser sends the form on Enter, and AIHawk does not refuse that.
+- **Nothing checks what the model does in the browser.** It is told not to send and to stay on the form, and a click, Enter, a script or a visit elsewhere goes through. It can send a form before the person's yes or half filled, and a page that addresses it could try to steer it. Report a case where that happens.
+- **The model fills every required field.** It takes what the CV and the answers say and works out what they imply, and where they give nothing it writes to see the attached CV, picks the closest option or a plausible number, and ticks the boxes the form requires, statements included. These go out in the person's name, unread, after the one yes.
 - **The mail plugins read the mailbox that the browser is signed into.** That is how a code or a link is taken from the mail. It is limited by the instructions in those plugins, not enforced by the browser or by the code.
 - **A captcha or a sign-in is not bypassed.** The model reports the form as blocked, and the person deals with it.
 - **The model is a third-party service.** Everything sent to it, including the CV and what the pages say, leaves the machine. The model's output is not trusted: the person selects, and the send is checked by AIHawk.

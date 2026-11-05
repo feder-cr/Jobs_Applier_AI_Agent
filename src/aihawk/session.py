@@ -18,23 +18,19 @@ from aihawk.documents import MissingGlyphs, score_job, tailor_cv, write_cv_pdf
 from aihawk.judge import evidence, fuse, questions
 from aihawk.llm import explain, make_client, refused
 from aihawk.plugins import Plugin, always_plugins, load_plugins, plugin_for
-from aihawk.profile import answer_question, install_resume
+from aihawk.profile import install_resume, save_setting
 from aihawk.store import SENT_WORDS, SUBMITTED, Store, Stored, safe_name, write_applied
 
 # The funnel: the next WIDE postings by title are weighed by the decision model, and the best JUDGED of them are scored by the judge model.
 WIDE = 100
 JUDGED = 25
 SCORING_AT_ONCE = 5
-# A form that asks something is tried again with the answers, this many rounds at most.
-MAX_ROUNDS = 3
-ASKED = ("needs_input", "refused")
 # A job database built longer ago than this is said to be stale: the person is told no newer one has been published.
 STALE_DAYS = 7
 # An age limit no posting can pass: the search with it shows what the age limit alone leaves out.
 NO_AGE_LIMIT = 36500
 
 Log = Callable[[str], None]
-Ask = Callable[[str], Awaitable[str | None]]
 
 
 class Session:
@@ -76,6 +72,10 @@ class Session:
         await install_resume(self.client, self.config, path)
         # A CV tailored from the old resume is not sent again: the jobs not yet sent are written again from the new one.
         self.store.forget_cvs()
+        self.config = load_config(self.workspace)
+
+    def change_setting(self, name: str, value: str) -> None:
+        save_setting(self.config, name, value)
         self.config = load_config(self.workspace)
 
     def plugin(self, item: Stored) -> Plugin | None:
@@ -200,35 +200,12 @@ class Session:
             raise ConfigError("the CV for this posting cannot be written in its language, and your own CV file is not kept: load your resume again")
         return kept[0]
 
-    async def send(self, items: list[Stored], ask: Ask, log: Log, done: Callable[[], None]) -> None:
-        """Send each application once. A form's questions are put to the person after the others are sent, so a form that
-        waits does not hold them; a form that is answered is tried again."""
-        pending = items
-        for _ in range(MAX_ROUNDS):
-            asking: list[tuple[Stored, list[str]]] = []
-            for item in pending:
-                outcome = await self.apply(item, log)
-                done()
-                log(f"{item.job.company}: {SENT_WORDS.get(outcome.status, outcome.status)}. {outcome.proof.evidence}".strip())
-                if outcome.status in ASKED and outcome.questions:
-                    asking.append((item, outcome.questions))
-            pending = []
-            for item, asked in asking:
-                if await self._answer(item, asked, ask):
-                    # As it is now: the first try wrote its CV, and this one sends the same CV.
-                    pending.append(self.store.get(item.job.id) or item)
-            if not pending:
-                return
-
-    async def _answer(self, item: Stored, asked: list[str], ask: Ask) -> bool:
-        """Puts each question to the person; True when one was answered, so the form is tried again."""
-        answered = False
-        for question in asked:
-            answer = await ask(f"{item.job.company} asks: {question}")
-            if answer:
-                answer_question(self.config, question, answer)
-                answered = True
-        return answered
+    async def send(self, items: list[Stored], log: Log, done: Callable[[], None]) -> None:
+        """Send each application once."""
+        for item in items:
+            outcome = await self.apply(item, log)
+            done()
+            log(f"{item.job.company}: {SENT_WORDS.get(outcome.status, outcome.status)}. {outcome.proof.evidence}".strip())
 
     async def apply(self, item: Stored, log: Log) -> Outcome:
         """Fill and send one application, once. What the page said is kept with it, and applied.csv is written."""
@@ -242,12 +219,11 @@ class Session:
         answers = self.config.answers.read_text(encoding="utf-8-sig") if self.config.answers.is_file() else ""
         extras = always_plugins(self.plugins)
         guidance = "\n\n".join([plugin.instructions, *(extra.instructions for extra in extras)])
-        reaches = frozenset(host for extra in extras for host in extra.reaches)
         try:
             cv_file = await self._cv_for(item, cv, log)
             log(f"{item.job.company}: filling the form on {plugin.name}")
             outcome = await apply_to_job(
-                self.client, self.config.model, job, cv, answers, cv_file, self.config.data_dir, self.config.browser_profile, guidance, reaches, self.config.api_key_env
+                self.client, self.config.model, job, cv, answers, cv_file, self.config.data_dir, self.config.browser_profile, guidance, self.config.api_key_env
             )
         except Exception as error:
             # One job's failure is reported and recorded; the next job still runs.

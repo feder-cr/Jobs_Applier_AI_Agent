@@ -8,9 +8,6 @@ name. AIHawk applies only where a plugin exists; other postings are listed for a
 A plugin with `when: always` in its front matter has no hosts: its body is added to every form's instructions, beside the
 site's own plugin, and it never makes a site count as one AIHawk can apply to. The mail plugins are of that kind.
 
-A plugin only explains a site. What protects the person stays in apply.py, out of any plugin's reach: the model is told
-not to send the form and clicks on what would send it are refused (a last-resort script could still get around that),
-it writes nothing that the CV and the answers do not say, and no captcha is solved: a box to tick is clicked once, as a person would, and a puzzle or a login is blocked.
 """
 
 from __future__ import annotations
@@ -35,7 +32,6 @@ class Plugin:
     instructions: str
     apply_path: str = ""
     always: bool = False
-    reaches: tuple[str, ...] = ()  # the mailboxes an always-plugin takes the model to; the only other sites it may visit
 
     def matches(self, url: str) -> bool:
         host = (urlsplit(url).hostname or "").lower()
@@ -71,10 +67,7 @@ def parse_plugin(name: str, text: str) -> Plugin:
     if not body.strip():
         raise PluginError(f"plugin {name}: it has no instructions")
     names = tuple(host.lower() for host in hosts or ())
-    reaches = meta.get("reaches") or []
-    if not isinstance(reaches, list) or not all(isinstance(host, str) for host in reaches):
-        raise PluginError(f"plugin {name}: `reaches` lists the sites its mailbox is on")
-    return Plugin(str(meta.get("name") or name), names, body.strip(), str(meta.get("apply_path") or ""), always, tuple(reaches))
+    return Plugin(str(meta.get("name") or name), names, body.strip(), str(meta.get("apply_path") or ""), always)
 
 
 def _files(folder: Traversable | Path) -> dict[str, str]:

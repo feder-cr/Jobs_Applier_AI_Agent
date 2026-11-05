@@ -335,16 +335,6 @@ def test_a_page_that_cannot_be_read_leaves_the_job_as_it_was() -> None:
     assert with_description(job, timeout=1) is job
 
 
-def test_a_job_seen_again_keeps_its_score_and_status(tmp_path: Path) -> None:
-    store = Store(tmp_path / "jobs.db")
-    assert store.add(JOB) is True
-    store.set_score(JOB.id, 4.5, {"score": 4.5})
-    store.set_status(JOB.id, "needs_input", "phone?")
-    assert store.add(JOB) is False
-    item = store.get(JOB.id)
-    assert item is not None and (item.status, item.score, item.report) == ("needs_input", 4.5, {"score": 4.5})
-
-
 def test_what_was_tried_is_listed_newest_first_in_plain_words_with_what_the_page_said(tmp_path: Path) -> None:
     store = Store(tmp_path / "jobs.db")
     for name in ("sent", "unsure", "refused", "blocked", "failed", "untried"):
@@ -481,3 +471,14 @@ def test_the_index_download_says_how_far_it_has_come(tmp_path: Path, monkeypatch
     lines: list[str] = []
     assert local_index(manifest, "https://a.example/manifest.json", tmp_path, lines.append).read_bytes() == b"x" * (4 << 20)
     assert [line.strip() for line in lines[1:]] == ["25%", "50%", "75%"]
+
+
+def test_a_job_seen_again_keeps_its_score_and_status(tmp_path: Path) -> None:
+    store = Store(tmp_path / "jobs.db")
+    job = Job("x", "Co", "T", "L", "https://a.example/", "https://a.example/", "d")
+    assert store.add(job) is True
+    store.set_score(job.id, 4.5, {"score": 4.5})
+    store.set_status(job.id, "blocked", "a puzzle")
+    assert store.add(job) is False
+    item = store.get(job.id)
+    assert item is not None and (item.status, item.score, item.report) == ("blocked", 4.5, {"score": 4.5})

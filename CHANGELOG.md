@@ -17,8 +17,10 @@
 - A job whose source published no text is scored on the text of its own page where that can be read, which also finds postings that have closed.
 - The README shows real captures of the screen.
 - Sending says, per job, how it went, and the screen says what to do next. The list fits an 80-column terminal, the index download shows its progress, and a job's details can select it or open it.
+- One command starts AIHawk, and everything else is on the screen: `e` opens the settings.
+- A form no longer stops to ask. The model fills every required field from what the CV says and implies, and a written field it has nothing for says to see the attached CV.
+- The checks on the model's calls are gone, for far less code: it is told not to send, and nothing holds it to that. See SECURITY.md.
 - A setting of the wrong type in `aihawk.yaml` is one plain line instead of a traceback.
-- The send check knows more languages' send words, and no longer refuses "Confirm email address", "Complete your profile" or "Send code".
 
 ## 1.0.0 - 2026-11-04
 

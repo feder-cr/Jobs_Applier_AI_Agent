@@ -27,10 +27,10 @@ from aihawk.config import ConfigError, load_config
 from aihawk.database import Job
 from aihawk.documents import MissingGlyphs, missing_glyphs, write_cv_pdf
 from aihawk.llm import explain
-from aihawk.profile import add_answers, answer_question, install_resume, read_answers, read_resume
+from aihawk.profile import install_resume, read_answers, read_resume
 from aihawk.session import Session
 from aihawk.store import Proof, Stored
-from aihawk.tui import AIHawk, JobDetails, SendBatch, SentDetails, SentList, SignIn, TextPrompt
+from aihawk.tui import AIHawk, JobDetails, SendBatch, SentDetails, SentList, Settings, SignIn, TextPrompt
 from fakes import ScriptedBrowser
 
 PROFILE = {
@@ -339,50 +339,6 @@ def test_a_site_no_plugin_knows_says_so_and_nothing_runs(home: Path, resume: Pat
     assert calls == []
 
 
-def test_what_a_form_asks_is_asked_after_the_others_are_sent_remembered_and_tried_again(home: Path, resume: Path, restored_apply: Any) -> None:
-    calls: list[Any] = []
-
-    async def run() -> None:
-        app = scripted_app(home, resume)
-        fake_apply(app, [Outcome("needs_input", "missing", ["Your salary?"]), Outcome("submitted", "sent"), Outcome("submitted", "sent")], calls)
-        async with app.run_test(size=(140, 40)) as pilot:
-            await settle(pilot, app)
-            await pilot.press("space", "space", "a")
-            await wait_for_screen(pilot, SendBatch)
-            await pilot.press("enter")
-            await wait_for_screen(pilot, TextPrompt)
-            # The other form was sent while this one waited for its answer.
-            assert [call["job"].company for call in calls] == ["Bestco", "Lowly"]
-            app.screen.query_one(Input).value = "50000 EUR"
-            await pilot.press("enter")
-            await wait_for_apply(pilot, app)
-
-    asyncio.run(run())
-    assert [call["job"].company for call in calls] == ["Bestco", "Lowly", "Bestco"]
-    assert "50000 EUR" in calls[2]["answers"]
-    assert read_answers(load_config(home))["Your salary?"] == "50000 EUR"
-
-
-def test_a_question_skipped_stops_trying_and_is_recorded(home: Path, resume: Path, restored_apply: Any) -> None:
-    calls: list[Any] = []
-
-    async def run() -> None:
-        app = scripted_app(home, resume)
-        fake_apply(app, [Outcome("needs_input", "missing", ["Your salary?"])], calls)
-        async with app.run_test(size=(140, 40)) as pilot:
-            await settle(pilot, app)
-            await pilot.press("a")
-            await wait_for_screen(pilot, SendBatch)
-            await pilot.press("enter")
-            await wait_for_screen(pilot, TextPrompt)
-            await pilot.press("escape")
-            await wait_for_apply(pilot, app)
-            assert app.query_one(DataTable).get_row_at(0)[6] == "needs answer"
-
-    asyncio.run(run())
-    assert len(calls) == 1
-
-
 def test_the_auto_submit_flag_is_gone() -> None:
     result = CliRunner().invoke(cli_main, ["--auto-submit"])
     assert result.exit_code != 0
@@ -556,15 +512,6 @@ def test_an_old_word_file_says_what_to_do(tmp_path: Path) -> None:
     path.write_bytes(b"old")
     with pytest.raises(ConfigError, match="PDF or .docx"):
         read_resume(path)
-
-
-def test_an_answer_the_person_gave_outlives_a_new_resume(tmp_path: Path) -> None:
-    config = load_config(tmp_path)
-    answer_question(config, "email", "typed@example.com")
-    add_answers(config, {"email": "from-cv@example.com", "phone": "1"})
-    assert read_answers(config) == {"email": "typed@example.com", "phone": "1"}
-    answer_question(config, "email", "new@example.com")
-    assert read_answers(config)["email"] == "new@example.com"
 
 
 def test_a_new_resume_forgets_the_cvs_of_the_jobs_not_sent_and_keeps_those_sent(home: Path, resume: Path, tmp_path: Path) -> None:
@@ -861,28 +808,49 @@ def test_a_posting_with_no_stored_text_is_scored_on_its_own_pages_text(home: Pat
     session.close()
 
 
-def test_a_form_tried_again_sends_the_cv_it_wrote_the_first_time(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_settings_change_the_search_from_the_screen_and_search_again(home: Path, resume: Path) -> None:
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
+            await pilot.press("e")
+            await wait_for_screen(pilot, Settings)
+            rows = [key.value for key in app.screen.query_one(DataTable).rows]
+            app.screen.query_one(DataTable).move_cursor(row=rows.index("exclude"))
+            await pilot.press("enter")
+            await wait_for_screen(pilot, TextPrompt)
+            app.screen.query_one(Input).value = "Senior, Intern"
+            await pilot.press("enter")
+            await wait_for_screen(pilot, Settings)
+            await pilot.press("escape")
+            await settle(pilot, app)
+            assert app.session.config.filters.exclude == ("Senior", "Intern")
+            assert "Searching again" in logged(app)
+
+    asyncio.run(run())
+
+
+def test_a_setting_that_would_not_load_is_refused_and_the_file_stays_as_it_was(home: Path) -> None:
+    session = Session(home)
+    before = (home / "aihawk.yaml").read_text(encoding="utf-8")
+    with pytest.raises(ConfigError, match="max_age_days"):
+        session.change_setting("max_age_days", "soon")
+    assert (home / "aihawk.yaml").read_text(encoding="utf-8") == before
+    with pytest.raises(ConfigError, match="at least one job title"):
+        session.change_setting("titles", " , ")
+    session.close()
+
+
+def test_places_replace_the_ones_read_from_the_cv_and_a_model_clears_back_to_its_default(home: Path, resume: Path) -> None:
     session = Session(home)
     session._client = ScriptedModelForApp()  # type: ignore[assignment]
     asyncio.run(session.load_resume(resume))
-    session.store.add(Job("one", "Firm", "Python Engineer", "Milan", "https://jobs.lever.co/a/1", "https://jobs.lever.co/a/1", "A posting.", "", 1.0))
-    outcomes = [Outcome("needs_input", "missing", ["Your salary?"]), Outcome("submitted", "Filled.")]
-    written: list[str] = []
-    files: list[Path] = []
-
-    async def tailor(*_: Any) -> str:
-        written.append("cv")
-        return "# Ada Rossi"
-
-    async def fill(_client: Any, _model: str, _job: Any, _cv: str, _answers: str, cv_file: Path, *_rest: Any, **_options: Any) -> Outcome:
-        files.append(cv_file)
-        return outcomes.pop(0)
-
-    async def answer(_: str) -> str:
-        return "1"
-
-    monkeypatch.setattr(session_module, "tailor_cv", tailor)
-    monkeypatch.setattr(session_module, "apply_to_job", fill)
-    asyncio.run(session.send([session.store.get("one")], answer, lambda _: None, lambda: None))  # type: ignore[list-item]
-    assert written == ["cv"] and files[0] == files[1]
+    session.change_setting("places", "London, Leeds")
+    filters = session.config.filters
+    assert (filters.locations, filters.cities, filters.countries) == (("London", "Leeds"), ("London", "Leeds"), ())
+    default = session.config.model
+    session.change_setting("model", "some/model")
+    assert session.config.model == "some/model"
+    session.change_setting("model", "")
+    assert session.config.model == default
     session.close()

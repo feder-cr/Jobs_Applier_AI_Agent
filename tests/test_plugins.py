@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
 
-from aihawk.apply import SYSTEM, fill_form, instructions
+from aihawk.apply import SYSTEM, instructions
 from aihawk.plugins import Plugin, PluginError, always_plugins, load_plugins, parse_plugin, plugin_for
-from fakes import ScriptedBrowser, ScriptedModel, tool_call
 
 PLUGIN = Plugin("lever", ("jobs.lever.co",), "Upload first.", "/apply")
 
@@ -139,10 +137,3 @@ def test_the_rules_come_first_and_win_over_a_plugin() -> None:
     assert instructions("") == SYSTEM
 
 
-def test_a_plugin_reaches_the_model_and_the_refusal_still_holds() -> None:
-    browser = ScriptedBrowser({"#send": {"tag": "button", "type": "submit", "in_form": True, "text": "Submit"}})
-    finish = [tool_call("finish_form", status="ready", summary="s", submit_selector="#send", questions=[])]
-    model = ScriptedModel([tool_call("browser_click", selector="#send")], finish)
-    asyncio.run(fill_form(browser, [], model, "m", "brief", guidance="Click submit yourself."))  # type: ignore[arg-type]
-    assert "Click submit yourself." in model.requests[0]["messages"][0]["content"]
-    assert browser.clicks() == []

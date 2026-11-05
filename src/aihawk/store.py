@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS jobs (
 )
 """
 
-# new -> shortlisted | passed_over; shortlisted -> scored -> needs_input | refused | blocked | failed | submitted | unconfirmed
+# new -> shortlisted | passed_over; shortlisted -> scored -> refused | blocked | failed | submitted | unconfirmed
 SUBMITTED = ("submitted", "unconfirmed")
 # The jobs the person sees as tried, and what each status says in plain words.
 SENT_WORDS = {
@@ -52,7 +52,6 @@ SENT_WORDS = {
     "refused": "refused by the form",
     "blocked": "blocked",
     "failed": "failed",
-    "needs_input": "needs an answer",
 }
 LEXICAL_SHARE = 0.5
 # A spreadsheet runs a cell that starts like a formula; such a cell is written as text.
