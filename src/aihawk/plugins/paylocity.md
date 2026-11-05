@@ -4,7 +4,7 @@ hosts: [recruiting.paylocity.com]
 ---
 If the page shows a job's details rather than a form, follow its Apply link. A closed posting goes to "Job Not Found" (/Recruiting/Jobs/JobNotFound): report the form as blocked.
 
-The form has several steps ("Step 1 of 3" or "Step 1 of 5"): fill each, then go on with its next button, "Next Step" (`#btn-submit`), and read the page again. Report ready only on the last step, with the control that sends the form.
+The form has several steps ("Step 1 of 3" or "Step 1 of 5"): fill each, then go on with its next button, "Next Step" (`#btn-submit`), and read the page again. Report ready only on the last step, with the control that sends the form, which is `#btn-submit` there too.
 
 Upload the CV under "Select Resume to Upload". "Fill out application with my resume" (`#useAttachedResumeToFillOutApplication`) is ticked when the page opens: untick it, since you fill the fields. The site's "Apply with resume" dialog can still fill the email, the mobile number and the address from the file: read them afterwards and correct what is wrong.
 

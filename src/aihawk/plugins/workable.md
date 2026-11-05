@@ -19,6 +19,6 @@ Radio answers have generated ids. Select them by `input[name="CA_41201"]` with t
 
 A `gdpr` checkbox states that the person read the privacy notice and consents to the processing of their data.
 
-The submit control is the button "Submit application" (in Portuguese, "Enviar candidatura").
+The submit control is `form > button[type='submit']`, the button "Submit application" (in Portuguese, "Enviar candidatura").
 
 After sending: read the page: if the form is still there, the application was not received.

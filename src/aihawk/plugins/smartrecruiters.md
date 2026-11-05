@@ -20,6 +20,6 @@ The footer "Next" button has no selector in browser_snapshot: read its centre th
 
 The "Preliminary questions" step often asks for the right to work, sponsorship, and a block of required boxes with the person's name and today's date, stating that the answers are true.
 
-The last step's footer control sends the application. Its label is what the page says, for example "Submit application". Never click it. If a plain CSS selector matches only that control, name it as the submit control; if none does, call finish_form with status blocked and say that the send control could not be named.
+The last step's footer control sends the application: `[data-test='footer-submit']`, labelled "Submit". Its label is what the page says, for example "Submit application". Never click it. If a plain CSS selector matches only that control, name it as the submit control; if none does, call finish_form with status blocked and say that the send control could not be named.
 
 After sending: read the page: if the form is still there, the application was not received.
