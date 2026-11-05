@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -27,6 +28,7 @@ from aihawk.apply import (
     refusal,
     run_on_page,
     sends_form,
+    server_parameters,
     sign_in,
 )
 from aihawk.database import Job
@@ -79,6 +81,46 @@ def test_sends_form(element: dict[str, Any], touched: bool, sends: bool) -> None
 @pytest.mark.parametrize("word", ["Send", "Senden", "Inviar", "Verzenden", "Versturen", "Skicka", "Wyślij", "Odeslat", "Отправить", "送信", "提交", "제출"])
 def test_a_control_that_sends_in_another_language_is_held_back_even_with_no_form_around_it(word: str) -> None:
     assert sends_form({"tag": "div", "type": "", "in_form": False, "text": word}, True)
+
+
+# Confirm, Finish and Complete send from any element, a div or a type=button included. A stepper's "Complete" is refused too.
+@pytest.mark.parametrize(
+    "element",
+    [
+        {"tag": "div", "type": "", "in_form": False, "text": "Confirm"},
+        {"tag": "span", "type": "", "in_form": True, "text": "Finish"},
+        {"tag": "button", "type": "button", "in_form": True, "text": "Complete"},
+        {"tag": "div", "type": "", "in_form": True, "text": "Complete"},
+        {"tag": "div", "type": "", "in_form": False, "text": "Conferma"},
+        {"tag": "a", "type": "", "in_form": False, "text": "Confirm"},
+    ],
+)
+def test_a_confirm_finish_or_complete_control_is_held_back_whatever_its_tag(element: dict[str, Any]) -> None:
+    assert sends_form(element, False)
+
+
+# Not every clickable sends: a form's step, a link to read on, a button that edits, all pass.
+@pytest.mark.parametrize(
+    "element",
+    [
+        {"tag": "div", "type": "", "in_form": True, "text": "Next"},
+        {"tag": "span", "type": "", "in_form": False, "text": "Show more"},
+        {"tag": "button", "type": "button", "in_form": True, "text": "Edit details"},
+        {"tag": "a", "type": "", "in_form": False, "text": "Home"},
+    ],
+)
+def test_a_clickable_that_does_not_send_passes(element: dict[str, Any]) -> None:
+    assert not sends_form(element, True)
+
+
+def test_the_browser_is_given_the_environment_without_the_model_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORCAROUTER_API_KEY", "sk-default-name")
+    monkeypatch.setenv("MY_MODEL_KEY", "sk-named-in-settings")
+    environment = server_parameters(tmp_path, tmp_path, "MY_MODEL_KEY").env or {}
+    assert "ORCAROUTER_API_KEY" not in environment and "MY_MODEL_KEY" not in environment
+    assert "sk-default-name" not in environment.values() and "sk-named-in-settings" not in environment.values()
+    # Everything else stays, the PATH included, so the browser can still start.
+    assert environment["PATH"] == os.environ["PATH"]
 
 
 @pytest.mark.parametrize("key", ["Enter", "enter", "Control+Enter"])
@@ -472,7 +514,7 @@ class ScriptedServer(ScriptedBrowser):
 
 def scripted_server(monkeypatch: pytest.MonkeyPatch, server: ScriptedServer) -> None:
     @asynccontextmanager
-    async def started(upload_dir: Path, home: Path) -> AsyncIterator[tuple[ScriptedServer, str]]:
+    async def started(upload_dir: Path, home: Path, key_env: str = "") -> AsyncIterator[tuple[ScriptedServer, str]]:
         yield server, ""
 
     monkeypatch.setattr(apply_module, "_server", started)

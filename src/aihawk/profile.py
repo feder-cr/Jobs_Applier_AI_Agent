@@ -170,18 +170,16 @@ async def install_resume(client: AsyncOpenAI, config: Config, path: Path) -> dic
 
     settings_path = config.workspace / CONFIG_FILE
     settings = (yaml.safe_load(settings_path.read_text(encoding="utf-8-sig")) or {}) if settings_path.is_file() else {}
-    settings.update({
-        "name": profile["name"],
-        "goals": profile["goals"],
-        "filters": {
-            "include": [node["id"] for node in profile["plan"]["nodes"]],
-            "exclude": [],
-            "locations": list(dict.fromkeys([*profile["cities"], *profile["locations"]])),
-            "cities": profile["cities"],
-            "countries": [code.strip().upper() for code in profile["countries"]],
-            "plan": profile["plan"],
-        },
-    })
+    # The new resume replaces the plan; what the person set in the filters, such as what to exclude, is kept.
+    filters = {
+        **(settings.get("filters") or {}),
+        "include": [node["id"] for node in profile["plan"]["nodes"]],
+        "locations": list(dict.fromkeys([*profile["cities"], *profile["locations"]])),
+        "cities": profile["cities"],
+        "countries": [code.strip().upper() for code in profile["countries"]],
+        "plan": profile["plan"],
+    }
+    settings.update({"name": profile["name"], "goals": profile["goals"], "filters": filters})
     settings_path.write_text(yaml.safe_dump(settings, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     stated = {key: value for key, value in profile["answers"].items() if value.strip()}

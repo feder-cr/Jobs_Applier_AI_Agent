@@ -14,12 +14,12 @@ import httpx
 import pytest
 from openai import AsyncOpenAI
 
-from aihawk import documents
 from aihawk import judge as judge_module
 from aihawk import session as session_module
+from aihawk.config import Config, Filters
 from aihawk.database import Job
 from aihawk.judge import fuse
-from aihawk.session import JUDGED, WIDE, Session
+from aihawk.session import JUDGED, WIDE, Session, _places
 
 
 @pytest.fixture(autouse=True)
@@ -146,7 +146,21 @@ def test_fuse_is_the_title_z_score_plus_the_evidence() -> None:
     assert fuse([], []) == []
 
 
-def test_the_title_screen_is_gone() -> None:
-    assert not any(hasattr(documents, name) for name in ("screen_titles", "SCREEN_SCHEMA", "SCREEN_SYSTEM"))
-    assert not any(hasattr(session_module, name) for name in ("BATCH", "SCREEN_BATCH"))
-    assert not hasattr(Session, "shortlist") and not hasattr(Session, "next_to_score")
+@pytest.mark.parametrize(
+    ("cities", "locations", "places"),
+    [(["Lyon"], ["France"], "Lyon, France"), ([], ["Italy"], "Italy"), (["Lyon"], [], "Lyon"), ([], [], "")],
+)
+def test_the_places_a_posting_names_have_no_empty_part(cities: list[str], locations: list[str], places: str) -> None:
+    assert _places(Config(workspace=Path("."), filters=Filters(cities=tuple(cities), locations=tuple(locations)))) == places
+
+
+def test_a_description_database_that_cannot_be_read_is_said_once_and_the_funnel_goes_on(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def unreadable(refs: list[str], done: Any, problem: Any) -> list[str]:
+        problem("Some job descriptions could not be read from the job database, so those postings are judged without them.")
+        return [""] * len(refs)
+
+    monkeypatch.setattr(session_module, "stored_descriptions", unreadable)
+    session = session_with(tmp_path, 30)
+    said: list[str] = []
+    assert asyncio.run(session.funnel(said.append, lambda line: None)) == JUDGED
+    assert len(said) == 1 and "could not be read" in said[0]

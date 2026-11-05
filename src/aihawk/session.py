@@ -76,7 +76,7 @@ class Session:
 
     async def sign_in(self, wait: Callable[[], Awaitable[None]]) -> None:
         """Open the browser for the person to sign in, until `wait` returns: the same profile the applications use."""
-        await sign_in_browser(self.config.browser_profile, self.config.data_dir / "browser", wait)
+        await sign_in_browser(self.config.browser_profile, self.config.data_dir / "browser", wait, self.config.api_key_env)
 
     async def find(self, log: Log) -> int:
         """Bring today's postings for this search into the store; how many are new."""
@@ -95,7 +95,7 @@ class Session:
         batch = self.store.with_status("new")[:WIDE]
         if not batch:
             return 0
-        texts = await _read_descriptions([item.job.ref for item in batch], status)
+        texts = await _read_descriptions([item.job.ref for item in batch], status, log)
         for item, text in zip(batch, texts, strict=True):
             self.store.set_description(item.job.id, text)
         jobs = [replace(item.job, description=text) for item, text in zip(batch, texts, strict=True)]
@@ -203,7 +203,9 @@ class Session:
         guidance = "\n\n".join([plugin.instructions, *(extra.instructions for extra in extras)])
         reaches = frozenset(host for extra in extras for host in extra.reaches)
         try:
-            outcome = await apply_to_job(self.client, self.config.model, job, cv, answers, cv_file, self.config.data_dir, self.config.browser_profile, guidance, reaches)
+            outcome = await apply_to_job(
+                self.client, self.config.model, job, cv, answers, cv_file, self.config.data_dir, self.config.browser_profile, guidance, reaches, self.config.api_key_env
+            )
         except Exception as error:
             # One job's failure is reported and recorded; the next job still runs.
             if refused(error):
@@ -219,16 +221,21 @@ class Session:
         return outcome
 
 
-async def _read_descriptions(refs: list[str], status: Log) -> list[str]:
-    """The descriptions the database holds; the count of those read is said as each file is read."""
+async def _read_descriptions(refs: list[str], status: Log, log: Log) -> list[str]:
+    """The descriptions the database holds; the count of those read is said as each file is read, and a failure is logged."""
     loop = asyncio.get_running_loop()
 
     def shown(done: int) -> None:
         # The read runs in a thread: its count is handed to the loop, which alone touches the screen.
         loop.call_soon_threadsafe(status, f"reading descriptions {done}/{len(refs)}")
 
-    return await asyncio.to_thread(stored_descriptions, refs, shown)
+    def problem(text: str) -> None:
+        loop.call_soon_threadsafe(log, text)
+
+    return await asyncio.to_thread(stored_descriptions, refs, shown, problem)
 
 
 def _places(config: Config) -> str:
-    return " or ".join(config.filters.cities[:3]) + ", " + (config.filters.locations or [""])[-1]
+    """The places a posting would name for this search: its cities, then its country, each one only when there is one."""
+    parts = [" or ".join(config.filters.cities[:3]), (config.filters.locations or [""])[-1]]
+    return ", ".join(part for part in parts if part)

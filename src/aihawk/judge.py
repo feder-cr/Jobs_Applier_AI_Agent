@@ -16,9 +16,8 @@ from aihawk.llm import refused
 
 DESCRIPTION_CHARS = 24000
 DECISION_ENDPOINT = "/systemone"
-# Batching is kept for its speed: the ranking with batches and with one posting a request differed by less than the noise of five
-# people's grades. The endpoint refuses more than 512 questions a request (85 postings at six statements is 510), and the input
-# is capped at 180k tokens, below the size the endpoint refused in testing.
+# Postings are sent in batches to save requests. The endpoint refuses more than 512 questions in one request: 85 postings at
+# six questions each make 510. A batch is also kept to MAX_CHARS, a rough cap on its size at about four characters a token.
 MAX_POSTINGS = 85
 MAX_CHARS = 180_000 * 4
 
