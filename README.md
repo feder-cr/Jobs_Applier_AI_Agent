@@ -6,7 +6,7 @@ Give it your resume, get the jobs that fit, select them and apply. Runs in your 
 pipx install git+https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk
 ```
 
-Or `uv tool install git+https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk`. Or, in a virtual environment (on Windows, `aihawk-env\Scripts\pip` and `aihawk-env\Scripts\aihawk`):
+Or `uv tool install git+https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk`; uv leaves `aihawk` off your PATH until you run `uv tool update-shell` and open a new terminal. Or, in a virtual environment (on Windows, `aihawk-env\Scripts\pip` and `aihawk-env\Scripts\aihawk`; a `pip install` in a very long folder path can fail there with `OSError [Errno 2]` on openai, and pipx or a short folder avoids that):
 
 ```sh
 python -m venv aihawk-env
@@ -32,7 +32,7 @@ The first search with each new job database downloads its job index, 672 MB, int
 
 **Your data.** Your CV, your answers, the postings' texts and the pages' contents, screenshots included, go to the model gateway OrcaRouter and its providers; an application goes to the employer's site. The rest stays in `~/.aihawk`: the CV, the answers, the key (`key`), the proofs (`data/proofs/`), `applied.csv`, the job index and the browser profile with your sign-ins. You need a paid OrcaRouter key; a form costs cents in model calls.
 
-**Responsibility.** Applications go out in your name, and you answer for what is sent. Job sites have their own terms, and some do not allow automated applications: read them before you select their jobs. AIHawk asks once, with a yes, before it sends the selection; as a last resort the model can run a script in the page, which could send a form without asking (see [SECURITY.md](SECURITY.md)).
+**Responsibility.** Applications go out in your name, and you answer for what is sent. Job sites have their own terms, and some do not allow automated applications: read them before you select their jobs. AIHawk asks once, with a yes, before it sends the selection; as a last resort the model can run a script in the page, which could send a form without asking (see [SECURITY.md](SECURITY.md)). The refusal of clicks that would send reads the control's words and type, so a control worded oddly can get past it.
 
 ## Keys
 
@@ -51,7 +51,7 @@ The first search with each new job database downloads its job index, 672 MB, int
 ## What it does
 
 - **Reads** your resume, writes a search plan from it, and takes your contact details from it.
-- **Finds** the postings whose titles fit the plan, in a job database published as a release: 10,223,753 postings in the manifest of 2026-11-04, built once by hand. Postings older than 60 days are left out by default. The daily rebuild, [`jobs-database.yml`](.github/workflows/jobs-database.yml), is on main and has never run; it needs GitHub Actions working.
+- **Finds** the postings whose titles fit the plan, in a job database published as a release: 10,223,753 postings in the manifest of 2026-11-04, built once by hand. Postings older than 60 days are left out by default. The daily rebuild, [`jobs-database.yml`](.github/workflows/jobs-database.yml), is on main, and its first scheduled run, on 2026-11-05, failed; it needs GitHub Actions working.
 - **Shortlists** the 100 postings with the best title fit: Jev, the decision model, answers six questions about each, and the best 25 are kept.
 - **Scores** each shortlisted job from 1 to 5 against your resume, with its gaps.
 - **Applies**: writes a CV for the job and fills the form in a visible browser through [invisible-playwright-mcp](https://github.com/feder-cr/invisible_playwright_mcp). What a form asks and your files do not say, it asks you, and remembers.
@@ -74,6 +74,6 @@ Models go through OrcaRouter: `model` (default `deepseek/deepseek-v4.1-flash`) w
 - **Uninstall:** `pipx uninstall aihawk` (or `uv tool uninstall aihawk`), then delete `~/.aihawk`, which holds your CV, key and sign-ins.
 - **The search:** the plan is `filters.plan` in `~/.aihawk/aihawk.yaml`; restart `aihawk` after editing it.
 
-More: the [wiki](https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk/wiki), [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), [CHANGELOG.md](CHANGELOG.md). The job database merges public sources, whose licences and posting links are in [NOTICE](NOTICE) and [docs/data-sources.md](docs/data-sources.md); each posting belongs to its employer. The report's shape is adapted from [career-ops](https://github.com/santifer/career-ops) (MIT).
+More: the [wiki](https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk/wiki), [configuration](docs/configuration.md), [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), [CHANGELOG.md](CHANGELOG.md). The job database merges public sources, whose licences and posting links are in [NOTICE](NOTICE) and [docs/data-sources.md](docs/data-sources.md). Some sources state no licence, and one asks that its postings not be republished as job listings; each posting belongs to its employer. The report's shape is adapted from [career-ops](https://github.com/santifer/career-ops) (MIT).
 
 [MIT](LICENSE). The former Dots project is at [feder-cr/invisible_dots](https://github.com/feder-cr/invisible_dots).
