@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import anyio
 import pytest
 
 from aihawk import apply as apply_module
@@ -404,3 +405,70 @@ def test_the_goals_reach_the_model_and_the_score_is_computed_not_asked() -> None
     assert "remote only" in model.requests[0]["messages"][1]["content"]
 
 
+class SaysNothingYet(ScriptedBrowser):
+    """After the click the button reads "Submitting...", and the page moves on only after the first reading."""
+
+    def __init__(self) -> None:
+        super().__init__({"#send": SUBMIT}, page={"url": "https://u/apply", "text": "the form"})
+        self.reads = 0
+
+    async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
+        if name == "browser_read_text":
+            self.reads += 1
+            text = "Submitting..." if self.reads == 1 else "Application received"
+            self.page = {"url": "https://u/apply" if self.reads == 1 else "https://u/thanks", "text": text}
+            return SimpleNamespace(isError=False, content=[SimpleNamespace(text=text)])
+        if self.clicks() and not self.reads:
+            self.page = {"url": "https://u/apply", "text": "Submitting..."}
+        return await super().call_tool(name, arguments)
+
+
+def test_a_page_that_says_nothing_yet_is_read_again_when_it_changes(tmp_path: Path) -> None:
+    says = (json.dumps({"outcome": "unknown", "evidence": "Submitting..."}), VERIFIED)
+    browser = SaysNothingYet()
+    outcome = run(ScriptedModel(ready(), *says), browser, tmp_path / "proof.png")
+    assert outcome.status == "submitted" and outcome.proof.url == "https://u/thanks"
+    assert browser.clicks() == ["#send"]
+
+
+class ClickBreaks(ScriptedBrowser):
+    async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
+        result = await super().call_tool(name, arguments)
+        if name == "browser_click":
+            raise ConnectionError("the server went away")
+        return result
+
+
+def test_a_click_that_breaks_is_never_called_failed_because_it_may_have_gone(tmp_path: Path) -> None:
+    verdict = json.dumps({"outcome": "unknown", "evidence": "page unchanged"})
+    outcome = run(ScriptedModel(ready(), verdict), ClickBreaks({"#send": SUBMIT}), tmp_path / "proof.png")
+    assert outcome.status == "unconfirmed" and "the server went away" in outcome.summary
+
+
+@asynccontextmanager
+async def _in_a_task_group() -> Any:
+    async with anyio.create_task_group():
+        yield None, None
+
+
+class _Started:
+    async def __aenter__(self) -> Any:
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        return None
+
+    async def initialize(self) -> Any:
+        return SimpleNamespace(instructions="")
+
+
+def test_what_goes_wrong_in_the_browser_comes_out_as_itself(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(apply_module, "stdio_client", lambda *_a, **_o: _in_a_task_group())
+    monkeypatch.setattr(apply_module, "ClientSession", lambda *_a: _Started())
+
+    async def inside() -> None:
+        async with apply_module._server(tmp_path, tmp_path):
+            raise ValueError("the real cause")
+
+    with pytest.raises(ValueError, match="the real cause"):
+        asyncio.run(inside())

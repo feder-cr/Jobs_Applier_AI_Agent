@@ -99,6 +99,8 @@ PAGE_CHARS = 4000
 # A send can take many seconds to show on the page, so it is read once it has changed and stopped changing.
 SEND_WAIT_S = 30
 SEND_POLL_S = 1.0
+# A page that says nothing yet ("Submitting...") is read again when it changes, this many times at most.
+SEND_READS = 3
 
 
 def verify_system(guidance: str) -> str:
@@ -201,8 +203,8 @@ async def _where(session: Browser, shot: Path) -> tuple[str, str]:
     return url, screenshot
 
 
-async def _settled(session: Browser, before: dict[str, str] | None) -> str:
-    """Wait until the page differs from `before` and reads the same twice, or SEND_WAIT_S have gone. Its address then."""
+async def _settled(session: Browser, before: dict[str, str] | None) -> dict[str, str] | None:
+    """Wait until the page differs from `before` and reads the same twice, or SEND_WAIT_S have gone. The page then."""
     last = None
     for _ in range(int(SEND_WAIT_S)):
         await asyncio.sleep(SEND_POLL_S)
@@ -211,7 +213,7 @@ async def _settled(session: Browser, before: dict[str, str] | None) -> str:
             if page is not None and page != before and page == last:
                 break
             last = page
-    return str((last or {}).get("url", ""))
+    return last
 
 
 async def submit_and_verify(session: Browser, client: AsyncOpenAI, model: str, selector: str, summary: str, guidance: str, shot: Path) -> Outcome:
@@ -219,18 +221,27 @@ async def submit_and_verify(session: Browser, client: AsyncOpenAI, model: str, s
     before = None
     with suppress(Exception):
         before = await _page(session)
-    click = await session.call_tool("browser_click", {"selector": selector})
     # An error does not say it stayed: a form that disables its button while sending answers the click with one. What
     # may have gone must never be tried again as if it had not, so only the page decides.
-    if click.isError:
-        summary = f"{summary}\nThe click answered: {tool_text(click)}"
-    address = await _settled(session, before)
-    text = ""
     try:
-        text = tool_text(await session.call_tool("browser_read_text", {"selector": "body"}))
-        verdict = await structured(client, model, verify_system(guidance), f"The page's address: {address}\n\n{text}", "submit_outcome", VERIFY_SCHEMA)
-    except Exception as error:  # noqa: BLE001  It was clicked: a failure to read the result is not a failure to send.
-        verdict = {"outcome": "unknown", "evidence": f"the page could not be read: {error}"}
+        click = await session.call_tool("browser_click", {"selector": selector})
+        if click.isError:
+            summary = f"{summary}\nThe click answered: {tool_text(click)}"
+    except Exception as error:  # noqa: BLE001
+        summary = f"{summary}\nThe click answered: {error}"
+    text, verdict = "", {}
+    for _ in range(SEND_READS):
+        page = await _settled(session, before)
+        address = str((page or {}).get("url", ""))
+        try:
+            text = tool_text(await session.call_tool("browser_read_text", {"selector": "body"}))
+            verdict = await structured(client, model, verify_system(guidance), f"The page's address: {address}\n\n{text}", "submit_outcome", VERIFY_SCHEMA)
+        except Exception as error:  # noqa: BLE001  It was clicked: a failure to read the result is not a failure to send.
+            verdict = {"outcome": "unknown", "evidence": f"the page could not be read: {error}"}
+            break
+        if verdict["outcome"] != "unknown" or page in (None, before):
+            break
+        before = page
     url, screenshot = await _where(session, shot)
     proof = Proof(at, url, verdict["outcome"], verdict["evidence"], text[:PAGE_CHARS], screenshot)
     if verdict["outcome"] == "submitted":
@@ -287,11 +298,18 @@ def server_parameters(upload_dir: Path, home: Path) -> StdioServerParameters:
 async def _server(upload_dir: Path, home: Path) -> AsyncIterator[tuple[ClientSession, str]]:
     """The browser server, started: a session on it, and the instructions it gives about driving a page."""
     home.mkdir(parents=True, exist_ok=True)
-    # The server's own messages go to a file: on the person's terminal they would draw over the screen.
-    with (home / "server.log").open("a", encoding="utf-8") as server_log:
-        async with stdio_client(server_parameters(upload_dir, home), errlog=server_log) as (read, write), ClientSession(read, write) as session:
-            started = await session.initialize()
-            yield session, started.instructions or ""
+    try:
+        # The server's own messages go to a file: on the person's terminal they would draw over the screen.
+        with (home / "server.log").open("a", encoding="utf-8") as server_log:
+            async with stdio_client(server_parameters(upload_dir, home), errlog=server_log) as (read, write), ClientSession(read, write) as session:
+                started = await session.initialize()
+                yield session, started.instructions or ""
+    except ExceptionGroup as group:
+        # The client's task groups wrap whatever happens inside them, and the caller must see a refused key as itself.
+        error: BaseException = group
+        while isinstance(error, BaseExceptionGroup):
+            error = error.exceptions[0]
+        raise error from group
 
 
 async def apply_to_job(

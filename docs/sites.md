@@ -10,24 +10,23 @@ What AIHawk can do on each site, from the real forms it has been run on. Posting
 | JazzHR (applytojob.com) | ~154k | stops at a captcha most of the time | reCAPTCHA did not pass with a click on 5 postings; it often turned into an image puzzle. |
 | BambooHR (bamboohr.com) | ~87k | stops at a captcha most of the time | reCAPTCHA did not pass with a click on 5 postings; it often turned into an image puzzle. |
 | Personio (jobs.personio.de, jobs.personio.com) | ~64k | stops at a captcha about half the time | Turnstile passed on 2 of 4 postings. A real form ended blocked. |
-| SmartRecruiters (jobs.smartrecruiters.com) | ~519k | reaches the send button, no send tried yet | One real form filled through every step in about 11 minutes, and the send button named. Not clicked. |
+| SmartRecruiters (jobs.smartrecruiters.com) | ~519k | reaches the send button, not always | One real form filled through every step in about 11 minutes, and the send button named. Later runs on the same form did not get there: one failed on an error, one stopped at 150 steps. No send has gone. |
 | Recruitee (recruitee.com) | ~26k | sent and confirmed on a real form | One real send (one send only). Other forms stopped at required questions that test answers do not fit. |
 | Teamtailor (teamtailor.com) | ~30k | sent and confirmed on a real form | One real send (one send only). An earlier click was refused for its test phone number, so nothing went then. Other forms stopped at required questions. |
-| Workable (apply.workable.com) | ~35k | reaches the send button, no send tried yet | One real form filled in about 7 minutes, and the send button named. Not clicked. |
-| Paylocity (recruiting.paylocity.com) | ~228k | reaches the send button, no send tried yet | One real form of 5 steps filled in about 27 minutes, and the send button named. Not clicked. |
+| Workable (apply.workable.com) | ~35k | send clicked, not confirmed | One real form filled and sent: the button stayed on "Submitting…" beside an unticked Cloudflare box, and the browser was closed with no answer from the page. |
+| Paylocity (recruiting.paylocity.com) | ~228k | reaches the send button, not always | One real form of 5 steps filled in about 27 minutes, and the send button named. A later run stopped at 150 steps. No send has gone. |
 | Breezy (breezy.hr) | ~50k | sent and confirmed on a real form | One real send (one send only). |
 | Workday (myworkdayjobs.com, myworkdaysite.com) | ~1,481k | tried, no plugin | Needs an account on each company's site: a form stops at the sign-in unless you are signed in. Not tried on a real form. |
 | iCIMS (icims.com) | ~622k | tried, no plugin | Needs an account: a form stops at the sign-in unless you are signed in. Not tried on a real form. |
 
-Postings per status, in the index: sent and confirmed ~484k; reaches the send button, no send tried yet ~782k; stops at a captcha most or half of the time ~305k; tried with no plugin ~2,103k.
+Postings per status, in the index: sent and confirmed ~484k; reaches the send button, no send confirmed ~782k; stops at a captcha most or half of the time ~305k; tried with no plugin ~2,103k.
 
 Notes:
 
 - A form no longer stops at what the CV does not say. Lever's send was made after that change; the others behind "sent and confirmed" were made before it, when other forms on those sites stopped at required questions.
 - "Sent and confirmed" rests on one send per site. Treat it as "it can send", not "it sends reliably".
-- A form asks the person for whatever the CV and answers do not cover, then tries again. In trials with test answers most forms stopped there, as they should.
 - Greenhouse's confirmation page was not saved, so its plugin keeps generic wording. Ashby's, Breezy's, Recruitee's and Teamtailor's are quoted in their plugins.
-- A captcha shown as a box is clicked, twice at most, as a person would. It is not solved: on a puzzle the form stops as blocked, for the person to do by hand.
+- A captcha shown as a box is clicked, as a person would. It is not solved: on a puzzle the form stops as blocked, for the person to do by hand.
 
 ## Measured
 
