@@ -5,22 +5,24 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import re
 import statistics
 from collections.abc import Callable
 from typing import Any
 
-from openai import AsyncOpenAI
+from openai import APIStatusError, AsyncOpenAI
 
 from aihawk.database import Job
-from aihawk.llm import refused
+from aihawk.llm import explain, refused
 
 DESCRIPTION_CHARS = 24000
 DECISION_ENDPOINT = "/systemone"
-# Batching is kept for its speed: the ranking with batches and with one posting a request differed by less than the noise of five
-# people's grades. The endpoint refuses more than 512 questions a request (85 postings at six statements is 510), and the input
-# is capped at 180k tokens, below the size the endpoint refused in testing.
+# Postings are sent in batches to save requests. The endpoint refuses more than 512 questions in one request: 85 postings at
+# six questions each make 510. A batch is also kept to MAX_CHARS, a rough cap on its size at about four characters a token.
 MAX_POSTINGS = 85
 MAX_CHARS = 180_000 * 4
+# The words an endpoint's refusal uses for a request or context that is too big, which a smaller batch can cure.
+TOO_LARGE = re.compile(r"context|too (?:large|long|many)")
 
 
 def logit(p: float) -> float:
@@ -43,13 +45,16 @@ def questions(goals: str, places: str) -> dict[str, tuple[str, int]]:
     }
 
 
-async def evidence(client: AsyncOpenAI, model: str, cv: str, jobs: list[Job], asked: dict[str, tuple[str, int]], progress: Callable[[int], None]) -> list[float | None]:
-    """One value per posting, in order; None where it failed alone. The groups go at once, and `progress` is told the postings done so far."""
+async def evidence(
+    client: AsyncOpenAI, model: str, cv: str, jobs: list[Job], asked: dict[str, tuple[str, int]], progress: Callable[[int], None], why: Callable[[str], None]
+) -> list[float | None]:
+    """One value per posting, in order; None where it was not judged. The groups go at once, and `progress` is told the postings done so far.
+    `why` is told, once per failed request, in plain words why its postings were not judged."""
     done = 0
 
     async def read(group: list[Job]) -> list[float | None]:
         nonlocal done
-        values = await _read(client, model, cv, group, asked)
+        values = await _read(client, model, cv, group, asked, why)
         done += len(group)
         progress(done)
         return values
@@ -69,21 +74,32 @@ def groups(model: str, cv: str, jobs: list[Job], asked: dict[str, tuple[str, int
     return out
 
 
-async def _read(client: AsyncOpenAI, model: str, cv: str, jobs: list[Job], asked: dict[str, tuple[str, int]]) -> list[float | None]:
-    """One request's values. A request that fails is split in two and each half tried again; a posting that fails alone is a failed verdict."""
+def too_large(error: BaseException) -> bool:
+    """Whether a smaller batch can cure the failure: the request or its context is too large for the endpoint."""
+    if not isinstance(error, APIStatusError):
+        return False
+    return error.status_code == 413 or (error.status_code == 400 and TOO_LARGE.search(str(error).lower()) is not None)
+
+
+async def _read(client: AsyncOpenAI, model: str, cv: str, jobs: list[Job], asked: dict[str, tuple[str, int]], why: Callable[[str], None]) -> list[float | None]:
+    """One request's values. A request too large for the endpoint is split in two and each half tried again. Any other failure ends
+    the request at once, without a split: its postings have no verdict, and `why` says why."""
     try:
         reply = await client.post(DECISION_ENDPOINT, body=request_body(model, cv, jobs, asked), cast_to=dict)
     except Exception as error:
-        # Whatever the failure, one bad posting must not cost the others their verdicts. A refused key fails every request
-        # alike: splitting would only ask again, so it is raised for the screen.
+        # A refused key fails every request alike: splitting would only ask again, so it is raised for the screen.
         if refused(error):
             raise
-        if len(jobs) == 1:
-            return [None]
-        middle = len(jobs) // 2
-        return [*await _read(client, model, cv, jobs[:middle], asked), *await _read(client, model, cv, jobs[middle:], asked)]
+        if too_large(error) and len(jobs) > 1:
+            middle = len(jobs) // 2
+            return [*await _read(client, model, cv, jobs[:middle], asked, why), *await _read(client, model, cv, jobs[middle:], asked, why)]
+        why(explain(error))
+        return [None] * len(jobs)
     answers = reply.get("answers") or {}
-    return [_verdict(answers, index, asked) for index in range(len(jobs))]
+    values = [_verdict(answers, index, asked) for index in range(len(jobs))]
+    if any(value is None for value in values):
+        why("OrcaRouter's answer left out some verdicts")
+    return values
 
 
 def request_body(model: str, cv: str, jobs: list[Job], asked: dict[str, tuple[str, int]]) -> dict[str, Any]:

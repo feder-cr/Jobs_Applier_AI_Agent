@@ -10,7 +10,7 @@ import shutil
 import urllib.request
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import UTC, datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -76,12 +76,13 @@ def page_text(markup: str) -> str:
     return re.sub(r"\n\s*\n+", "\n\n", "".join(parser.parts)).strip()
 
 
-def stored_descriptions(refs: list[str], done: Callable[[int], None] = lambda _: None) -> list[str]:
+def stored_descriptions(refs: list[str], done: Callable[[int], None] = lambda _: None, problem: Callable[[str], None] = lambda _: None) -> list[str]:
     """The descriptions the database holds for these postings, in order; empty where its sources published none.
 
     One connection, and one query per file: a file's footer is fetched once for the search, not once per posting, which
     downloads far less over HTTP.
-    `done` is told how many have been read, as each file is.
+    `done` is told how many have been read, as each file is. A read that fails is told once to `problem`, and the
+    descriptions read before it are kept: the search goes on with what it has.
     """
     texts = [""] * len(refs)
     by_file: dict[str, list[tuple[int, int]]] = {}
@@ -99,19 +100,14 @@ def stored_descriptions(refs: list[str], done: Callable[[int], None] = lambda _:
             connection.execute("INSTALL httpfs; LOAD httpfs;")
             for file, places in by_file.items():
                 marks = ", ".join(str(number) for _, number in places)
-                try:
-                    found = dict(connection.execute(
-                        f"SELECT file_row_number, description FROM read_parquet(?, file_row_number = true) WHERE file_row_number IN ({marks})",
-                        [file],
-                    ).fetchall())
-                except duckdb.Error:
-                    found = {}
+                query = f"SELECT file_row_number, description FROM read_parquet(?, file_row_number = true) WHERE file_row_number IN ({marks})"
+                found = dict(connection.execute(query, [file]).fetchall())
                 for position, number in places:
                     texts[position] = found.get(number) or ""
                 count += len(places)
                 done(count)
         except duckdb.Error:
-            pass
+            problem("Some job descriptions could not be read from the job database, so those postings are judged without them.")
         finally:
             connection.close()
     return texts
@@ -154,6 +150,12 @@ def load_manifest(location: str) -> dict[str, Any]:
         raise DatabaseError(f"the job database's manifest at {location} cannot be read: {error}") from error
 
 
+def built_at(manifest: dict[str, Any]) -> datetime:
+    """When the database was built, as the manifest says: a time with no zone is UTC, as the pipeline's is."""
+    built = datetime.fromisoformat(manifest["built_at"])
+    return built if built.tzinfo else built.replace(tzinfo=UTC)
+
+
 def _base(manifest: dict[str, Any], location: str) -> str:
     """Where the database's files are: the release the manifest names, or beside the manifest."""
     return manifest.get("base_url") or location.rsplit("/", 1)[0].rsplit("\\", 1)[0]
@@ -169,7 +171,7 @@ def local_index(manifest: dict[str, Any], location: str, cache: Path, log: Calla
     path = cache / f"index-{stamp}.parquet"
     if path.is_file():
         return path
-    log(f"downloading today's job index ({manifest['index']['bytes'] // 1_000_000} MB), once a day")
+    log(f"downloading the job index built {built_at(manifest):%Y-%m-%d} ({manifest['index']['bytes'] // 1_000_000} MB), once per database")
     partial = path.with_suffix(".part")
     try:
         with urllib.request.urlopen(source, timeout=120) as response, partial.open("wb") as out:

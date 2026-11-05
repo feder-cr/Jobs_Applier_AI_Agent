@@ -23,8 +23,10 @@ from aihawk.apply import Outcome
 from aihawk.cli import main as cli_main
 from aihawk.config import ConfigError, load_config
 from aihawk.database import Job
+from aihawk.documents import MissingGlyphs, missing_glyphs, write_cv_pdf
 from aihawk.llm import explain
 from aihawk.profile import add_answers, answer_question, install_resume, read_answers, read_resume
+from aihawk.session import Session
 from aihawk.store import Proof, Stored
 from aihawk.tui import AIHawk, JobDetails, SendBatch, SentDetails, SentList, SignIn, TextPrompt
 from fakes import ScriptedBrowser
@@ -200,7 +202,7 @@ def test_no_key_asks_for_one_and_keeps_it_on_this_computer(home: Path, resume: P
 
 
 def fake_apply(app: AIHawk, outcomes: list[Outcome], calls: list[Any]) -> None:
-    async def apply_to_job(client: Any, model: str, job: Any, cv: str, answers: str, cv_file: Path, data_dir: Path, profile: Path, guidance: str = "", reaches: frozenset[str] = frozenset()) -> Outcome:
+    async def apply_to_job(client: Any, model: str, job: Any, cv: str, answers: str, cv_file: Path, data_dir: Path, profile: Path, guidance: str = "", reaches: frozenset[str] = frozenset(), key_env: str = "") -> Outcome:
         calls.append({"job": job, "answers": answers, "guidance": guidance, "cv_file": cv_file, "profile": profile})
         return outcomes.pop(0)
 
@@ -512,10 +514,41 @@ def test_an_answer_the_person_gave_outlives_a_new_resume(tmp_path: Path) -> None
     assert read_answers(config)["email"] == "new@example.com"
 
 
+def test_a_new_resume_forgets_the_cvs_of_the_jobs_not_sent_and_keeps_those_sent(home: Path, resume: Path, tmp_path: Path) -> None:
+    session = Session(home)
+    session._client = ScriptedModelForApp()  # type: ignore[assignment]
+    asyncio.run(session.load_resume(resume))
+    for job_id, status in (("not-sent", "scored"), ("sent", "submitted")):
+        session.store.add(Job(job_id, "Firm", "Python Engineer", "Milan", f"https://a.example/{job_id}", "https://a.example/apply", "", "", 1.0))
+        session.store.set_cv(job_id, tmp_path / f"{job_id}.pdf")
+        session.store.set_status(job_id, status)
+    newer = tmp_path / "newer.txt"
+    newer.write_text(CV_TEXT + "\nA later role at Beta.", encoding="utf-8")
+    asyncio.run(session.load_resume(newer))
+    assert session.store.get("not-sent").cv_path is None  # type: ignore[union-attr]
+    assert session.store.get("sent").cv_path == str(tmp_path / "sent.pdf")  # type: ignore[union-attr]
+    session.close()
+
+
+def test_the_cv_font_lacks_some_latin_letters_and_a_cv_with_one_is_not_written(tmp_path: Path) -> None:
+    assert missing_glyphs("Łódź") == "ź"
+    with pytest.raises(MissingGlyphs):
+        write_cv_pdf("Ś", tmp_path / "cv.pdf")
+    assert not (tmp_path / "cv.pdf").exists()
+
+
 def test_a_new_resume_never_invents_a_contact_detail(home: Path, resume: Path) -> None:
     config = load_config(home)
     asyncio.run(install_resume(ScriptedModelForApp(), config, resume))  # type: ignore[arg-type]
     assert "phone" not in read_answers(config)
+
+
+def test_a_new_resume_replaces_the_plan_and_keeps_what_the_person_excluded(home: Path, resume: Path) -> None:
+    (home / "aihawk.yaml").write_text("filters:\n  exclude: [intern]\n", encoding="utf-8")
+    asyncio.run(install_resume(ScriptedModelForApp(), load_config(home), resume))  # type: ignore[arg-type]
+    config = load_config(home)
+    assert config.filters.exclude == ("intern",)
+    assert config.filters.include == tuple(node.id for node in config.filters.plan.nodes)
 
 
 def test_the_mail_plugins_join_every_form_after_the_sites_own_and_the_profile_is_the_workspaces(home: Path, resume: Path, restored_apply: Any) -> None:
@@ -546,7 +579,7 @@ class ScriptedServer(ScriptedBrowser):
 
 def scripted_server(monkeypatch: pytest.MonkeyPatch, server: ScriptedServer) -> None:
     @asynccontextmanager
-    async def started(upload_dir: Path, home: Path) -> AsyncIterator[tuple[ScriptedServer, str]]:
+    async def started(upload_dir: Path, home: Path, key_env: str = "") -> AsyncIterator[tuple[ScriptedServer, str]]:
         yield server, ""
 
     monkeypatch.setattr(apply_module, "_server", started)
@@ -587,7 +620,7 @@ def test_the_sign_in_key_is_refused_while_an_application_runs(home: Path, resume
     async def run() -> None:
         release = asyncio.Event()
 
-        async def slow_apply(client: Any, model: str, job: Any, cv: str, answers: str, cv_file: Path, data_dir: Path, profile: Path, guidance: str = "", reaches: frozenset[str] = frozenset()) -> Outcome:
+        async def slow_apply(client: Any, model: str, job: Any, cv: str, answers: str, cv_file: Path, data_dir: Path, profile: Path, guidance: str = "", reaches: frozenset[str] = frozenset(), key_env: str = "") -> Outcome:
             await release.wait()
             return Outcome("blocked", "not sent")
 

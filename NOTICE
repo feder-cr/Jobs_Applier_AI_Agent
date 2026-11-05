@@ -6,9 +6,12 @@ src/aihawk/documents.py
   MIT License, Copyright (c) 2026 Santiago Fernandez de Valderrama. No file was copied.
 
 src/aihawk/profile.py, src/aihawk/database.py
-  The search plan's rules and the rarity weight follow the planner of the LLDB engine by the same author.
+  The search plan's rules and the rarity weight follow the planner of the author's earlier job-search engine; the credit is to that work.
 
 The published job database
   Is merged from the public sources named in pipeline/build.py, each with its home and licence as far as
   it states one; each release's manifest.json lists them, with the rows each gave or the error that left
   it out that day, and every row names the sources that carried it. Each posting belongs to its employer and links back to the original.
+  docs/data-sources.md lists each source with its licence and how to ask for its removal. AIHawk's MIT licence
+  covers its code, not this data. Job data from Headcount Labs (https://headcountlabs.com), ODbL 1.0, with location
+  data from OpenStreetMap contributors (ODbL) and Overture Maps. Forward Deployed Engineer jobs from FDE Times, CC BY 4.0.

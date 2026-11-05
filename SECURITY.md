@@ -17,7 +17,7 @@ AIHawk reads job pages written by strangers, fills their forms, and sends applic
 
 1. **A posting's page steering the model.** The page's text, scripts and hidden fields reach the model as the content of tool results. Anything that lets a page make the model fill something the person did not give, click a control outside the form, or visit a site the plugin does not name is a serious problem.
 2. **Sending without the person's yes.** An application or an e-mail goes out only after the person selects the jobs, presses `a` and Enter. Anything that sends one another way, or gets past the refusal in `src/aihawk/apply.py` that stops clicks and Enter from sending a form, matters most.
-3. **Reading mail.** The mail plugins (`gmail.md`, `outlook.md`) allow reading only: a code or a link from the site the person applied to, received in the last few minutes. Anything that reads, sends, deletes or opens other mail matters.
+3. **Reading mail.** The mail plugins (`gmail.md`, `outlook.md`) tell the model to read only: a code or a link from the site the person applied to, received in the last few minutes. That is an instruction, not a guarantee. The code refuses only clicks that look like sending, Enter, and visits to sites other than the form's and the mailbox's; a click that deletes or archives mail is not refused. Anything that reads, sends, deletes or opens other mail matters.
 4. **Keys and sign-ins.** See below.
 
 ## Where keys and sign-ins are kept
@@ -29,6 +29,8 @@ AIHawk reads job pages written by strangers, fills their forms, and sends applic
 ## Known and accepted
 
 - **A script can send a form.** As a last resort, the model may run a script in the page (`browser_evaluate`). The refusal in `apply.py` does not check a script, so a script can send a form without the person's yes. This is accepted on purpose: a script is the last rung, offered only when the other browser tools cannot do the job. After each call that changes the page, AIHawk checks whether the page left the form's site; it cannot tell a send on the same site. Report a case where a script sends something the person did not select as a vulnerability.
-- **The mail plugins read the mailbox that the browser is signed into.** That is how a code or a link is taken from the mail. It is limited by the rules in those plugins, not by the browser.
+- **The refusal of clicks reads words.** A final button that only says Continue is taken for the next step of a form, and a control worded in a way the check does not know can get past it. Refusing every Continue would stop every multi-step form.
+- **Enter in a tag field can send the form.** Enter is allowed in a text field whose placeholder or label says to press Enter, and it is allowed on the assumption that the page's script catches it; where the script does not, the browser sends the form on Enter, and AIHawk does not refuse that.
+- **The mail plugins read the mailbox that the browser is signed into.** That is how a code or a link is taken from the mail. It is limited by the instructions in those plugins, not enforced by the browser or by the code.
 - **A captcha or a sign-in is not bypassed.** The model reports the form as blocked, and the person deals with it.
 - **The model is a third-party service.** Everything sent to it, including the CV and what the pages say, leaves the machine. The model's output is not trusted: the person selects, and the send is checked by AIHawk.

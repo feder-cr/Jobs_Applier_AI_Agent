@@ -83,7 +83,7 @@ def main() -> None:
 
     tag = "jobs-" + manifest["built_at"][:19].replace(":", "").replace("-", "").replace("T", "-")
     names = [manifest["index"]["name"], *(item["name"] for item in manifest["files"])]
-    notes = f"{manifest['rows_out']} job postings. See {LATEST} for the current database."
+    notes = f"{manifest['rows_out']} job postings. See {LATEST} for the current database. Sources and licences: https://github.com/{arguments.repo}/blob/main/docs/data-sources.md"
     publish_files(arguments.repo, tag, arguments.out, names, notes)
 
     manifest["base_url"] = f"https://github.com/{arguments.repo}/releases/download/{tag}"

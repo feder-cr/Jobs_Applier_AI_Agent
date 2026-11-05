@@ -30,6 +30,7 @@ dependencies = [
     "pypdf>=4",
     "pyyaml>=6",
     "reportlab>=4",
+    "rich>=13",
     "textual>=0.80",
 ]
 

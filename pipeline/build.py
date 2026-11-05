@@ -207,7 +207,7 @@ SOURCES = (
     Source("headcount-internships", "https://huggingface.co/datasets/HeadcountLabs/internships", "ODbL", _headcount("internships")),
     Source("headcount-healthcare", "https://huggingface.co/datasets/HeadcountLabs/healthcare-jobs", "ODbL", _headcount("healthcare-jobs")),
     Source("eu-tech-jobs", "https://huggingface.co/datasets/Aramente/eu-tech-jobs", "CC-BY-4.0", _eu_tech),
-    Source("minmaxxxer", "https://huggingface.co/datasets/minmaxxxer/job-postings-with-salaries", "research use", lambda _: select(
+    Source("minmaxxxer", "https://huggingface.co/datasets/minmaxxxer/job-postings-with-salaries", "research use, no republishing as listings", lambda _: select(
         f"read_parquet('{HF}/minmaxxxer/job-postings-with-salaries/resolve/main/job_postings_with_salaries.parquet')",
         url="coalesce(apply_url, url)", ats="ats", country="country_code", remote="workplace_type = 'remote'",
         salary_min="salary_min", salary_max="salary_max", salary_currency="salary_currency",
@@ -219,32 +219,32 @@ SOURCES = (
         f"read_csv('{RAW}/fecklesspleb/ats-new-jobs-feed/HEAD/data/jobs.csv', header=true, all_varchar=true)",
         url="url", ats="ats", remote="workplace = 'remote'", posted_at="posted_at",
     )),
-    Source("simplify-new-grad", "https://github.com/SimplifyJobs/New-Grad-Positions", "not found", _simplify("SimplifyJobs/New-Grad-Positions")),
-    Source("simplify-internships", "https://github.com/SimplifyJobs/Summer2027-Internships", "not found", _simplify("SimplifyJobs/Summer2027-Internships")),
+    Source("simplify-new-grad", "https://github.com/SimplifyJobs/New-Grad-Positions", "not stated", _simplify("SimplifyJobs/New-Grad-Positions")),
+    Source("simplify-internships", "https://github.com/SimplifyJobs/Summer2027-Internships", "not stated", _simplify("SimplifyJobs/Summer2027-Internships")),
     Source("vanshb03-new-grad", "https://github.com/vanshb03/New-Grad-2027", "MIT", _simplify("vanshb03/New-Grad-2027")),
     Source("vanshb03-internships", "https://github.com/vanshb03/Summer2026-Internships", "MIT", _simplify("vanshb03/Summer2026-Internships")),
-    Source("simplify-trabaho", "https://github.com/yanicells/SimplifyTrabaho", "MIT (code)", lambda _: select(
+    Source("simplify-trabaho", "https://github.com/yanicells/SimplifyTrabaho", "CC0-1.0 (data), MIT (code)", lambda _: select(
         _unnested(f"{RAW}/yanicells/SimplifyTrabaho/HEAD/data/listings.json", "listings"),
         url="u.url", title="u.title", company="u.company", ats="u.source", location="array_to_string(u.locations, '; ')",
         remote="u.workSetup = 'remote'",
     )),
-    Source("headcount-engineering-interns", "https://github.com/HeadcountLabs/engineering-internships", "not stated", lambda _: select(
+    Source("headcount-engineering-interns", "https://github.com/HeadcountLabs/engineering-internships", "ODbL", lambda _: select(
         f"read_csv('{RAW}/HeadcountLabs/engineering-internships/HEAD/data/jobs.csv', header=true, all_varchar=true)",
         url="apply_url", location="locations", remote="remote = 'true'", posted_at="posted",
     )),
-    Source("headcount-software-interns", "https://github.com/HeadcountLabs/software-engineering-internships", "not stated", lambda _: select(
+    Source("headcount-software-interns", "https://github.com/HeadcountLabs/software-engineering-internships", "ODbL", lambda _: select(
         f"read_csv('{RAW}/HeadcountLabs/software-engineering-internships/HEAD/data/jobs.csv', header=true, all_varchar=true)",
         url="apply_url", location="locations", remote="remote = 'true'", posted_at="posted",
     )),
-    Source("applyguy", "https://github.com/ApplyGuy/2027-New-Grad-Jobs", "not found", lambda _: select(
+    Source("applyguy", "https://github.com/ApplyGuy/2027-New-Grad-Jobs", "not stated", lambda _: select(
         _unnested(f"{RAW}/ApplyGuy/2027-New-Grad-Jobs/HEAD/data/new-grad-jobs.json", "jobs"),
         url="u.url", title="u.title", company="u.company", location="u.location", posted_at="u.posted",
     )),
-    Source("fde-jobs", "https://github.com/stephanelx88/forward-deployed-engineer-jobs", "not found", lambda _: select(
+    Source("fde-jobs", "https://github.com/stephanelx88/forward-deployed-engineer-jobs", "CC-BY-4.0", lambda _: select(
         f"read_csv('{RAW}/stephanelx88/forward-deployed-engineer-jobs/HEAD/data/fde-jobs.csv', header=true, all_varchar=true)",
         url="fdetimes_url", country="country", salary_min="pay_low_usd", salary_max="pay_high_usd", posted_at="first_seen",
     )),
-    Source("remote-india", "https://github.com/raghavendra81422-boop/remote-jobs-open-to-india", "not stated", lambda _: select(
+    Source("remote-india", "https://github.com/raghavendra81422-boop/remote-jobs-open-to-india", "MIT", lambda _: select(
         _unnested(f"{RAW}/raghavendra81422-boop/remote-jobs-open-to-india/HEAD/data.json", "jobs"),
         url="u.roliva_url", title="u.title", company="u.company", location="u.location", remote="TRUE", posted_at="u.posted_date",
     )),

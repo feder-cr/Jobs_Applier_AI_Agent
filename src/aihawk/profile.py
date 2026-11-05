@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -18,7 +19,7 @@ from aihawk.llm import structured
 
 _WORD_TEXT = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
-# Adapted from the planner of the owner's LLDB engine, whose measurements on job search set these rules: keep the words a
+# Adapted from the planner of the author's earlier job-search engine, whose measurements on job search set these rules: keep the words a
 # posting uses, span every register, weight by how telling a word is, and drop what belongs to a neighbouring job.
 PROFILE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -167,21 +168,25 @@ async def install_resume(client: AsyncOpenAI, config: Config, path: Path) -> dic
     profile = await structured(client, config.quick_model, PROFILE_SYSTEM, cv, "search_profile", PROFILE_SCHEMA)
     config.workspace.mkdir(parents=True, exist_ok=True)
     config.cv.write_text(cv, encoding="utf-8")
+    # The file as the person gave it: the CV an application sends when its own CV cannot be written in the posting's language.
+    kept = config.data_dir / "cvs"
+    kept.mkdir(parents=True, exist_ok=True)
+    for old in kept.glob("original-cv.*"):
+        old.unlink()
+    shutil.copyfile(path, kept / f"original-cv{path.suffix.lower()}")
 
     settings_path = config.workspace / CONFIG_FILE
     settings = (yaml.safe_load(settings_path.read_text(encoding="utf-8-sig")) or {}) if settings_path.is_file() else {}
-    settings.update({
-        "name": profile["name"],
-        "goals": profile["goals"],
-        "filters": {
-            "include": [node["id"] for node in profile["plan"]["nodes"]],
-            "exclude": [],
-            "locations": list(dict.fromkeys([*profile["cities"], *profile["locations"]])),
-            "cities": profile["cities"],
-            "countries": [code.strip().upper() for code in profile["countries"]],
-            "plan": profile["plan"],
-        },
-    })
+    # The new resume replaces the plan; what the person set in the filters, such as what to exclude, is kept.
+    filters = {
+        **(settings.get("filters") or {}),
+        "include": [node["id"] for node in profile["plan"]["nodes"]],
+        "locations": list(dict.fromkeys([*profile["cities"], *profile["locations"]])),
+        "cities": profile["cities"],
+        "countries": [code.strip().upper() for code in profile["countries"]],
+        "plan": profile["plan"],
+    }
+    settings.update({"name": profile["name"], "goals": profile["goals"], "filters": filters})
     settings_path.write_text(yaml.safe_dump(settings, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     stated = {key: value for key, value in profile["answers"].items() if value.strip()}

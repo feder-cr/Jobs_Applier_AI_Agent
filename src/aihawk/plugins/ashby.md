@@ -13,4 +13,4 @@ Yes and No questions, such as work authorization or visa sponsorship, are answer
 
 The submit control is the button "Submit Application".
 
-After sending: on two real sends the Submit Application button stayed disabled and the click did not land, so the form was not sent. Ashby usually sends a confirmation email only for applications made through the job board, set per posting. Read the page: if the form is still there, the application was not received.
+After sending: a real send showed "Your application was successfully submitted. We'll contact you if there are next steps!". Read the page: if the form is still there, the application was not received. On two forms in the trials the Submit Application button stayed disabled and the click did not land, so nothing was sent.

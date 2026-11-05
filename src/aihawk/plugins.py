@@ -78,7 +78,14 @@ def parse_plugin(name: str, text: str) -> Plugin:
 
 
 def _files(folder: Traversable | Path) -> dict[str, str]:
-    return {item.name: item.read_text(encoding="utf-8-sig") for item in folder.iterdir() if item.name.endswith(".md")}
+    files = {}
+    for item in folder.iterdir():
+        if item.name.endswith(".md"):
+            try:
+                files[item.name] = item.read_text(encoding="utf-8-sig")
+            except UnicodeDecodeError as error:
+                raise PluginError(f"plugin {item.name}: it is not UTF-8 text, so it cannot be read: save it again as UTF-8") from error
+    return files
 
 
 def load_plugins(workspace: Path | None = None) -> tuple[Plugin, ...]:

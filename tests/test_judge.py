@@ -6,6 +6,7 @@ import asyncio
 import json
 import math
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -37,8 +38,8 @@ def answering(probabilities: dict[str, float], seen: list[httpx.Request]) -> Any
     return handler
 
 
-def run(client: AsyncOpenAI, jobs: list[Job], cv: str = "cv") -> list[float | None]:
-    return asyncio.run(evidence(client, "typesafe/jev-1.14", cv, jobs, ASKED, lambda done: None))
+def run(client: AsyncOpenAI, jobs: list[Job], cv: str = "cv", why: Callable[[str], None] = lambda reason: None) -> list[float | None]:
+    return asyncio.run(evidence(client, "typesafe/jev-1.14", cv, jobs, ASKED, lambda done: None, why))
 
 
 def postings(count: int, description: str = "") -> list[Job]:
@@ -102,6 +103,19 @@ def test_a_refused_posting_alone_is_a_failed_verdict_and_not_a_no_opinion() -> N
     assert len(seen) == 1
 
 
+def test_a_failure_that_a_smaller_batch_cannot_cure_is_not_split_and_the_person_is_told_why() -> None:
+    seen: list[httpx.Request] = []
+    said: list[str] = []
+
+    def refusing(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(400, json={"error": {"message": "the request is wrong", "code": "invalid_request_error"}})
+
+    assert run(client_with(refusing), postings(8), why=said.append) == [None] * 8
+    assert len(seen) == 1
+    assert len(said) == 1 and said[0].startswith("OrcaRouter rejected the request.")
+
+
 def test_an_answer_of_another_shape_is_a_failed_verdict() -> None:
     assert run(client_with(lambda request: httpx.Response(200, json={"unexpected": 1})), [JOB]) == [None]
 
@@ -151,7 +165,7 @@ def test_a_failing_batch_is_split_until_the_bad_posting_is_alone() -> None:
     def refusing(request: httpx.Request) -> httpx.Response:
         if b"Engineer 7 at" in request.content:
             seen.append(request)
-            return httpx.Response(400, json={"error": "the request is wrong"})
+            return httpx.Response(400, json={"error": {"message": "This model's maximum context length is exceeded", "code": "context_length_exceeded"}})
         return answer(request)
 
     values = run(client_with(refusing), postings(100))

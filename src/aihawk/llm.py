@@ -10,6 +10,7 @@ from openai import (
     APITimeoutError,
     AsyncOpenAI,
     AuthenticationError,
+    BadRequestError,
     InternalServerError,
     RateLimitError,
 )
@@ -35,6 +36,8 @@ def explain(error: Exception) -> str:
         return f"OrcaRouter is asking AIHawk to slow down: wait a few minutes and try again. ({error})"
     if isinstance(error, InternalServerError):
         return f"OrcaRouter failed on its side: try again in a few minutes. ({error})"
+    if isinstance(error, BadRequestError):
+        return f"OrcaRouter rejected the request. ({error})"
     return f"Something failed: {error}"
 
 

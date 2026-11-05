@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -14,6 +15,7 @@ import pytest
 from pypdf import PdfReader
 
 from aihawk import apply as apply_module
+from aihawk import session as session_module
 from aihawk.apply import (
     FINISH_TOOL,
     MODEL_TOOLS,
@@ -27,10 +29,12 @@ from aihawk.apply import (
     refusal,
     run_on_page,
     sends_form,
+    server_parameters,
     sign_in,
 )
 from aihawk.database import Job
 from aihawk.documents import score_from, score_job, tailor_cv, write_cv_pdf
+from aihawk.session import Session
 from fakes import ScriptedBrowser, ScriptedModel, tool_call
 
 JOB = Job("g:a:1", "Acme", "Engineer", "Rome", "https://u", "https://u/apply", "Build things")
@@ -70,15 +74,79 @@ def ready(selector: str = "#send") -> list[Any]:
         ({"tag": "iframe", "type": "", "in_form": True, "text": ""}, True, False),
         ({"tag": "iframe", "type": "", "in_form": False, "text": "Widget containing a Cloudflare security challenge"}, True, False),
         ({"tag": "iframe", "type": "", "in_form": True, "text": "reCAPTCHA"}, False, False),
+        # Candidatar-me is a Spanish send from a plain button. A submit-type Continue is the next step of a multi-step form,
+        # and a Continue in a div is one too: neither is held back by its words.
+        ({"tag": "button", "type": "button", "in_form": True, "text": "Candidatar-me"}, True, True),
+        ({"tag": "button", "type": "submit", "in_form": True, "text": "Continue"}, True, False),
+        ({"tag": "div", "type": "", "in_form": False, "text": "Continue"}, True, False),
+        # Confirm, Finish or Complete about an email address or a profile is a step, even as a submit button.
+        ({"tag": "button", "type": "submit", "in_form": True, "text": "Confirm email address"}, True, False),
+        ({"tag": "button", "type": "", "in_form": True, "text": "Complete your profile"}, True, False),
+        ({"tag": "div", "type": "", "in_form": False, "text": "Conferma indirizzo email"}, False, False),
+        ({"tag": "button", "type": "button", "in_form": True, "text": "Completa il profilo"}, True, False),
+        ({"tag": "button", "type": "button", "in_form": True, "text": "Finish setting up"}, True, False),
+        # Confirm, Finish or Complete with an application or a submission after it sends.
+        ({"tag": "button", "type": "button", "in_form": True, "text": "Confirm application"}, True, True),
+        ({"tag": "button", "type": "button", "in_form": True, "text": "Complete your job application"}, True, True),
+        ({"tag": "button", "type": "button", "in_form": True, "text": "Finish submission"}, True, True),
+        ({"tag": "div", "type": "", "in_form": False, "text": "Confirmar candidatura"}, False, True),
     ],
 )
 def test_sends_form(element: dict[str, Any], touched: bool, sends: bool) -> None:
     assert sends_form(element, touched) is sends
 
 
-@pytest.mark.parametrize("word", ["Send", "Senden", "Inviar", "Verzenden", "Versturen", "Skicka", "Wyślij", "Odeslat", "Отправить", "送信", "提交", "제출"])
+@pytest.mark.parametrize(
+    "word",
+    [
+        "Send", "Senden", "Inviar", "Verzenden", "Versturen", "Skicka", "Wyślij", "Odeslat", "Отправить", "送信", "提交", "제출",
+        # The other forms of the verbs: Candidatar-me, Inviare, Envoyez, Soumettez, Einreichen, Versenden.
+        "Candidatar-me", "Candidatarme", "Candidatevi", "Inviare", "Envoyez", "Soumettez", "Einreichen", "Versenden",
+        "Solliciteer", "Submeter", "Başvurun", "Başvuru yap", "Подать", "提出", "投递", "申し込み", "지원하기", "تقديم",
+    ],
+)
 def test_a_control_that_sends_in_another_language_is_held_back_even_with_no_form_around_it(word: str) -> None:
     assert sends_form({"tag": "div", "type": "", "in_form": False, "text": word}, True)
+
+
+# Confirm, Finish and Complete send from any element, a div or a type=button included. A stepper's "Complete" is refused too.
+@pytest.mark.parametrize(
+    "element",
+    [
+        {"tag": "div", "type": "", "in_form": False, "text": "Confirm"},
+        {"tag": "span", "type": "", "in_form": True, "text": "Finish"},
+        {"tag": "button", "type": "button", "in_form": True, "text": "Complete"},
+        {"tag": "div", "type": "", "in_form": True, "text": "Complete"},
+        {"tag": "div", "type": "", "in_form": False, "text": "Conferma"},
+        {"tag": "a", "type": "", "in_form": False, "text": "Confirm"},
+    ],
+)
+def test_a_confirm_finish_or_complete_control_is_held_back_whatever_its_tag(element: dict[str, Any]) -> None:
+    assert sends_form(element, False)
+
+
+# Not every clickable sends: a form's step, a link to read on, a button that edits, all pass.
+@pytest.mark.parametrize(
+    "element",
+    [
+        {"tag": "div", "type": "", "in_form": True, "text": "Next"},
+        {"tag": "span", "type": "", "in_form": False, "text": "Show more"},
+        {"tag": "button", "type": "button", "in_form": True, "text": "Edit details"},
+        {"tag": "a", "type": "", "in_form": False, "text": "Home"},
+    ],
+)
+def test_a_clickable_that_does_not_send_passes(element: dict[str, Any]) -> None:
+    assert not sends_form(element, True)
+
+
+def test_the_browser_is_given_the_environment_without_the_model_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORCAROUTER_API_KEY", "sk-default-name")
+    monkeypatch.setenv("MY_MODEL_KEY", "sk-named-in-settings")
+    environment = server_parameters(tmp_path, tmp_path, "MY_MODEL_KEY").env or {}
+    assert "ORCAROUTER_API_KEY" not in environment and "MY_MODEL_KEY" not in environment
+    assert "sk-default-name" not in environment.values() and "sk-named-in-settings" not in environment.values()
+    # Everything else stays, the PATH included, so the browser can still start.
+    assert environment["PATH"] == os.environ["PATH"]
 
 
 @pytest.mark.parametrize("key", ["Enter", "enter", "Control+Enter"])
@@ -362,15 +430,46 @@ def test_a_screenshot_reaches_the_model_after_the_answers_it_must_follow() -> No
     assert model.requests[1]["messages"][-3]["role"] == "tool"
 
 
+def test_only_the_latest_picture_stays_in_the_prompt_and_an_older_one_is_a_note() -> None:
+    model = ScriptedModel([tool_call("browser_take_screenshot")], [tool_call("browser_take_screenshot")], ready())
+    asyncio.run(fill_form(PageAtAPoint(SUBMIT), [], model, "m", "brief"))  # type: ignore[arg-type]
+    messages = model.requests[-1]["messages"]
+    pictures = [m for m in messages if m.get("role") == "user" and isinstance(m.get("content"), list)]
+    assert len(pictures) == 1
+    assert sum(isinstance(m.get("content"), str) and "taken here" in m["content"] for m in messages) == 1
+
+
 def test_the_servers_way_of_driving_a_page_comes_after_the_rules_and_before_the_site() -> None:
     text = instructions("About a site.", "Try selectors first.")
     assert text.index(SYSTEM) < text.index("Try selectors first.") < text.index("About a site.")
 
 
-def test_a_model_that_never_finishes_fails() -> None:
-    model = ScriptedModel(*["thinking"] * 80)
-    with pytest.raises(RuntimeError, match="did not finish"):
-        asyncio.run(fill_form(ScriptedBrowser(), [], model, "m", "brief"))  # type: ignore[arg-type]
+def test_a_model_that_never_finishes_is_stopped_with_what_it_did_and_nothing_is_sent() -> None:
+    told = tool_call("finish_form", status="blocked", summary="typed Test into First name", submit_selector="", questions=[])
+    model = ScriptedModel(*["thinking"] * 80, [told])
+    report = asyncio.run(fill_form(ScriptedBrowser(), [], model, "m", "brief"))  # type: ignore[arg-type]
+    assert report["status"] == "blocked"
+    assert report["summary"].startswith("Stopped: the form was not finished in 80 steps.") and "typed Test into First name" in report["summary"]
+    assert model.requests[-1]["tool_choice"]["function"]["name"] == "finish_form"
+
+
+def test_the_same_refused_call_three_times_stops_the_form_with_its_questions_and_is_never_run() -> None:
+    click = [tool_call("browser_click", selector="#a >> #b")]
+    told = tool_call("finish_form", status="needs_input", summary="typed Test", submit_selector="", questions=["Which office?"])
+    model = ScriptedModel(click, click, click, [told])
+    browser = ScriptedBrowser()
+    report = asyncio.run(fill_form(browser, [], model, "m", "brief"))  # type: ignore[arg-type]
+    assert (report["status"], report["questions"]) == ("needs_input", ["Which office?"])
+    assert report["summary"].startswith("Stopped: the same call was refused three times")
+    assert not [name for name, _ in browser.calls if name == "browser_click"]
+    # The model's list is kept whole, so the second refusal is the second tool message, and only that one is told once.
+    answers = [m["content"] for m in model.requests[-1]["messages"] if m.get("role") == "tool"]
+    assert "twice" in answers[1] and "twice" not in answers[0] and "stopped" in answers[2]
+
+
+def test_a_refused_selector_is_told_to_be_clicked_by_its_centre_instead() -> None:
+    message = asyncio.run(refusal(ScriptedBrowser(), "browser_click", {"selector": "#a >> #b"}, False))
+    assert message and "browser_click_at" in message and "shadow" in message
 
 
 def test_the_plugins_text_reaches_the_verifying_model_as_its_rules_while_the_page_stays_text_to_check(tmp_path: Path) -> None:
@@ -441,7 +540,7 @@ class ScriptedServer(ScriptedBrowser):
 
 def scripted_server(monkeypatch: pytest.MonkeyPatch, server: ScriptedServer) -> None:
     @asynccontextmanager
-    async def started(upload_dir: Path, home: Path) -> AsyncIterator[tuple[ScriptedServer, str]]:
+    async def started(upload_dir: Path, home: Path, key_env: str = "") -> AsyncIterator[tuple[ScriptedServer, str]]:
         yield server, ""
 
     monkeypatch.setattr(apply_module, "_server", started)
@@ -672,9 +771,46 @@ def test_tailor_drops_a_code_fence() -> None:
     assert asyncio.run(tailor_cv(model, "m", JOB, "cv")) == "# Name"  # type: ignore[arg-type]
 
 
+def test_a_cv_in_a_script_the_font_cannot_draw_is_not_uploaded_and_the_persons_own_is_sent_instead(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def tailored(client: Any, model: str, job: Job, cv: str) -> str:
+        return "# Иван Петров\n\n- Опыт работы"
+
+    monkeypatch.setattr(session_module, "tailor_cv", tailored)
+    session = Session(tmp_path)
+    session._client = SimpleNamespace()  # type: ignore[assignment]  # tailor_cv is stubbed, so no call is made
+    own = tmp_path / "data" / "cvs" / "original-cv.pdf"
+    own.parent.mkdir(parents=True)
+    own.write_bytes(b"%PDF-1.4 the person's CV")
+    session.store.add(JOB)
+    said: list[str] = []
+    path = asyncio.run(session._cv_for(session.store.with_status("new")[0], "cv", said.append))
+    session.close()
+    assert path == own
+    assert list((tmp_path / "data" / "cvs").glob("*.pdf")) == [own]
+    assert said[0] == "writing a CV for this job"
+    assert len(said) == 2 and said[1].startswith("the CV written for this job cannot show ") and "your own CV is sent" in said[1]
+
+
 def test_the_pdf_holds_the_text_accents_and_markup_safely(tmp_path: Path) -> None:
     path = tmp_path / "cvs" / "cv.pdf"
     write_cv_pdf("# Niccolò Rossi\n\n## Experience\n- **Lead** at A&B <Corp>\n\nPlain line", path)
     text = " ".join(page.extract_text() for page in PdfReader(path).pages)
     for piece in ("Niccolò Rossi", "Experience", "Lead", "A&B <Corp>", "Plain line"):
         assert piece in text
+
+
+def test_asking_for_a_sign_in_code_is_not_a_send_but_submitting_one_is() -> None:
+    def button(text: str) -> dict[str, object]:
+        return {"tag": "button", "type": "submit", "in_form": True, "text": text}
+
+    for text in (
+        "Send code", "Send verification code", "Send me a code", "Invia codice", "Enviar código", "Code senden",
+        "Solicitar código de verificación",
+    ):
+        assert not sends_form(button(text), True), text
+    # A send word beside the code request still sends: the request is taken out and the rest is judged.
+    for text in (
+        "Submit code", "Send", "Send application", "Submit application and send code", "Send application and code",
+        "Solicitar empleo", "Solicitar",
+    ):
+        assert sends_form(button(text), True), text
