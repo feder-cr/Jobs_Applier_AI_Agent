@@ -28,7 +28,7 @@ The resume can be anywhere on your disk: a PDF, a `.docx` or a text file. A scan
 
 The first time, AIHawk asks for an [OrcaRouter](https://orcarouter.ai) key and keeps it in `~/.aihawk/key`; after that, `aihawk` alone reopens your list. To change the key, edit or delete that file, or set `ORCAROUTER_API_KEY`, which wins over the file. If OrcaRouter refuses a key from the file, AIHawk forgets it and asks again.
 
-The first search with each new job database downloads its job index, 672 MB, into `~/.aihawk/data/index`; a search reads it on your computer. The descriptions of the jobs AIHawk judges are read from the release over the internet.
+The first search with each new job database downloads its job index, about 740 MB, into `~/.aihawk/data/index`; a search reads it on your computer. The descriptions of the jobs AIHawk judges are read from the release over the internet.
 
 **Your data.** Your CV, your answers, the postings' texts and the pages' contents, screenshots included, go to the model gateway OrcaRouter and its providers; an application goes to the employer's site. The rest stays in `~/.aihawk`: the CV, the answers, the key (`key`), the proofs (`data/proofs/`), `applied.csv`, the job index and the browser profile with your sign-ins. You need a paid OrcaRouter key. In our measured runs on eleven real sites, with deepseek-v4.1-flash, a form cost 0.4 to 3.3 cents in model calls (1.5 on average), and none of those runs reached the send.
 
@@ -51,7 +51,7 @@ The first search with each new job database downloads its job index, 672 MB, int
 ## What it does
 
 - **Reads** your resume, writes a search plan from it, and takes your contact details from it.
-- **Finds** the postings whose titles fit the plan, in a job database published as a release: 10,223,753 postings in the manifest of 2026-11-04, built once by hand. Postings older than 60 days are left out by default. The daily rebuild, [`jobs-database.yml`](.github/workflows/jobs-database.yml), is on main, and its first scheduled run, on 2026-11-05, failed; it needs GitHub Actions working.
+- **Finds** the postings whose titles fit the plan, in a job database published as a release and rebuilt daily by [`jobs-database.yml`](.github/workflows/jobs-database.yml): about 10.2 million postings. Postings older than 60 days are left out by default.
 - **Shortlists** the 100 postings with the best title fit: Jev, the decision model, answers six questions about each, and the best 25 are kept.
 - **Scores** each shortlisted job from 1 to 5 against your resume, with its gaps.
 - **Applies**: writes a CV for the job and fills the form in a visible browser through [invisible-playwright-mcp](https://github.com/feder-cr/invisible_playwright_mcp). What a form asks and your files do not say, it asks you, and remembers. The first apply or sign-in downloads the browser engine, about 268 MB on Windows.
