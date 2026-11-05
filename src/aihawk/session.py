@@ -71,9 +71,6 @@ class Session:
         save_setting(self.config, name, value)
         self.config = load_config(self.workspace)
 
-    def plugin(self, item: Stored) -> Plugin | None:
-        return plugin_for(item.job.url, self.plugins)
-
     async def sign_in(self, wait: Callable[[], Awaitable[None]]) -> None:
         """Open the browser for the person to sign in, until `wait` returns: the same profile the applications use."""
         await sign_in_browser(self.config.browser_profile, self.config.data_dir / "browser", wait)
@@ -175,17 +172,16 @@ class Session:
         """Fill and send one application, once. What the page said is kept with it, and applied.csv is written."""
         if item.status in SUBMITTED:
             raise ConfigError(f"{item.job.company}: already sent, and not sent twice")
-        plugin = self.plugin(item)
-        if plugin is None:
-            raise ConfigError(f"no plugin knows this site. Apply by hand: {item.job.url}")
+        # A plugin helps where there is one. Every posting is tried.
+        plugin = plugin_for(item.job.url, self.plugins)
         cv = self.config.cv.read_text(encoding="utf-8-sig")
-        job = replace(item.job, apply_url=plugin.form_url(item.job.url))
+        job = replace(item.job, apply_url=plugin.form_url(item.job.url) if plugin else item.job.url)
         answers = self.config.answers.read_text(encoding="utf-8-sig") if self.config.answers.is_file() else ""
         extras = always_plugins(self.plugins)
-        guidance = "\n\n".join([plugin.instructions, *(extra.instructions for extra in extras)])
+        guidance = "\n\n".join([*([plugin.instructions] if plugin else []), *(extra.instructions for extra in extras)])
         try:
             cv_file = self._own_cv()
-            log(f"{item.job.company}: filling the form on {plugin.name}")
+            log(f"{item.job.company}: filling the form")
             outcome = await apply_to_job(
                 self.client, self.config.model, job, cv, answers, cv_file, self.config.data_dir, self.config.browser_profile, guidance)
         except Exception as error:

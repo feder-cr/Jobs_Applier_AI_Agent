@@ -320,9 +320,9 @@ class AIHawk(App[None]):
         table.clear(columns=True)
         self.with_location = width >= WIDE_ENOUGH
         # A column's padding is 2, and the scrollbar takes 2.
-        left = width - 2 - 2 * (7 if self.with_location else 6) - 2 - 5 - 5 - 14
+        left = width - 2 - 2 * (6 if self.with_location else 5) - 2 - 5 - 14
         words = [("Company", left // 4), ("Role", left // 2), ("Location", left // 4)] if self.with_location else [("Company", left // 3), ("Role", left - left // 3)]
-        for label, size in (("", 2), ("Score", 5), ("Apply", 5), *words, ("Status", 14)):
+        for label, size in (("", 2), ("Score", 5), *words, ("Status", 14)):
             table.add_column(label, key=label or "mark", width=size)
         self.refresh_jobs(current)
 
@@ -357,14 +357,13 @@ class AIHawk(App[None]):
     def row(self, item: Stored) -> tuple[Text | str, ...]:
         mark = "â—" if item.job.id in self.selected else ""
         score = f"{item.score:.1f}" if item.score is not None else "-"
-        can_apply = "auto" if self.session.plugin(item) else "hand"
         status = STATUS_TEXT.get(item.status, item.status)
         # A score from the title and the place alone: the person should know the posting's text was not read.
         if item.score is not None and not item.job.description.strip():
             status = ", ".join(part for part in (status, "title only") if part)
         # Text, because a string cell is read as markup, and a posting's words are a source's: "[/x] Engineer" would stop the screen.
         place = (Text(item.job.location),) if self.with_location else ()
-        return (Text(mark, style="bold green"), score, can_apply, Text(item.job.company), Text(item.job.title), *place, status)
+        return (Text(mark, style="bold green"), score, Text(item.job.company), Text(item.job.title), *place, status)
 
     def refresh_jobs(self, current: str | None = None) -> None:
         """The list, best first. The cursor stays on the job it was on."""
@@ -635,12 +634,8 @@ class AIHawk(App[None]):
             self.say("Press s for every application and what each page said.")
 
     def can_send(self, item: Stored) -> bool:
-        """Whether the job goes in the batch; one that cannot says why."""
-        name = f"{item.job.company}: {item.job.title}"
+        """Whether the job goes in the batch: all of them, but one already sent."""
         if item.status in SUBMITTED:
-            self.say(f"{name}: already sent, skipped.")
-        elif self.session.plugin(item) is None:
-            self.say(f"{name}: AIHawk cannot fill this site yet. Press o to open it and apply by hand.")
-        else:
-            return True
-        return False
+            self.say(f"{item.job.company}: {item.job.title}: already sent, skipped.")
+            return False
+        return True
