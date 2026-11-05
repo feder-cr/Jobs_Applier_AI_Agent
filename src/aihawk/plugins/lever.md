@@ -15,4 +15,4 @@ Some forms show a captcha when sending: a box to tick is handled as the rules sa
 
 The submit control is `#btn-submit`, "Submit application".
 
-After sending: the "Success!" shown after the CV upload is the upload, not the send, so read the page after submitting. After a send the address moves to one ending in `/thanks`, which can take more than a few seconds. Lever usually emails a confirmation with the candidate's name, the company and the posting title. If the form is still on the page, the application was not received.
+After sending: the "Success!" shown after the CV upload is the upload, not the send, so read the page after submitting. After a send the address moves to one ending in `/thanks`, which can take more than a few seconds, and says "Application submitted!". Lever usually emails a confirmation with the candidate's name, the company and the posting title. If the form is still on the page, the application was not received.
