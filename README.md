@@ -40,7 +40,7 @@ That is the only command, now and every time after: it installs what is missing,
 
 1. **Reads your resume** and writes a search plan from it. You can change it on the screen.
 2. **Narrows down the jobs.** About 10.2 million postings from 24 public sources, rebuilt daily. 600 by their titles, on your computer. 100 read by [Jev](https://github.com/feder-cr/jev), a decision model. 25 scored from 1 to 5, with the gaps and the reasons.
-3. **Applies.** You select the jobs and say yes once. For each one it writes a CV, fills the form in a browser you can watch, through [invisible-playwright-mcp](https://github.com/feder-cr/invisible_playwright_mcp), sends it, and keeps what the page said.
+3. **Applies.** You select the jobs and say yes once. For each one it fills the form and attaches your CV, in a browser you can watch, through [invisible-playwright-mcp](https://github.com/feder-cr/invisible_playwright_mcp), sends it, and keeps what the page said.
 
 ## Where it applies
 

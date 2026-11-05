@@ -90,8 +90,6 @@ class Config:
     quick_model: str = DEFAULT_QUICK_MODEL
     judge_model: str = DEFAULT_JUDGE_MODEL
     decision_model: str = DEFAULT_DECISION_MODEL
-    base_url: str = DEFAULT_BASE_URL
-    api_key_env: str = KEY_ENV
     filters: Filters = field(default_factory=Filters)
 
     @property
@@ -117,13 +115,13 @@ class Config:
 
     def api_key(self) -> str:
         """The model's key: from the environment, or the one the person typed in."""
-        from_environment = os.environ.get(self.api_key_env, "").strip()
+        from_environment = os.environ.get(KEY_ENV, "").strip()
         if from_environment:
             return from_environment
         return self.key_file.read_text(encoding="utf-8-sig").strip() if self.key_file.is_file() else ""
 
     def key_from_environment(self) -> bool:
-        return bool(os.environ.get(self.api_key_env, "").strip())
+        return bool(os.environ.get(KEY_ENV, "").strip())
 
     def save_key(self, key: str) -> None:
         self.workspace.mkdir(parents=True, exist_ok=True)
@@ -132,7 +130,7 @@ class Config:
 
 
 def default_home() -> Path:
-    return Path(os.environ.get("AIHAWK_HOME") or Path.home() / ".aihawk")
+    return Path.home() / ".aihawk"
 
 
 def _words(value: object, name: str) -> tuple[str, ...]:
@@ -244,8 +242,6 @@ def load_config(workspace: Path) -> Config:
         quick_model=str(raw.get("quick_model") or DEFAULT_QUICK_MODEL),
         judge_model=str(raw.get("judge_model") or DEFAULT_JUDGE_MODEL),
         decision_model=str(raw.get("decision_model") or DEFAULT_DECISION_MODEL),
-        base_url=str(raw.get("base_url") or DEFAULT_BASE_URL),
-        api_key_env=str(raw.get("api_key_env") or KEY_ENV),
         filters=Filters(
             _words(filters.get("include"), "filters.include"),
             _words(filters.get("exclude"), "filters.exclude"),

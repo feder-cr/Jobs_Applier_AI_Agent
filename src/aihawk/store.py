@@ -27,7 +27,6 @@ CREATE TABLE IF NOT EXISTS jobs (
     status TEXT NOT NULL DEFAULT 'new',
     score REAL,
     report TEXT,
-    cv_path TEXT,
     ref TEXT,
     lexical REAL NOT NULL DEFAULT 0,
     evidence REAL,
@@ -88,7 +87,6 @@ class Stored:
     status: str
     score: float | None
     report: dict[str, Any] | None
-    cv_path: str | None
     note: str | None
     evidence: float | None = None
 
@@ -155,7 +153,7 @@ class Store:
     @classmethod
     def _stored(cls, row: sqlite3.Row) -> Stored:
         report = json.loads(row["report"]) if row["report"] else None
-        return Stored(cls._job(row), row["status"], row["score"], report, row["cv_path"], row["note"], row["evidence"])
+        return Stored(cls._job(row), row["status"], row["score"], report, row["note"], row["evidence"])
 
     def sent(self) -> list[Sent]:
         """Every job tried, the newest first."""
@@ -205,15 +203,6 @@ class Store:
 
     def set_description(self, job_id: str, description: str) -> None:
         self._db.execute("UPDATE jobs SET description = ?, updated = ? WHERE id = ?", (description, _now(), job_id))
-        self._db.commit()
-
-    def set_cv(self, job_id: str, path: Path) -> None:
-        self._db.execute("UPDATE jobs SET cv_path = ?, updated = ? WHERE id = ?", (str(path), _now(), job_id))
-        self._db.commit()
-
-    def forget_cvs(self) -> None:
-        """The tailored CVs of the jobs not yet sent are dropped, so each is written again. The sent ones keep theirs: they are history."""
-        self._db.execute("UPDATE jobs SET cv_path = NULL WHERE status NOT IN (?, ?)", SUBMITTED)
         self._db.commit()
 
     def set_status(self, job_id: str, status: str, note: str = "") -> None:

@@ -4,14 +4,11 @@
 
 - Added [docs/sites.md](docs/sites.md): each site's status from real forms and what stops it; the README links to it.
 - Added [docs/data-sources.md](docs/data-sources.md), each source with its licence and how to ask for its removal, and [docs/configuration.md](docs/configuration.md).
-- A CV written in a script its font cannot draw is no longer uploaded with blanks: your own CV goes instead, and you are told.
 - A model error that a smaller batch cannot cure stops at once and says why, instead of ranking by title almost silently.
-- The job database is shown with its real date, with a warning when it is over 7 days old, and a search emptied by the age limit says so.
-- After a new resume is loaded, no CV written from the old one is sent. Jobs already sent keep theirs.
+- The job database is shown with its real date.
 - A posting the judge could not read is no longer passed over for good: a later search judges it.
 - After a send, the page is read once it has changed and stopped changing, up to 30 seconds, and the verdict sees its address: a slow confirmation page is no longer judged on the old form.
 - A posting whose title or company looks like screen markup, such as `[/x]`, no longer stops the screen.
-- A CV that cannot be written fails that job alone, and the others in the selection still go.
 - A database of your own, named by `database` in `aihawk.yaml`, can no longer make AIHawk read a file on your computer: a posting whose address is not `http` or `https` is left out of a search. The published database already left those out.
 - A full disk while the job index downloads says the disk is full.
 - A job whose source published no text is scored on the text of its own page where that can be read, which also finds postings that have closed.
@@ -20,6 +17,7 @@
 - One command starts AIHawk, and everything else is on the screen: `e` opens the settings.
 - A form no longer stops to ask. The model fills every required field from what the CV says and implies, and a written field it has nothing for says to see the attached CV.
 - The checks on the model's calls are gone, for far less code: it is told not to send, and nothing holds it to that. See SECURITY.md.
+- Less to carry: your own CV goes with every form, in place of one written for each job, and there is one gateway, one key variable and one folder.
 - A setting of the wrong type in `aihawk.yaml` is one plain line instead of a traceback.
 
 ## 1.0.0 - 2026-11-04

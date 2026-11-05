@@ -168,7 +168,7 @@ async def install_resume(client: AsyncOpenAI, config: Config, path: Path) -> dic
     profile = await structured(client, config.quick_model, PROFILE_SYSTEM, cv, "search_profile", PROFILE_SCHEMA)
     config.workspace.mkdir(parents=True, exist_ok=True)
     config.cv.write_text(cv, encoding="utf-8")
-    # The file as the person gave it: the CV an application sends when its own CV cannot be written in the posting's language.
+    # The file as the person gave it: the CV every application sends.
     kept = config.data_dir / "cvs"
     kept.mkdir(parents=True, exist_ok=True)
     for old in kept.glob("original-cv.*"):

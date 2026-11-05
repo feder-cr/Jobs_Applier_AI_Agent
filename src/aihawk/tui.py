@@ -14,7 +14,7 @@ from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Input, RichLog, Static
 
-from aihawk.config import ConfigError
+from aihawk.config import KEY_ENV, ConfigError
 from aihawk.database import DatabaseError
 from aihawk.documents import QUESTIONS
 from aihawk.llm import explain, refused
@@ -504,7 +504,7 @@ class AIHawk(App[None]):
         return [
             ("resume", "Resume", "loaded" if config.cv.is_file() else "none yet"),
             ("sign_in", "Sign in", "your mail and job sites, in the browser"),
-            ("key", "OrcaRouter key", f"from {config.api_key_env}" if config.key_from_environment() else "saved" if config.api_key() else "none yet"),
+            ("key", "OrcaRouter key", f"from {KEY_ENV}" if config.key_from_environment() else "saved" if config.api_key() else "none yet"),
             ("titles", "Look for", ", ".join(titles)),
             ("places", "Where", ", ".join(config.filters.locations)),
             ("exclude", "Leave out", ", ".join(config.filters.exclude)),
@@ -553,7 +553,7 @@ class AIHawk(App[None]):
     async def change_key(self) -> None:
         config = self.session.config
         if config.key_from_environment():
-            self.say(f"The key comes from the {config.api_key_env} variable, which wins over one typed here.")
+            self.say(f"The key comes from the {KEY_ENV} variable, which wins over one typed here.")
             return
         key = await self.push_screen_wait(TextPrompt("Your OrcaRouter key. Get one at orcarouter.ai; it stays on this computer.", placeholder="sk-orca-...", password=True, hint="Enter saves it Â· Esc leaves it as it was"))
         if key:

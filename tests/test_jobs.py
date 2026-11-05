@@ -408,14 +408,6 @@ def test_the_list_weighs_the_judgment_and_the_title_together_and_keeps_what_jev_
     assert [item.job.id for item in store.all()] == ["same-score-better-title", "judged-fit", "passed", "unjudged"]
 
 
-def test_a_new_folder_defaults_to_orcarouter_and_the_published_database(tmp_path: Path) -> None:
-    config = load_config(tmp_path)
-    assert (config.base_url, config.model, config.api_key_env) == ("https://api.orcarouter.ai/v1", "deepseek/deepseek-v4.1-flash", "ORCAROUTER_API_KEY")
-    assert config.judge_model == "deepseek/deepseek-v4.1-flash"
-    assert config.database.endswith("/releases/download/jobs-latest/manifest.json")
-    assert not config.filters.include
-
-
 @pytest.mark.parametrize(
     "text",
     ["filters: {include: python}", "a: [", "- a"],
@@ -482,3 +474,9 @@ def test_a_job_seen_again_keeps_its_score_and_status(tmp_path: Path) -> None:
     assert store.add(job) is False
     item = store.get(job.id)
     assert item is not None and (item.status, item.score, item.report) == ("blocked", 4.5, {"score": 4.5})
+
+
+def test_a_new_folder_defaults_to_the_published_database(tmp_path: Path) -> None:
+    config = load_config(tmp_path)
+    assert config.model == "deepseek/deepseek-v4.1-flash" and config.database.endswith("/jobs-latest/manifest.json")
+

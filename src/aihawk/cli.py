@@ -17,13 +17,12 @@ from aihawk.plugins import PluginError
 @click.command()
 @click.version_option(__version__)
 @click.argument("resume", required=False, type=click.Path(exists=True, dir_okay=False, path_type=Path))
-@click.option("--home", type=click.Path(file_okay=False, path_type=Path), help="Folder for this search. Default: ~/.aihawk")
-def main(resume: Path | None, home: Path | None) -> None:
+def main(resume: Path | None) -> None:
     """Give it your resume, get the jobs that fit, select them and apply."""
     # Imported here: the interface takes a moment to load, and --help should not wait for it.
     from aihawk.tui import AIHawk
 
-    AIHawk((home or default_home()).resolve(), resume.resolve() if resume else None).run()
+    AIHawk(default_home().resolve(), resume.resolve() if resume else None).run()
 
 
 def run() -> None:
