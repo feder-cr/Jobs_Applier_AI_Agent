@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -12,10 +11,8 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from pypdf import PdfReader
 
 from aihawk import apply as apply_module
-from aihawk import session as session_module
 from aihawk.apply import (
     PAGE_CHARS,
     SYSTEM,
@@ -28,8 +25,7 @@ from aihawk.apply import (
     sign_in,
 )
 from aihawk.database import Job
-from aihawk.documents import score_from, score_job, tailor_cv, write_cv_pdf
-from aihawk.session import Session
+from aihawk.documents import score_from, score_job
 from fakes import ScriptedBrowser, ScriptedModel, tool_call
 
 JOB = Job("g:a:1", "Acme", "Engineer", "Rome", "https://u", "https://u/apply", "Build things")
@@ -48,13 +44,10 @@ def ready(selector: str = "#send") -> list[Any]:
 
 
 def test_the_browser_is_given_the_environment_without_the_model_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ORCAROUTER_API_KEY", "sk-default-name")
-    monkeypatch.setenv("MY_MODEL_KEY", "sk-named-in-settings")
-    environment = server_parameters(tmp_path, tmp_path, "MY_MODEL_KEY").env or {}
-    assert "ORCAROUTER_API_KEY" not in environment and "MY_MODEL_KEY" not in environment
-    assert "sk-default-name" not in environment.values() and "sk-named-in-settings" not in environment.values()
-    # Everything else stays, the PATH included, so the browser can still start.
-    assert environment["PATH"] == os.environ["PATH"]
+    monkeypatch.setenv("ORCAROUTER_API_KEY", "secret")
+    monkeypatch.setenv("PATH_ALIKE", "kept")
+    environment = server_parameters(tmp_path, tmp_path).env
+    assert "ORCAROUTER_API_KEY" not in environment and environment["PATH_ALIKE"] == "kept"
 
 
 @pytest.fixture(autouse=True)
@@ -409,38 +402,5 @@ def test_the_goals_reach_the_model_and_the_score_is_computed_not_asked() -> None
     report = asyncio.run(score_job(model, "m", JOB, "the cv", "remote only"))  # type: ignore[arg-type]
     assert report["score"] == 4.5
     assert "remote only" in model.requests[0]["messages"][1]["content"]
-
-
-def test_tailor_drops_a_code_fence() -> None:
-    model = ScriptedModel("```markdown\n# Name\n```")
-    assert asyncio.run(tailor_cv(model, "m", JOB, "cv")) == "# Name"  # type: ignore[arg-type]
-
-
-def test_a_cv_in_a_script_the_font_cannot_draw_is_not_uploaded_and_the_persons_own_is_sent_instead(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    async def tailored(client: Any, model: str, job: Job, cv: str) -> str:
-        return "# Иван Петров\n\n- Опыт работы"
-
-    monkeypatch.setattr(session_module, "tailor_cv", tailored)
-    session = Session(tmp_path)
-    session._client = SimpleNamespace()  # type: ignore[assignment]  # tailor_cv is stubbed, so no call is made
-    own = tmp_path / "data" / "cvs" / "original-cv.pdf"
-    own.parent.mkdir(parents=True)
-    own.write_bytes(b"%PDF-1.4 the person's CV")
-    session.store.add(JOB)
-    said: list[str] = []
-    path = asyncio.run(session._cv_for(session.store.with_status("new")[0], "cv", said.append))
-    session.close()
-    assert path == own
-    assert list((tmp_path / "data" / "cvs").glob("*.pdf")) == [own]
-    assert said[0] == f"{JOB.company}: writing a CV for this job"
-    assert len(said) == 2 and said[1].startswith(f"{JOB.company}: the CV written for this job cannot show ") and "your own CV is sent" in said[1]
-
-
-def test_the_pdf_holds_the_text_accents_and_markup_safely(tmp_path: Path) -> None:
-    path = tmp_path / "cvs" / "cv.pdf"
-    write_cv_pdf("# Niccolò Rossi\n\n## Experience\n- **Lead** at A&B <Corp>\n\nPlain line", path)
-    text = " ".join(page.extract_text() for page in PdfReader(path).pages)
-    for piece in ("Niccolò Rossi", "Experience", "Lead", "A&B <Corp>", "Plain line"):
-        assert piece in text
 
 

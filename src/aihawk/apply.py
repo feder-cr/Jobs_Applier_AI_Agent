@@ -270,11 +270,10 @@ async def _open_browser(session: Browser, profile: Path) -> None:
         await asyncio.sleep(OPEN_RETRY_S)
 
 
-def server_parameters(upload_dir: Path, home: Path, key_env: str = KEY_ENV) -> StdioServerParameters:
+def server_parameters(upload_dir: Path, home: Path) -> StdioServerParameters:
     # The browser is given the environment without the model's key: nothing it does needs that key.
-    keys = {key_env, KEY_ENV}
     environment = {
-        **{name: value for name, value in os.environ.items() if name not in keys},
+        **{name: value for name, value in os.environ.items() if name != KEY_ENV},
         "INVISIBLE_MCP_HOST_MANAGED": "1",
         "INVISIBLE_MCP_UPLOAD_DIRS": str(upload_dir),
         "INVISIBLE_MCP_HOME": str(home),
@@ -285,22 +284,22 @@ def server_parameters(upload_dir: Path, home: Path, key_env: str = KEY_ENV) -> S
 
 
 @asynccontextmanager
-async def _server(upload_dir: Path, home: Path, key_env: str = KEY_ENV) -> AsyncIterator[tuple[ClientSession, str]]:
+async def _server(upload_dir: Path, home: Path) -> AsyncIterator[tuple[ClientSession, str]]:
     """The browser server, started: a session on it, and the instructions it gives about driving a page."""
     home.mkdir(parents=True, exist_ok=True)
     # The server's own messages go to a file: on the person's terminal they would draw over the screen.
     with (home / "server.log").open("a", encoding="utf-8") as server_log:
-        async with stdio_client(server_parameters(upload_dir, home, key_env), errlog=server_log) as (read, write), ClientSession(read, write) as session:
+        async with stdio_client(server_parameters(upload_dir, home), errlog=server_log) as (read, write), ClientSession(read, write) as session:
             started = await session.initialize()
             yield session, started.instructions or ""
 
 
 async def apply_to_job(
-    client: AsyncOpenAI, model: str, job: Job, cv_text: str, answers: str, cv_file: Path, data_dir: Path, profile: Path, guidance: str = "", key_env: str = KEY_ENV
+    client: AsyncOpenAI, model: str, job: Job, cv_text: str, answers: str, cv_file: Path, data_dir: Path, profile: Path, guidance: str = ""
 ) -> Outcome:
     """Open the browser on the person's profile, fill the job's form and send it: the person's selection and Enter came before."""
     shot = data_dir / "proofs" / f"{safe_name(job.id)}.png"
-    async with _server(cv_file.parent, data_dir / "browser", key_env) as (session, page_rules):
+    async with _server(cv_file.parent, data_dir / "browser") as (session, page_rules):
         listed = await session.list_tools()
         tools = [
             {"type": "function", "function": {"name": tool.name, "description": tool.description or tool.name, "parameters": tool.inputSchema}}
@@ -317,12 +316,12 @@ async def apply_to_job(
             await session.call_tool("browser_close", {})
 
 
-async def sign_in(profile: Path, home: Path, wait: Callable[[], Awaitable[None]], key_env: str = KEY_ENV) -> None:
+async def sign_in(profile: Path, home: Path, wait: Callable[[], Awaitable[None]]) -> None:
     """Open the profile's browser on a blank page so the person can sign in; once `wait` returns, the browser closes.
 
     Nothing is typed for the person and no model is involved: the sign-ins are kept in the profile for the applications.
     """
-    async with _server(home, home, key_env) as (session, _):
+    async with _server(home, home) as (session, _):
         try:
             await _open_browser(session, profile)
             await wait()

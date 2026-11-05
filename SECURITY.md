@@ -22,8 +22,8 @@ AIHawk reads job pages written by strangers, fills their forms, and sends applic
 
 ## Where keys and sign-ins are kept
 
-- The OrcaRouter key comes from the environment variable named by `api_key_env` in `aihawk.yaml` (default `ORCAROUTER_API_KEY`), or from a file named `key` in the AIHawk folder.
-- The AIHawk folder is `~/.aihawk` by default, or the folder given by `--home` or the `AIHAWK_HOME` variable. It also holds the CV, the answers, the job data, what was sent (`applied.csv` and `data/proofs/`) and the browser profile (`browser-profile/`), which keeps the person's sign-ins.
+- The OrcaRouter key comes from the `ORCAROUTER_API_KEY` environment variable, or from a file named `key` in the AIHawk folder.
+- The AIHawk folder is `~/.aihawk`. It also holds the CV, the answers, the job data, what was sent (`applied.csv` and `data/proofs/`) and the browser profile (`browser-profile/`), which keeps the person's sign-ins.
 - Do not paste a key, a browser profile or a folder from the AIHawk folder into an issue or a pull request.
 
 ## Known and accepted

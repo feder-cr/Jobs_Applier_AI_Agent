@@ -76,15 +76,7 @@ After sending: the "Success!" shown after the CV upload is the upload, not the s
 
 ## Try a plugin without touching the repository
 
-Use a folder of your own as the AIHawk folder:
-
-```sh
-mkdir -p ~/aihawk-trial/plugins
-# write ~/aihawk-trial/plugins/mysite.md
-aihawk --home ~/aihawk-trial
-```
-
-On Windows, use `%USERPROFILE%\aihawk-trial\plugins` and the same command. The `AIHAWK_HOME` environment variable does the same as `--home`. The trial folder gets its own key, CV and answers, so your real search is not affected. Delete the folder when you are done.
+Put your file in `~/.aihawk/plugins/` (on Windows, `%USERPROFILE%\.aihawk\plugins`), and restart AIHawk. A file with the name of a bundled plugin replaces it.
 
 ## Test a plugin without sending anything to an employer
 

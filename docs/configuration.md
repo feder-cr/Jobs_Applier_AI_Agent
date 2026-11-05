@@ -1,6 +1,6 @@
 ﻿# Configuration
 
-Press `e` in AIHawk to change these on the screen. AIHawk reads `aihawk.yaml` in its folder, `~/.aihawk` by default (see `--home`). A missing file, or a missing key, takes the default below. Restart `aihawk` after you edit the file.
+Press `e` in AIHawk to change these on the screen. AIHawk reads `aihawk.yaml` in its folder, `~/.aihawk` by default. A missing file, or a missing key, takes the default below. Restart `aihawk` after you edit the file.
 
 Loading a resume rewrites this file, and the rewrite drops the comments you put in it, so keep your notes elsewhere.
 
@@ -14,8 +14,6 @@ Loading a resume rewrites this file, and the rewrite drops the comments you put 
 | `quick_model` | `google/gemini-3.5-flash` | Writes the search plan from your CV, and the other short calls of a search. |
 | `judge_model` | `deepseek/deepseek-v4.1-flash` | Writes the score and the report of each shortlisted posting. |
 | `decision_model` | `typesafe/jev-1.14` | Jev, which answers the six questions that shortlist the postings. |
-| `base_url` | `https://api.orcarouter.ai/v1` | The gateway every model call goes to. It must serve OpenAI's chat API, and `/systemone` for the decision model. |
-| `api_key_env` | `ORCAROUTER_API_KEY` | The environment variable that holds the key. A key in it wins over the key file. |
 | `filters.include` | empty | Title words to search for. With no `plan`, each word is one title. AIHawk asks for a resume until there is a CV and at least one of these. |
 | `filters.exclude` | empty | Whole words: a posting whose title has one of them is left out. |
 | `filters.locations` | empty | Places a posting's location must name, as whole words. |

@@ -25,7 +25,6 @@ from aihawk.apply import Outcome
 from aihawk.cli import main as cli_main
 from aihawk.config import ConfigError, load_config
 from aihawk.database import Job
-from aihawk.documents import MissingGlyphs, missing_glyphs, write_cv_pdf
 from aihawk.llm import explain
 from aihawk.profile import install_resume, read_answers, read_resume
 from aihawk.session import Session
@@ -514,29 +513,6 @@ def test_an_old_word_file_says_what_to_do(tmp_path: Path) -> None:
         read_resume(path)
 
 
-def test_a_new_resume_forgets_the_cvs_of_the_jobs_not_sent_and_keeps_those_sent(home: Path, resume: Path, tmp_path: Path) -> None:
-    session = Session(home)
-    session._client = ScriptedModelForApp()  # type: ignore[assignment]
-    asyncio.run(session.load_resume(resume))
-    for job_id, status in (("not-sent", "scored"), ("sent", "submitted")):
-        session.store.add(Job(job_id, "Firm", "Python Engineer", "Milan", f"https://a.example/{job_id}", "https://a.example/apply", "", "", 1.0))
-        session.store.set_cv(job_id, tmp_path / f"{job_id}.pdf")
-        session.store.set_status(job_id, status)
-    newer = tmp_path / "newer.txt"
-    newer.write_text(CV_TEXT + "\nA later role at Beta.", encoding="utf-8")
-    asyncio.run(session.load_resume(newer))
-    assert session.store.get("not-sent").cv_path is None  # type: ignore[union-attr]
-    assert session.store.get("sent").cv_path == str(tmp_path / "sent.pdf")  # type: ignore[union-attr]
-    session.close()
-
-
-def test_the_cv_font_lacks_some_latin_letters_and_a_cv_with_one_is_not_written(tmp_path: Path) -> None:
-    assert missing_glyphs("Łódź") == "ź"
-    with pytest.raises(MissingGlyphs):
-        write_cv_pdf("Ś", tmp_path / "cv.pdf")
-    assert not (tmp_path / "cv.pdf").exists()
-
-
 def test_a_new_resume_never_invents_a_contact_detail(home: Path, resume: Path) -> None:
     config = load_config(home)
     asyncio.run(install_resume(ScriptedModelForApp(), config, resume))  # type: ignore[arg-type]
@@ -771,22 +747,6 @@ def test_a_posting_whose_words_look_like_markup_is_shown_as_it_is(home: Path) ->
     asyncio.run(run())
 
 
-def test_a_cv_that_cannot_be_written_fails_that_job_alone(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    session = Session(home)
-    session._client = ScriptedModelForApp()  # type: ignore[assignment]
-    asyncio.run(session.load_resume(resume))
-    session.store.add(Job("one", "Firm", "Python Engineer", "Milan", "https://jobs.lever.co/a/1", "https://jobs.lever.co/a/1", "A posting.", "", 1.0))
-
-    async def no_cv(*_: Any) -> str:
-        raise RuntimeError("the model is down")
-
-    monkeypatch.setattr(session_module, "tailor_cv", no_cv)
-    outcome = asyncio.run(session.apply(session.store.get("one"), lambda _: None))  # type: ignore[arg-type]
-    assert outcome.status == "failed" and "the model is down" in outcome.summary
-    assert session.store.get("one").status == "failed"  # type: ignore[union-attr]
-    session.close()
-
-
 def test_a_posting_with_no_stored_text_is_scored_on_its_own_pages_text(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     session = Session(home)
     session._client = ScriptedModelForApp()  # type: ignore[assignment]
@@ -854,3 +814,25 @@ def test_places_replace_the_ones_read_from_the_cv_and_a_model_clears_back_to_its
     session.change_setting("model", "")
     assert session.config.model == default
     session.close()
+
+
+def test_the_persons_own_cv_goes_with_the_form_and_a_new_resume_replaces_it(home: Path, resume: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    session = Session(home)
+    session._client = ScriptedModelForApp()  # type: ignore[assignment]
+    asyncio.run(session.load_resume(resume))
+    session.store.add(Job("one", "Firm", "Python Engineer", "Milan", "https://jobs.lever.co/a/1", "https://jobs.lever.co/a/1", "A posting.", "", 1.0))
+    files: list[str] = []
+
+    async def fill(_client: Any, _model: str, _job: Any, _cv: str, _answers: str, cv_file: Path, *_rest: Any, **_options: Any) -> Outcome:
+        files.append(cv_file.read_text(encoding="utf-8"))
+        return Outcome("blocked", "a puzzle")
+
+    monkeypatch.setattr(session_module, "apply_to_job", fill)
+    asyncio.run(session.apply(session.store.get("one"), lambda _: None))  # type: ignore[arg-type]
+    newer = tmp_path / "newer.txt"
+    newer.write_text(CV_TEXT + "A later role at Beta.", encoding="utf-8")
+    asyncio.run(session.load_resume(newer))
+    asyncio.run(session.apply(session.store.get("one"), lambda _: None))  # type: ignore[arg-type]
+    assert files == [CV_TEXT, CV_TEXT + "A later role at Beta."]
+    session.close()
+

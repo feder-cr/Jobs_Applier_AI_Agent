@@ -19,7 +19,7 @@ The install pulls in `invisible-playwright-mcp` at its newest release from PyPI.
 
 Running `aihawk` for real needs an OrcaRouter key and makes model calls. The tests need neither: they use scripted fakes (`tests/fakes.py`) and make no network calls to a model.
 
-By default AIHawk keeps its files in `~/.aihawk` (on Windows, `%USERPROFILE%\.aihawk`). Use `aihawk --home <folder>` to keep a test run apart from your own search.
+AIHawk keeps its files in `~/.aihawk` (on Windows, `%USERPROFILE%\.aihawk`).
 
 ## Tests
 

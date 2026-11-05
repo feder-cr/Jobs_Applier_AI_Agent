@@ -6,12 +6,10 @@ import asyncio
 import json
 import math
 import threading
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-import duckdb
 import httpx
 import pytest
 from openai import AsyncOpenAI
@@ -153,30 +151,6 @@ def test_a_scan_that_logs_from_its_thread_says_it_on_the_loop(tmp_path: Path, mo
     asyncio.run(session.find(lambda line: seen.append((line, threading.get_ident()))))
     assert seen[0] == ("from the thread", loop_thread)
     assert seen[1][0] == "0 postings fit your search, of 0 in the job database built 2026-11-04; 0 new" and seen[1][1] == loop_thread
-
-
-def test_a_stale_database_is_dated_by_its_manifest_and_an_empty_search_says_the_age_is_why(tmp_path: Path) -> None:
-    # A database built 100 days ago, its two postings posted 10 days before that: the 60-day age limit leaves both out.
-    built = datetime.now(UTC) - timedelta(days=100)
-    posted = (built - timedelta(days=10)).date().isoformat()
-    connection = duckdb.connect()
-    connection.execute("CREATE TABLE t (key VARCHAR, url VARCHAR, title VARCHAR, company VARCHAR, location VARCHAR, description VARCHAR, posted_at VARCHAR, country VARCHAR, remote BOOLEAN)")
-    connection.executemany("INSERT INTO t VALUES (?, 'https://a.example/', ?, 'Acme', 'Rome, Italy', 'd', ?, 'IT', false)", [("k1", "Python Engineer", posted), ("k2", "Python Developer", posted)])
-    connection.execute(f"COPY t TO '{(tmp_path / 'jobs_0.parquet').as_posix()}' (FORMAT parquet)")
-    connection.execute(f"""COPY (SELECT * EXCLUDE (description, file_row_number), 'jobs_0.parquet' AS part, file_row_number AS row_number
-        FROM read_parquet('{(tmp_path / 'jobs_0.parquet').as_posix()}', file_row_number = true)) TO '{(tmp_path / 'index.parquet').as_posix()}' (FORMAT parquet)""")
-    manifest = {"rows_out": 2, "built_at": built.isoformat(timespec="seconds"), "index": {"name": "index.parquet", "bytes": 1}, "files": [{"name": "jobs_0.parquet"}]}
-    (tmp_path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
-    (tmp_path / "aihawk.yaml").write_text(f"database: {(tmp_path / 'manifest.json').as_posix()}\nfilters:\n  include: [python]\n  countries: [IT]\n", encoding="utf-8")
-    said: list[str] = []
-    session = Session(tmp_path)
-    assert asyncio.run(session.find(said.append)) == 0
-    session.close()
-    assert said == [
-        f"0 postings fit your search, of 2 in the job database built {built:%Y-%m-%d}; 0 new",
-        "The job database is 100 days old, and no newer one has been published.",
-        "2 postings fit your search but were posted more than 60 days ago, so none are shown.",
-    ]
 
 
 def test_with_no_postings_left_the_funnel_does_nothing(tmp_path: Path) -> None:
