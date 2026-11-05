@@ -12,7 +12,7 @@
 - After a send, the page is read once it has changed and stopped changing, up to 30 seconds, and the verdict sees its address: a slow confirmation page is no longer judged on the old form.
 - A posting whose title or company looks like screen markup, such as `[/x]`, no longer stops the screen.
 - A CV that cannot be written fails that job alone, and the others in the selection still go.
-- A posting whose address is not `http` or `https` is left out of a search: a source could not make AIHawk read a file on your computer.
+- A database of your own, named by `database` in `aihawk.yaml`, can no longer make AIHawk read a file on your computer: a posting whose address is not `http` or `https` is left out of a search. The published database already left those out.
 - A full disk while the job index downloads says the disk is full.
 - A setting of the wrong type in `aihawk.yaml` is one plain line instead of a traceback.
 - The send check knows more languages' send words, and no longer refuses "Confirm email address", "Complete your profile" or "Send code".

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import errno
+import io
 import json
 import socket
 import textwrap
@@ -463,17 +464,10 @@ def test_a_link_too_malformed_to_ask_for_leaves_the_job_as_it_is() -> None:
 
 
 def test_a_full_disk_while_the_index_downloads_says_the_disk_is_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    class Response:
-        def __enter__(self) -> Response:
-            return self
-
-        def __exit__(self, *_: object) -> None:
-            return None
-
     def full(*_: object) -> None:
         raise OSError(errno.ENOSPC, "No space left on device")
 
-    monkeypatch.setattr("urllib.request.urlopen", lambda *_, **__: Response())
+    monkeypatch.setattr("urllib.request.urlopen", lambda *_, **__: io.BytesIO(b"index"))
     monkeypatch.setattr("shutil.copyfileobj", full)
     manifest = {"index": {"name": "index.parquet", "bytes": 740_000_000}, "built_at": "2026-11-05T00:00:00+00:00", "base_url": "https://a.example"}
     with pytest.raises(DatabaseError, match="The disk is full: the job index needs 740 MB"):
