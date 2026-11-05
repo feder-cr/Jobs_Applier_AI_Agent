@@ -180,7 +180,8 @@ def steps(cv: Path) -> list[Any]:
 
 def run(site: str, tmp_path: Path) -> Any:
     cv = tmp_path / "cvs" / "cv.pdf"
-    cv.write_text("Ada Rossi", encoding="utf-8")
+    cv.parent.mkdir(parents=True, exist_ok=True)
+    cv.write_bytes(b"%PDF-1.4 Ada Rossi")
     model = ScriptedModel(*steps(cv))
     job = Job("t:1", "Acme", "Engineer", "Rome", site, site, "d")
     return asyncio.run(apply_to_job(model, "m", job, "cv", "answers", cv, tmp_path, tmp_path / "browser-profile"))  # type: ignore[arg-type]
@@ -237,7 +238,8 @@ def elsewhere() -> Any:
 
 def run_select(site: str, path: str, tmp_path: Path, model: ScriptedModel) -> Any:
     cv = tmp_path / "cvs" / "cv.pdf"
-    cv.write_text("Ada Rossi", encoding="utf-8")
+    cv.parent.mkdir(parents=True, exist_ok=True)
+    cv.write_bytes(b"%PDF-1.4 Ada Rossi")
     job = Job("t:2", "Acme", "Engineer", "Rome", site, site + path, "d")
     return asyncio.run(apply_to_job(model, "m", job, "cv", "answers", cv, tmp_path, tmp_path / "browser-profile"))  # type: ignore[arg-type]
 
