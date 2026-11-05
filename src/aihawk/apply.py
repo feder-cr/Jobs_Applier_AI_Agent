@@ -100,8 +100,8 @@ You fill in one job application form in a browser, for the candidate, using only
 - You cannot send the application, and clicks on what would send it are refused. When every required field is filled,
   call finish_form with status ready and the CSS selector of the submit control. If that control is disabled, the form
   is not complete: find what it still wants, and if you cannot, call finish_form with status blocked and say so.
-- A click by selector is checked before it is made, and the check reads only a plain CSS selector of an element in the
-  page. A selector with `>>` (a control inside a shadow root, as browser_snapshot gives some) or `:has-text`/`text=` is
+- A click by selector is checked before it is made, against the element that click would hit, including one inside an open
+  shadow root (a `>>` chain, as browser_snapshot gives some, is read too). A selector with `:has-text` or `text=` is
   refused: click that control with browser_click_at on its centre instead, which is checked at the point it lands.
 - Run script in the page (browser_evaluate) only after selectors, coordinates and a screenshot have failed, and never to
   send the application.
@@ -209,14 +209,18 @@ def tool_text(result: Any) -> str:
 
 
 def _by_selector(selector: str) -> str:
-    """The element a plain CSS selector picks, read the way the click reads it. A selector that also matches inside an
-    open shadow root is not read (None): the click may land in the shadow root, and this check could not see that element.
-    Playwright's own syntax (`>>`, `:has-text`) is a syntax error here, so it reads as nothing too."""
+    """The element a click on this selector hits, found the way Playwright's CSS engine finds it (`_queryCSS`): the page's
+    own matches first, then those inside each open shadow root in turn. A `>>` chain searches each part inside the previous
+    match. Playwright's text syntax (`:has-text`, `text=`, `nth=`) is not CSS, so it is a syntax error here and reads as
+    nothing. A closed shadow root has no `shadowRoot` to search, so the click cannot reach into it either."""
     return (
-        "(() => { const sel = " + json.dumps(selector) + "; const light = document.querySelectorAll(sel); let shadow = 0;"
-        " const walk = root => { for (const e of root.querySelectorAll('*')) if (e.shadowRoot) {"
-        " shadow += e.shadowRoot.querySelectorAll(sel).length; walk(e.shadowRoot); } };"
-        " walk(document); return shadow ? null : (light[0] || null); })()"
+        "(() => { const sel = " + json.dumps(selector) + "; try { let roots = [document];"
+        " const inside = (scope, css) => { const out = []; const query = root => { out.push(...root.querySelectorAll(css));"
+        " if (root.shadowRoot) query(root.shadowRoot); for (const e of root.querySelectorAll('*')) if (e.shadowRoot) query(e.shadowRoot); };"
+        " query(scope); return out; };"
+        " for (const css of sel.split('>>')) { const next = new Set(); for (const root of roots) for (const e of inside(root, css.trim())) next.add(e);"
+        " roots = [...next]; }"
+        " return roots[0] || null; } catch (error) { return null; } })()"
     )
 
 
@@ -230,9 +234,9 @@ def _at(x: float, y: float) -> str:
 # The element that has the focus, inside any open shadow roots: the one a key press reaches.
 FOCUSED_JS = "(() => { let el = document.activeElement; while (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement; return el; })()"
 NOT_READABLE = (
-    "Refused: the check cannot read this selector, so it cannot tell what a click would hit. A selector with `>>` or "
-    "Playwright text syntax (`:has-text`, `text=`), or one that is also inside a shadow root, is not read. Click the control "
-    "by its centre instead: take a screenshot, then browser_click_at on that point."
+    "Refused: the check cannot read this selector, so it cannot tell what a click would hit. A selector with Playwright text "
+    "syntax (`:has-text`, `text=`, `nth=`) is not read, and neither is one whose match is only in a closed shadow root. Click "
+    "the control by its centre instead: take a screenshot, then browser_click_at on that point."
 )
 NO_ELEMENT = "Refused: no element is at that point. Take a screenshot and aim browser_click_at at the centre of the control."
 

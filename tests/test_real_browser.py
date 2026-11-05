@@ -66,6 +66,39 @@ document.getElementById('host').attachShadow({mode: 'open'}).innerHTML =
   '<form method="post" action="/"><button id="send" type="submit" style="width:200px;height:60px;margin:0">Submit application</button></form>';
 </script>"""
 
+# Buttons that record their click in window.clicked, so a test sees which element the click reached.
+RECORD = "window.clicked = (window.clicked || []).concat(%r)"
+# A harmless button inside an open shadow root, and a send button of the same shape: the first is the host's `#inner`.
+SHADOW_INNER = b"""<!doctype html><title>Inner</title>
+<x-field id="host" style="position:absolute;left:100px;top:100px;display:block;width:200px;height:60px"></x-field>
+<script>
+const root = document.getElementById('host').attachShadow({mode: 'open'});
+root.innerHTML = '<button id="inner" style="width:200px;height:60px;margin:0">Add another</button>';
+root.getElementById('inner').onclick = () => { %s };
+</script>""" % (RECORD % "inner").encode()
+
+
+def mixed(light: str, shadow: str) -> bytes:
+    """Two buttons with the same class: one in the page, one inside an open shadow root. The selector `.go` matches both."""
+    return (
+        b"""<!doctype html><title>Mixed</title>
+<button class="go" id="light" style="position:absolute;left:400px;top:300px;width:200px;height:60px;margin:0">%s</button>
+<x-field id="host" style="position:absolute;left:100px;top:100px;display:block;width:200px;height:60px"></x-field>
+<script>
+const root = document.getElementById('host').attachShadow({mode: 'open'});
+root.innerHTML = '<button class="go" id="shadow" style="width:200px;height:60px;margin:0">%s</button>';
+document.getElementById('light').onclick = () => { %s };
+root.getElementById('shadow').onclick = () => { %s };
+</script>"""
+        % (light.encode(), shadow.encode(), (RECORD % "light").encode(), (RECORD % "shadow").encode())
+    )
+
+
+# The page's own match is a send button and the shadow one is harmless; the click by `.go` must be refused.
+MIXED_SEND_LIGHT = mixed("Submit application", "Add another")
+# The page's own match is harmless and the shadow one is a send button; the click by `.go` must reach the page's own one.
+MIXED_HARMLESS_LIGHT = mixed("Add another", "Submit application")
+
 
 class Elsewhere(BaseHTTPRequestHandler):
     """Another host of the loopback: a form that leaves the site lands here."""
@@ -105,6 +138,12 @@ class Site(BaseHTTPRequestHandler):
             self._page(TAG_FORM)
         elif self.path == "/shadow":
             self._page(SHADOW_FORM)
+        elif self.path == "/inner":
+            self._page(SHADOW_INNER)
+        elif self.path == "/mixed":
+            self._page(MIXED_HARMLESS_LIGHT)
+        elif self.path == "/mixed-send":
+            self._page(MIXED_SEND_LIGHT)
         else:
             self._page(FORM)
 
@@ -169,8 +208,55 @@ def test_a_send_control_inside_a_shadow_root_is_refused_by_the_point_it_is_at_an
     outcome = asyncio.run(apply_to_job(model, "m", job, "cv", "answers", tmp_path / "cv.pdf", tmp_path, tmp_path / "browser-profile"))  # type: ignore[arg-type]
     assert outcome.status == "needs_input", outcome.summary
     assert Site.posts == []
+    # Both calls reach the same send button in the shadow root, and both are recognised as sending the form.
     refused = [m["content"] for m in model.requests[1]["messages"] if m.get("role") == "tool"]
-    assert "would send" in refused[0] and "cannot read" in refused[1]
+    assert "would send" in refused[0] and "would send" in refused[1]
+
+
+def test_a_form_whose_send_control_is_in_a_shadow_root_reaches_ready_and_is_sent_once_by_the_app(site: str, tmp_path: Path) -> None:
+    model = ScriptedModel(
+        [tool_call("finish_form", status="ready", summary="nothing to fill", submit_selector="#send", questions=[])],
+        json.dumps({"outcome": "submitted", "evidence": "thank you page"}),
+    )
+    job = Job("t:3", "Acme", "Engineer", "Rome", site, site + "shadow", "d")
+    outcome = asyncio.run(apply_to_job(model, "m", job, "cv", "answers", tmp_path / "cv.pdf", tmp_path, tmp_path / "browser-profile"))  # type: ignore[arg-type]
+    assert outcome.status == "submitted", outcome.summary
+    assert len(Site.posts) == 1
+
+
+def drive(site: str, path: str, tmp_path: Path, calls: list[Any]) -> tuple[dict[str, Any], ScriptedModel, list[str]]:
+    """Calls by the model on a page of the site, then finish_form; returns the report, the model, and what the page recorded."""
+
+    async def go() -> tuple[dict[str, Any], ScriptedModel, list[str]]:
+        async with _server(tmp_path, tmp_path / "browser") as (session, _):
+            await _open_browser(session, tmp_path / "browser-profile")
+            try:
+                await session.call_tool("browser_navigate", {"url": site + path})
+                model = ScriptedModel(*calls, [tool_call("finish_form", status="blocked", summary="checked", submit_selector="", questions=[])])
+                report = await fill_form(session, [], model, "m", "brief", form_url=site)
+                clicked = json.loads(tool_text(await session.call_tool("browser_evaluate", {"expression": "window.clicked || []"})))
+                return report, model, clicked
+            finally:
+                await session.call_tool("browser_close", {})
+
+    return asyncio.run(go())
+
+
+def test_a_host_and_inner_selector_reads_the_element_the_click_reaches(site: str, tmp_path: Path) -> None:
+    report, model, clicked = drive(site, "inner", tmp_path, [[tool_call("browser_click", selector="#host >> #inner")]])
+    assert report["status"] == "blocked"
+    assert "Refused" not in str([m["content"] for m in model.requests[1]["messages"] if m.get("role") == "tool"])
+    assert clicked == ["inner"]
+
+
+@pytest.mark.parametrize(("path", "reached", "refused"), [("mixed", ["light"], False), ("mixed-send", [], True)])
+def test_a_selector_matching_both_the_page_and_a_shadow_root_is_checked_on_the_element_the_click_hits(site: str, tmp_path: Path, path: str, reached: list[str], refused: bool) -> None:
+    # Playwright takes the page's own match first, so `.go` is the light button here; the check must read that same button.
+    report, model, clicked = drive(site, path, tmp_path, [[tool_call("browser_click", selector=".go")]])
+    assert report["status"] == "blocked"
+    answer = next(m["content"] for m in model.requests[1]["messages"] if m.get("role") == "tool")
+    assert ("would send" in answer) is refused, answer
+    assert clicked == reached
 
 
 def test_enter_in_a_tag_field_adds_the_tag_and_the_form_is_not_posted(site: str, tmp_path: Path) -> None:
