@@ -140,20 +140,29 @@ def verify_system(guidance: str) -> str:
         return VERIFY_SYSTEM
     return f"{VERIFY_SYSTEM}\n\nAbout this site. Where this differs from the rules above, the rules above win:\n\n{guidance}"
 
-# What a control says when it sends a form, in the languages forms most often come in.
+# What a control says when it sends a form, in the languages forms most often come in. The stems take the verb's other
+# forms: Candidatar-me, candidarsi, inviare, envoyez.
 _SENDS = re.compile(
-    r"\b(submit|send|invia|inviar|candidati|candidatura|bewerben|absenden|senden|abschicken|envoyer|postuler|soumettre|enviar|solicitar|aplicar"
-    r"|verzenden|versturen|indienen|solliciteren|skicka|ansök|ansøg|sende|lähetä|wyślij|aplikuj|odeslat|odoslať|küldés|trimite|gönder|başvur"
-    r"|confirm|finish|complete|conferma|confermare|completa|completare|termina|confirmar|completar|finalizar|terminar|bestätigen|abschließen"
-    r"|fertigstellen|beenden|confirmer|terminer|finaliser|bevestigen|voltooien|bekräfta|slutför|bekreft|bekræft|fullfør|fuldfør|potwierdź|zakończ"
-    r"|potvrdit|dokončit|confirmă|finalizează|onayla|tamamla|подтвердить|завершить|отправить|откликнуться|إرسال)\b"
+    r"\b(submit|send|invia|inviar\w*|candidati|candidatevi|candid(?:at)?ar\w*|candidatura|bewerben|absenden|senden|abschicken|versenden|einreichen"
+    r"|envoyer|envoyez|post[uú]l\w*|soumett\w*|enviar|envíe|envie|solicitar|solicite|submet\w*|aplicar"
+    r"|verzenden|versturen|verstuur|indienen|solliciteren|solliciteer\w*|skicka|ansök|ansøg|sende|lähetä|wyślij|aplikuj|odeslat|odoslať|küldés|trimite|gönder"
+    r"|başvurun|başvur|başvuru\s+yap|подать|подайте|отправить|откликнуться|إرسال|تقديم)\b"
     # These scripts write no space between words, so a word has no edge to look for: 送信する is still 送信.
-    r"|送信|応募|发送|提交|申请|제출|보내기|確認|完了|确认|完成|확인|완료",
+    r"|送信|応募|申し込み|提出|发送|提交|投递|申请|제출|보내기|지원하기",
     re.IGNORECASE,
 )
+# Confirm, Finish and Complete, in the languages above. They send only as the whole label, or with a word for an
+# application or a submission after them. About something else, such as an email address or a profile, they are a step.
+_FINISH_LATIN = r"(?:confirm|finish|complete|conferma|confermare|completa|completare|termina|finalizza|finalizzare|confirmar|completar|finalizar|terminar|bestätigen|abschließen|fertigstellen|beenden|confirmer|terminer|finaliser|bevestigen|voltooien|bekräfta|slutför|bekreft|bekræft|fullfør|fuldfør|potwierdź|zakończ|potvrdit|dokončit|confirmă|finalizează|onayla|tamamla|подтвердить|завершить)"
+_FINISH_CJK = r"(?:確認|完了|确认|完成|확인|완료)"
+_APPLICATION = r"(?:application\w*|submission\w*|candidatur\w*|bewerbung\w*|domanda|solicitud\w*|solicitação|sollicitatie|ansökan|ansøgning|aplikacja|başvuru|заявк\w*|申请|応募|지원)"
+_FINISH_ANY = re.compile(rf"\b{_FINISH_LATIN}\b|{_FINISH_CJK}", re.IGNORECASE)
+_FINISH_WHOLE = re.compile(rf"\W*(?:{_FINISH_LATIN}|{_FINISH_CJK})\W*", re.IGNORECASE)
+_FINISH_WITH_APPLICATION = re.compile(rf"\b{_FINISH_LATIN}\b(?:\W+\w+){{0,2}}?\W+{_APPLICATION}", re.IGNORECASE)
 _APPLY = re.compile(r"\b(apply|applica)\b", re.IGNORECASE)
 # What a button inside a form says when it does not send it: a step, an answer (Ashby's Yes and No are buttons with no
-# type), or a file to attach.
+# type), or a file to attach. Continue is a step: a submit-type Continue is the next step of a multi-step form far more
+# often than the send, and refusing it would stop every such form.
 _STEPS = re.compile(
     r"\b(next|continue|back|previous|add|avanti|continua|indietro|aggiungi|weiter|suivant|siguiente"
     r"|yes|no|si|oui|non|ja|nein|upload|attach|browse|carica|choose file)\b",
@@ -188,16 +197,24 @@ def _asks_for_enter(element: dict[str, Any]) -> bool:
     return bool(ENTER_ASKS.search(f"{element.get('placeholder', '')} {element.get('aria_label', '')}"))
 
 
+def _finishes(text: str) -> bool:
+    """Whether Confirm, Finish or Complete sends: as the whole label, or with an application word after it."""
+    return bool(_FINISH_WHOLE.fullmatch(text) or _FINISH_WITH_APPLICATION.search(text))
+
+
 def sends_form(element: dict[str, Any], form_touched: bool) -> bool:
     """Whether clicking this element would send the application. Its words decide first: a send word in one of the languages
-    `_SENDS` has, or Apply once the form is touched or the element is in one. A link is judged by its words alone. Otherwise
-    a submit button, or a button with no type inside a form, sends unless its words name a step, an answer or a file."""
+    `_SENDS` has, Confirm, Finish or Complete as `_finishes` reads it, or Apply once the form is touched or the element is in
+    one. Confirm, Finish or Complete about something else is a step, as Continue is. A link is judged by its words alone.
+    Otherwise a submit button, or a button with no type inside a form, sends unless its words name a step, an answer or a file."""
     tag, kind, text = element.get("tag", ""), element.get("type", ""), element.get("text", "")
-    if _SENDS.search(text):
+    if _SENDS.search(text) or _finishes(text):
         return True
     # "Apply" opens the form from a job's page, and sends it once the form has been filled.
     if _APPLY.search(text) and (form_touched or element.get("in_form")):
         return True
+    if _FINISH_ANY.search(text):
+        return False
     if tag == "a":
         return False
     # A button with no type inside a form is a submit button, as HTML defines it. A step of a long form is one too.

@@ -72,13 +72,37 @@ def ready(selector: str = "#send") -> list[Any]:
         ({"tag": "iframe", "type": "", "in_form": True, "text": ""}, True, False),
         ({"tag": "iframe", "type": "", "in_form": False, "text": "Widget containing a Cloudflare security challenge"}, True, False),
         ({"tag": "iframe", "type": "", "in_form": True, "text": "reCAPTCHA"}, False, False),
+        # Candidatar-me is a Spanish send from a plain button. A submit-type Continue is the next step of a multi-step form,
+        # and a Continue in a div is one too: neither is held back by its words.
+        ({"tag": "button", "type": "button", "in_form": True, "text": "Candidatar-me"}, True, True),
+        ({"tag": "button", "type": "submit", "in_form": True, "text": "Continue"}, True, False),
+        ({"tag": "div", "type": "", "in_form": False, "text": "Continue"}, True, False),
+        # Confirm, Finish or Complete about an email address or a profile is a step, even as a submit button.
+        ({"tag": "button", "type": "submit", "in_form": True, "text": "Confirm email address"}, True, False),
+        ({"tag": "button", "type": "", "in_form": True, "text": "Complete your profile"}, True, False),
+        ({"tag": "div", "type": "", "in_form": False, "text": "Conferma indirizzo email"}, False, False),
+        ({"tag": "button", "type": "button", "in_form": True, "text": "Completa il profilo"}, True, False),
+        ({"tag": "button", "type": "button", "in_form": True, "text": "Finish setting up"}, True, False),
+        # Confirm, Finish or Complete with an application or a submission after it sends.
+        ({"tag": "button", "type": "button", "in_form": True, "text": "Confirm application"}, True, True),
+        ({"tag": "button", "type": "button", "in_form": True, "text": "Complete your job application"}, True, True),
+        ({"tag": "button", "type": "button", "in_form": True, "text": "Finish submission"}, True, True),
+        ({"tag": "div", "type": "", "in_form": False, "text": "Confirmar candidatura"}, False, True),
     ],
 )
 def test_sends_form(element: dict[str, Any], touched: bool, sends: bool) -> None:
     assert sends_form(element, touched) is sends
 
 
-@pytest.mark.parametrize("word", ["Send", "Senden", "Inviar", "Verzenden", "Versturen", "Skicka", "Wyślij", "Odeslat", "Отправить", "送信", "提交", "제출"])
+@pytest.mark.parametrize(
+    "word",
+    [
+        "Send", "Senden", "Inviar", "Verzenden", "Versturen", "Skicka", "Wyślij", "Odeslat", "Отправить", "送信", "提交", "제출",
+        # The other forms of the verbs: Candidatar-me, Inviare, Envoyez, Soumettez, Einreichen, Versenden.
+        "Candidatar-me", "Candidatarme", "Candidatevi", "Inviare", "Envoyez", "Soumettez", "Einreichen", "Versenden",
+        "Solliciteer", "Submeter", "Başvurun", "Başvuru yap", "Подать", "提出", "投递", "申し込み", "지원하기", "تقديم",
+    ],
+)
 def test_a_control_that_sends_in_another_language_is_held_back_even_with_no_form_around_it(word: str) -> None:
     assert sends_form({"tag": "div", "type": "", "in_form": False, "text": word}, True)
 
