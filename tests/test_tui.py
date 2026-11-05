@@ -6,6 +6,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -785,4 +786,25 @@ def test_a_cv_that_cannot_be_written_fails_that_job_alone(home: Path, resume: Pa
     outcome = asyncio.run(session.apply(session.store.get("one"), lambda _: None))  # type: ignore[arg-type]
     assert outcome.status == "failed" and "the model is down" in outcome.summary
     assert session.store.get("one").status == "failed"  # type: ignore[union-attr]
+    session.close()
+
+
+def test_a_posting_with_no_stored_text_is_scored_on_its_own_pages_text(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    session = Session(home)
+    session._client = ScriptedModelForApp()  # type: ignore[assignment]
+    asyncio.run(session.load_resume(resume))
+    session.store.add(Job("bare", "Firm", "Python Engineer", "Milan", "https://a.example/1", "https://a.example/1", "", "", 1.0))
+    session.store.add(Job("told", "Firm", "Python Engineer", "Milan", "https://a.example/2", "https://a.example/2", "Stored text.", "", 1.0))
+    fetched: list[str] = []
+
+    def page(job: Job) -> Job:
+        fetched.append(job.id)
+        return replace(job, description="The text of its page.")
+
+    monkeypatch.setattr(session_module, "with_description", page)
+    asyncio.run(session.score([session.store.get("bare"), session.store.get("told")], lambda: None, lambda _: None))  # type: ignore[list-item]
+    assert fetched == ["bare"]
+    assert session.store.get("bare").job.description == "The text of its page."  # type: ignore[union-attr]
+    asked = " ".join(request["messages"][1]["content"] for request in session._client.requests)  # type: ignore[union-attr]
+    assert "The text of its page." in asked and "Stored text." in asked
     session.close()

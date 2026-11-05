@@ -14,6 +14,8 @@
 - A CV that cannot be written fails that job alone, and the others in the selection still go.
 - A database of your own, named by `database` in `aihawk.yaml`, can no longer make AIHawk read a file on your computer: a posting whose address is not `http` or `https` is left out of a search. The published database already left those out.
 - A full disk while the job index downloads says the disk is full.
+- A job whose source published no text is scored on the text of its own page where that can be read, which also finds postings that have closed.
+- The README shows real captures of the screen.
 - A setting of the wrong type in `aihawk.yaml` is one plain line instead of a traceback.
 - The send check knows more languages' send words, and no longer refuses "Confirm email address", "Complete your profile" or "Send code".
 
