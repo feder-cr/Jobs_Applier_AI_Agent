@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import html
 import json
 import math
@@ -12,6 +13,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from html.parser import HTMLParser
+from http.client import HTTPException
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -125,11 +127,12 @@ def with_description(job: Job, timeout: float = 30.0) -> Job:
     stored = stored_description(job.ref)
     if stored.strip():
         return replace(job, description=stored)
-    request = urllib.request.Request(job.url, headers={"User-Agent": "AIHawk (+https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk)"})
     try:
+        request = urllib.request.Request(job.url, headers={"User-Agent": "AIHawk (+https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk)"})
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return replace(job, description=page_text(response.read().decode("utf-8", "replace")))
-    except OSError:
+    except (OSError, ValueError, HTTPException):
+        # A dead link, or one too malformed to ask for: the job is judged on what is known.
         return job
 
 
@@ -178,6 +181,8 @@ def local_index(manifest: dict[str, Any], location: str, cache: Path, log: Calla
             shutil.copyfileobj(response, out, 1 << 20)
     except OSError as error:
         partial.unlink(missing_ok=True)
+        if error.errno == errno.ENOSPC:
+            raise DatabaseError(f"The disk is full: the job index needs {manifest['index']['bytes'] // 1_000_000} MB free in {cache}. Free some space, then start AIHawk again.") from error
         raise DatabaseError(unreachable(error)) from error
     partial.replace(path)
     for old in cache.glob("index-*.parquet"):
@@ -338,7 +343,8 @@ def search(
     place_clauses, place_parameters = _place_and_age(filters, max_age_days)
     # A node of weight 0 is only a condition for an arc: it is no reason to bring a posting in.
     clause, words = _any_word("title", tuple(dict.fromkeys(form.text for node in nodes if node.weight > 0 for form in node.forms)))
-    clauses, parameters = [*place_clauses, clause], [*place_parameters, *words]
+    # A posting's address comes from a source, and it is fetched and opened: only the web's, never a file on this computer.
+    clauses, parameters = [*place_clauses, clause, "regexp_matches(url, '(?i)^https?://')"], [*place_parameters, *words]
     if filters.exclude:
         clause, words = _any_word("title", filters.exclude)
         clauses.append(f"NOT {clause}")

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import csv
+import errno
+import io
 import json
 import socket
 import textwrap
@@ -13,7 +15,7 @@ import duckdb
 import pytest
 
 from aihawk.config import Arc, ConfigError, Filters, Form, Node, Plan, load_config
-from aihawk.database import DatabaseError, Job, page_text, rarity, search, stored_description, stored_descriptions, with_description
+from aihawk.database import DatabaseError, Job, local_index, page_text, rarity, search, stored_description, stored_descriptions, with_description
 from aihawk.store import COLUMNS, Proof, Store, said, sent_word, write_applied
 
 JOB = Job("g:a:1", "Acme", "Senior Python Engineer", "Rome, Italy", "u", "a", "d")
@@ -442,3 +444,32 @@ def test_a_setting_of_the_wrong_type_is_a_config_error_that_names_the_key(tmp_pa
     (tmp_path / "aihawk.yaml").write_text(text, encoding="utf-8")
     with pytest.raises(ConfigError, match=key):
         load_config(tmp_path)
+
+
+def test_a_posting_whose_address_is_not_the_webs_is_left_out(tmp_path: Path) -> None:
+    connection = duckdb.connect()
+    connection.execute("CREATE TABLE t (key VARCHAR, url VARCHAR, title VARCHAR, company VARCHAR, location VARCHAR, description VARCHAR, posted_at VARCHAR)")
+    connection.executemany(
+        "INSERT INTO t VALUES (?, ?, 'Java Developer', ?, 'Rome', 'd', NULL)",
+        [("web", "HTTPS://a.example/1", "a"), ("disk", "file:///home/me/.aihawk/key", "b"), ("app", "javascript:alert(1)", "c")],
+    )
+    path = publish_locally(connection, tmp_path)
+    assert [job.id for job in search(path, Filters(include=("java",)), 60, tmp_path)[1]] == ["web"]
+
+
+def test_a_link_too_malformed_to_ask_for_leaves_the_job_as_it_is() -> None:
+    for link in ("not a link", "https://a.example/with space"):
+        job = Job("x", "Co", "T", "L", link, link, "")
+        assert with_description(job, timeout=1).description == ""
+
+
+def test_a_full_disk_while_the_index_downloads_says_the_disk_is_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def full(*_: object) -> None:
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda *_, **__: io.BytesIO(b"index"))
+    monkeypatch.setattr("shutil.copyfileobj", full)
+    manifest = {"index": {"name": "index.parquet", "bytes": 740_000_000}, "built_at": "2026-11-05T00:00:00+00:00", "base_url": "https://a.example"}
+    with pytest.raises(DatabaseError, match="The disk is full: the job index needs 740 MB"):
+        local_index(manifest, "https://a.example/manifest.json", tmp_path)
+    assert not list(tmp_path.glob("*.part"))

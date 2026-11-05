@@ -231,14 +231,14 @@ class Session:
         if plugin is None:
             raise ConfigError(f"no plugin knows this site. Apply by hand: {item.job.url}")
         cv = self.config.cv.read_text(encoding="utf-8-sig")
-        cv_file = await self._cv_for(item, cv, log)
         job = replace(item.job, apply_url=plugin.form_url(item.job.url))
         answers = self.config.answers.read_text(encoding="utf-8-sig") if self.config.answers.is_file() else ""
-        log(f"filling the form on {plugin.name}")
         extras = always_plugins(self.plugins)
         guidance = "\n\n".join([plugin.instructions, *(extra.instructions for extra in extras)])
         reaches = frozenset(host for extra in extras for host in extra.reaches)
         try:
+            cv_file = await self._cv_for(item, cv, log)
+            log(f"filling the form on {plugin.name}")
             outcome = await apply_to_job(
                 self.client, self.config.model, job, cv, answers, cv_file, self.config.data_dir, self.config.browser_profile, guidance, reaches, self.config.api_key_env
             )
