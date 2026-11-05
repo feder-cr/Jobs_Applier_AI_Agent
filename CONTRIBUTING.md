@@ -36,7 +36,7 @@ The browser tests run the real `invisible-playwright-mcp` and its Firefox agains
 ruff check .
 ```
 
-Ruff reads its settings from `[tool.ruff]` in `pyproject.toml`: the default rules only. The line length of 160 is set there but not enforced, because `ruff check` does not run E501; 39 lines in the repository are longer than 160 today. CI runs this exact command.
+Ruff reads its settings from `[tool.ruff]` in `pyproject.toml`: the default rules only. The line length of 160 is set there but not enforced: `ruff check` does not run E501, so a longer line does not fail it. CI runs this exact command.
 
 ## What CI runs
 

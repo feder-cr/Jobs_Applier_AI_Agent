@@ -1,6 +1,6 @@
 # Sites: what to expect
 
-What AIHawk can do on each site, from the real forms it has been run on. Postings are counted by host in the job index (`index-202611041136230000.parquet`, 2026-11-04) and rounded to the nearest thousand.
+What AIHawk can do on each site, from the real forms it has been run on. Postings are counted by host in the job index (`index.parquet` in the release built 2026-11-04) and rounded to the nearest thousand.
 
 | Site | Postings in the index | Status | What stops it |
 |---|---|---|---|
