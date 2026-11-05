@@ -13,11 +13,11 @@ Upload the CV to the file input under the "Resume" heading, which has an id like
 
 "Experience" and "Education" with a "+ Add" button are usually optional: leave them empty unless required.
 
-Questions a company adds have names like `CA_30078` or `QA_11839078`: find each by its label. A required "Work Authorization" list is common, with options that depend on the job's country: what the files do not say goes back to the person. A field showing "Select an option…" is a list: type, then click the option; its input has an id like `#input_CA_30080_input`.
+Questions a company adds have names like `CA_30078` or `QA_11839078`: find each by its label. A required "Work Authorization" list is common, with options that depend on the job's country. A field showing "Select an option…" is a list: type, then click the option; its input has an id like `#input_CA_30080_input`.
 
 Radio answers have generated ids. Select them by `input[name="CA_41201"]` with the right position, or by the `div[role="radio"]` beside it that shows YES or NO, and check the result by reading the page.
 
-A `gdpr` checkbox states that the person read the privacy notice and consents to the processing of their data. Tick it only if the answers file says they accept such notices; otherwise ask.
+A `gdpr` checkbox states that the person read the privacy notice and consents to the processing of their data.
 
 The submit control is the button "Submit application" (in Portuguese, "Enviar candidatura").
 

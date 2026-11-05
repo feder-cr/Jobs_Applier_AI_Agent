@@ -127,7 +127,7 @@ def with_description(job: Job, timeout: float = 30.0) -> Job:
     if stored.strip():
         return replace(job, description=stored)
     try:
-        request = urllib.request.Request(job.url, headers={"User-Agent": "AIHawk (+https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk)"})
+        request = urllib.request.Request(job.url, headers={"User-Agent": "AIHawk (+https://github.com/feder-cr/Jobs_Applier_AI_Agent)"})
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return replace(job, description=page_text(response.read().decode("utf-8", "replace")))
     except (OSError, ValueError, HTTPException):

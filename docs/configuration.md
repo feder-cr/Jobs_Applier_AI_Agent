@@ -1,6 +1,6 @@
-# Configuration
+﻿# Configuration
 
-AIHawk reads `aihawk.yaml` in its folder, `~/.aihawk` by default (see `--home`). A missing file, or a missing key, takes the default below. Restart `aihawk` after you edit the file.
+Press `e` in AIHawk to change these on the screen. AIHawk reads `aihawk.yaml` in its folder, `~/.aihawk` by default (see `--home`). A missing file, or a missing key, takes the default below. Restart `aihawk` after you edit the file.
 
 Loading a resume rewrites this file, and the rewrite drops the comments you put in it, so keep your notes elsewhere.
 
@@ -8,7 +8,7 @@ Loading a resume rewrites this file, and the rewrite drops the comments you put 
 |---|---|---|
 | `name` | empty | Your name for this search, shown at the top of the list. |
 | `goals` | empty | What you are looking for, in your own words. The decision model and the judge read it. |
-| `database` | `https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk/releases/download/jobs-latest/manifest.json` | Where the job database is: the URL of its `manifest.json`, or the path of a local one. The files it names sit beside it, unless its `base_url` says otherwise. |
+| `database` | `https://github.com/feder-cr/Jobs_Applier_AI_Agent/releases/download/jobs-latest/manifest.json` | Where the job database is: the URL of its `manifest.json`, or the path of a local one. The files it names sit beside it, unless its `base_url` says otherwise. |
 | `max_age_days` | `60` | Postings posted more than this many days ago are left out. A posting with no date is kept. |
 | `model` | `deepseek/deepseek-v4.1-flash` | Writes the tailored CV and fills the application forms. |
 | `quick_model` | `google/gemini-3.5-flash` | Writes the search plan from your CV, and the other short calls of a search. |

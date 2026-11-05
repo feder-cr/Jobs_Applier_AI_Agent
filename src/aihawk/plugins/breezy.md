@@ -11,7 +11,7 @@ The CV upload is a link, "Carica Curriculum" on an Italian page and "Attached" o
 
 "Aggiungi posizione" (add position) and "Aggiungi Studi e formazione" (add education) are links that add an entry: leave them empty unless required.
 
-Questions a company adds have names like `section_..._question_0`, as radio buttons, native select lists or text: find each by the text before it. Some forms ask many required questions about licences or experience: what the files do not answer goes back to the person.
+Questions a company adds have names like `section_..._question_0`, as radio buttons, native select lists or text: find each by the text before it. Some forms ask many required questions about licences or experience.
 
 Race, gender and veteran questions (`race_ethnicity`, `gender`, `eeoc.veteran_status`) have an "unspecified" choice: pick that. Their ids do not match their labels (`#race_hispanic` is labelled "asian"), so choose by the label, not the id.
 

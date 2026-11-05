@@ -2,7 +2,7 @@
 
 A plugin tells the model how one job site's application form works. It is a Markdown file: a front matter between two `---` lines, then the instructions in plain prose. The model reads the instructions when it fills a form on that site.
 
-A plugin is a prompt, not code. It cannot change what AIHawk allows. The model is told not to send a form, clicks whose words would send it are refused, it writes nothing that the CV and the answers do not say, and it does not get past a captcha or a login. Those rules are in `src/aihawk/apply.py`, out of a plugin's reach.
+A plugin is a prompt, not code: it explains the site to the model.
 
 ## Where a plugin lives
 
@@ -19,7 +19,6 @@ AIHawk reads the plugins when it starts, so restart it after you change one.
 | `hosts` | The sites the plugin is for, as a list, such as `[jobs.lever.co]`. A posting matches when its host is one of these or ends with `.` and one of them, so `eu.jobs.lever.co` matches too. Required unless `when` is `always`. |
 | `apply_path` | Added to the posting's path to reach the form, once: `/apply` turns `https://jobs.lever.co/acme/1` into `https://jobs.lever.co/acme/1/apply`. A link that already ends with it is left as it is. The query string is kept. Without it, the posting's own link is the form's link. |
 | `when` | Only `always`. The body is then added to every form's instructions, beside the site's own plugin. Such a plugin has no `hosts` and does not make a site count as one AIHawk can apply to. |
-| `reaches` | Only in a `when: always` plugin: the sites the model may visit with it, such as `[mail.google.com]`. A site plugin's `reaches` is read and ignored. |
 
 A file that does not parse (no front matter, `hosts` missing, a `when` other than `always`, empty instructions) stops AIHawk at start with a message that names the plugin. Save the file as UTF-8. A byte-order mark at its start, as some Windows editors write, is fine: AIHawk skips it.
 
@@ -48,7 +47,7 @@ The last paragraph starts with `After sending:`. It says how the site shows that
 
 No code reads this paragraph; the model does. Say what the confirmation looks like for this site, and say that the form still being on the page means nothing was received. Do not rely on one exact phrase, because the wording is set per job board.
 
-The model reports one of three results when it finishes a form: `ready` (every required field is filled from the CV and the answers), `needs_input` (a question for the person) or `blocked` (the form cannot be filled, for example because of a captcha). Say in the plugin when `blocked` is the right answer.
+The model reports one of two results when it finishes a form: `ready` (every required field is filled) or `blocked` (the form cannot be filled, for example because of a captcha). Say in the plugin when `blocked` is the right answer.
 
 ## A real example
 

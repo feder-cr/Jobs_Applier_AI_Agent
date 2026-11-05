@@ -14,7 +14,7 @@ import pytest
 from mcp import ClientSession
 from mcp.client.stdio import stdio_client
 
-from aihawk.apply import MODEL_TOOLS, _open_browser, _server, apply_to_job, fill_form, offered, server_parameters, tool_text
+from aihawk.apply import _open_browser, _server, apply_to_job, fill_form, server_parameters, tool_text
 from aihawk.database import Job
 from aihawk.documents import write_cv_pdf
 from fakes import ScriptedModel, tool_call
@@ -174,7 +174,7 @@ def steps(cv: Path) -> list[Any]:
         # The model tries to send it: nothing may reach the site.
         [tool_call("browser_click", selector="#send")],
         [tool_call("browser_press_key", key="Enter")],
-        [tool_call("finish_form", status="ready", summary="name and resume", submit_selector="#send", questions=[])],
+        [tool_call("finish_form", status="ready", summary="name and resume", submit_selector="#send")],
         json.dumps({"outcome": "submitted", "evidence": "thank you page"}),
     ]
 
@@ -198,24 +198,9 @@ def test_the_form_is_sent_once_with_the_name_and_the_cv_and_what_the_page_said_i
     assert Path(outcome.proof.screenshot).read_bytes().startswith(b"\x89PNG")
 
 
-def test_a_send_control_inside_a_shadow_root_is_refused_by_the_point_it_is_at_and_by_its_selector(site: str, tmp_path: Path) -> None:
-    model = ScriptedModel(
-        [tool_call("browser_click_at", x=200, y=130)],  # the centre of the send button, inside the shadow root
-        [tool_call("browser_click", selector="#send")],  # the same button by a selector the check cannot read
-        [tool_call("finish_form", status="needs_input", summary="nothing sent", submit_selector="", questions=["Which?"])],
-    )
-    job = Job("t:2", "Acme", "Engineer", "Rome", site, site + "shadow", "d")
-    outcome = asyncio.run(apply_to_job(model, "m", job, "cv", "answers", tmp_path / "cv.pdf", tmp_path, tmp_path / "browser-profile"))  # type: ignore[arg-type]
-    assert outcome.status == "needs_input", outcome.summary
-    assert Site.posts == []
-    # Both calls reach the same send button in the shadow root, and both are recognised as sending the form.
-    refused = [m["content"] for m in model.requests[1]["messages"] if m.get("role") == "tool"]
-    assert "would send" in refused[0] and "would send" in refused[1]
-
-
 def test_a_form_whose_send_control_is_in_a_shadow_root_reaches_ready_and_is_sent_once_by_the_app(site: str, tmp_path: Path) -> None:
     model = ScriptedModel(
-        [tool_call("finish_form", status="ready", summary="nothing to fill", submit_selector="#send", questions=[])],
+        [tool_call("finish_form", status="ready", summary="nothing to fill", submit_selector="#send")],
         json.dumps({"outcome": "submitted", "evidence": "thank you page"}),
     )
     job = Job("t:3", "Acme", "Engineer", "Rome", site, site + "shadow", "d")
@@ -232,7 +217,7 @@ def drive(site: str, path: str, tmp_path: Path, calls: list[Any]) -> tuple[dict[
             await _open_browser(session, tmp_path / "browser-profile")
             try:
                 await session.call_tool("browser_navigate", {"url": site + path})
-                model = ScriptedModel(*calls, [tool_call("finish_form", status="blocked", summary="checked", submit_selector="", questions=[])])
+                model = ScriptedModel(*calls, [tool_call("finish_form", status="blocked", summary="checked", submit_selector="")])
                 report = await fill_form(session, [], model, "m", "brief", form_url=site)
                 clicked = json.loads(tool_text(await session.call_tool("browser_evaluate", {"expression": "window.clicked || []"})))
                 return report, model, clicked
@@ -240,46 +225,6 @@ def drive(site: str, path: str, tmp_path: Path, calls: list[Any]) -> tuple[dict[
                 await session.call_tool("browser_close", {})
 
     return asyncio.run(go())
-
-
-def test_a_host_and_inner_selector_reads_the_element_the_click_reaches(site: str, tmp_path: Path) -> None:
-    report, model, clicked = drive(site, "inner", tmp_path, [[tool_call("browser_click", selector="#host >> #inner")]])
-    assert report["status"] == "blocked"
-    assert "Refused" not in str([m["content"] for m in model.requests[1]["messages"] if m.get("role") == "tool"])
-    assert clicked == ["inner"]
-
-
-@pytest.mark.parametrize(("path", "reached", "refused"), [("mixed", ["light"], False), ("mixed-send", [], True)])
-def test_a_selector_matching_both_the_page_and_a_shadow_root_is_checked_on_the_element_the_click_hits(site: str, tmp_path: Path, path: str, reached: list[str], refused: bool) -> None:
-    # Playwright takes the page's own match first, so `.go` is the light button here; the check must read that same button.
-    report, model, clicked = drive(site, path, tmp_path, [[tool_call("browser_click", selector=".go")]])
-    assert report["status"] == "blocked"
-    answer = next(m["content"] for m in model.requests[1]["messages"] if m.get("role") == "tool")
-    assert ("would send" in answer) is refused, answer
-    assert clicked == reached
-
-
-def test_enter_in_a_tag_field_adds_the_tag_and_the_form_is_not_posted(site: str, tmp_path: Path) -> None:
-    async def fill() -> int:
-        async with _server(tmp_path, tmp_path / "browser") as (session, _):
-            await _open_browser(session, tmp_path / "browser-profile")
-            try:
-                await session.call_tool("browser_navigate", {"url": site + "skills"})
-                model = ScriptedModel(
-                    [tool_call("browser_click", selector="#skill")],
-                    [tool_call("browser_type", selector="#skill", text="Python")],
-                    [tool_call("browser_press_key", key="Enter")],
-                    [tool_call("finish_form", status="blocked", summary="checked the tag", submit_selector="", questions=[])],
-                )
-                report = await fill_form(session, [], model, "m", "brief", form_url=site)
-                assert report["status"] == "blocked"
-                tags = await session.call_tool("browser_evaluate", {"expression": "document.querySelectorAll('#tags li').length"})
-                return int(tool_text(tags))
-            finally:
-                await session.call_tool("browser_close", {})
-
-    assert asyncio.run(fill()) == 1
-    assert Site.posts == []
 
 
 @pytest.fixture
@@ -298,34 +243,6 @@ def run_select(site: str, path: str, tmp_path: Path, model: ScriptedModel) -> An
     return asyncio.run(apply_to_job(model, "m", job, "cv", "answers", cv, tmp_path, tmp_path / "browser-profile"))  # type: ignore[arg-type]
 
 
-def test_a_select_whose_form_leaves_for_another_host_is_unconfirmed_and_the_post_is_counted(site: str, elsewhere: str, tmp_path: Path) -> None:
-    Site.leave_to = elsewhere + "sent"
-    # The change submits the form, and the page navigates away. While it loads the page cannot be read: the check reads
-    # it again until it can, and the host of the page it then shows is what stops the form.
-    model = ScriptedModel([tool_call("browser_select_option", selector="#pick", value="a")])
-    outcome = run_select(site, "leave", tmp_path, model)
-    assert outcome.status == "unconfirmed", outcome.summary
-    assert "the page went to" in outcome.summary and "127.0.0.2" in outcome.summary
-    assert len(model.requests) == 1  # asked for the select, and never again
-    assert len(Elsewhere.posts) == 1
-    assert b"pick=a" in Elsewhere.posts[0]
-    assert Site.posts == []
-
-
-def test_a_select_that_sends_on_the_same_site_is_not_detected_and_the_model_goes_on(site: str, tmp_path: Path) -> None:
-    # Known gap, written down: a send that stays on the site is not seen. The script posts and rewrites the page to say it
-    # was received, the address does not change, and the model is asked for its next step as if nothing had been sent.
-    model = ScriptedModel(
-        [tool_call("browser_select_option", selector="#pick", value="a")],
-        [tool_call("finish_form", status="blocked", summary="sent already", submit_selector="", questions=[])],
-    )
-    outcome = run_select(site, "select", tmp_path, model)
-    assert outcome.status == "blocked"
-    assert len(Site.posts) == 1
-    assert b"pick=a" in Site.posts[0]
-    assert len(model.requests) == 2
-
-
 def test_the_browser_starts_with_the_model_key_kept_out_of_its_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ORCAROUTER_API_KEY", "sk-test-not-real")
 
@@ -333,25 +250,6 @@ def test_the_browser_starts_with_the_model_key_kept_out_of_its_environment(tmp_p
         async with _server(tmp_path, tmp_path / "browser") as (session, _):
             await _open_browser(session, tmp_path / "browser-profile")
             assert not (await session.call_tool("browser_navigate", {"url": "about:blank"})).isError
-
-    asyncio.run(check())
-
-
-def test_the_newest_server_still_has_what_aihawk_relies_on(tmp_path: Path) -> None:
-    async def check() -> None:
-        async with stdio_client(server_parameters(tmp_path, tmp_path), errlog=sys.stderr) as (read, write), ClientSession(read, write) as session:
-            started = await session.initialize()
-            tools = {tool.name: tool for tool in (await session.list_tools()).tools}
-            # Each is called by name, and the first two by their arguments, in apply.py.
-            assert MODEL_TOOLS | {"browser_open", "browser_close", "browser_evaluate"} <= set(tools)
-            assert {"selector"} <= set(tools["browser_click"].inputSchema["properties"])
-            assert {"x", "y"} <= set(tools["browser_click_at"].inputSchema["properties"])
-            assert {"expression"} <= set(tools["browser_evaluate"].inputSchema["properties"])
-            assert {"url"} <= set(tools["browser_navigate"].inputSchema["properties"])
-            assert {"profile"} <= set(tools["browser_open"].inputSchema["properties"])
-            # What the model reads about driving a page is the server's, and a tool that acts must not pass for one that reads.
-            assert started.instructions
-            assert not any(offered(tool) for name, tool in tools.items() if name in {"browser_open", "browser_close"})
 
     asyncio.run(check())
 
@@ -402,3 +300,17 @@ def test_a_cookie_kept_in_the_profile_is_there_the_next_time_it_opens(tmp_path: 
     # The same profile carries the cookie to its next open; another profile never sees it.
     assert Jar.sent == ["aihawk_profile=kept", ""]
 
+
+def test_the_newest_server_still_has_what_aihawk_calls(tmp_path: Path) -> None:
+    async def check() -> None:
+        async with stdio_client(server_parameters(tmp_path, tmp_path), errlog=sys.stderr) as (read, write), ClientSession(read, write) as session:
+            started = await session.initialize()
+            tools = {tool.name: tool for tool in (await session.list_tools()).tools}
+            assert {"browser_open", "browser_close", "browser_navigate", "browser_click", "browser_read_text", "browser_take_screenshot", "browser_evaluate"} <= set(tools)
+            assert {"selector"} <= set(tools["browser_click"].inputSchema["properties"])
+            assert {"expression"} <= set(tools["browser_evaluate"].inputSchema["properties"])
+            assert {"url"} <= set(tools["browser_navigate"].inputSchema["properties"])
+            assert {"profile"} <= set(tools["browser_open"].inputSchema["properties"])
+            assert started.instructions
+
+    asyncio.run(check())

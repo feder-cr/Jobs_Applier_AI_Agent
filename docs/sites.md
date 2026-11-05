@@ -4,18 +4,18 @@ What AIHawk can do on each site, from the real forms it has been run on. Posting
 
 | Site | Postings in the index | Status | What stops it |
 |---|---|---|---|
-| Greenhouse (boards and job-boards hosts, EU too) | ~200k | sent and confirmed on a real form | One real send, Bottomline (one send only). Robinhood and Adyen stopped at required questions the CV and answers do not cover; one Robinhood run failed. |
-| Ashby (jobs.ashbyhq.com) | ~76k | sent and confirmed on a real form | One real send, Mollie (one send only). Snowflake and Glia stopped at required questions; Lemonade's posting was closed; on ElevenLabs and XYZ Reality the Submit button stayed disabled. |
-| Lever (jobs.lever.co, jobs.eu.lever.co) | ~101k | filled on real forms, send not confirmed | Two clicks, neither confirmed by the page's words. On Audinate the address moved to `/thanks`, whose page says "Application submitted!" to any visitor, but the text had been read before the page changed, a timing fault since fixed. On CesiumAstro nothing confirmed it. Other forms stopped at required questions, or at the right to work or a background check, which a test cannot answer. |
+| Greenhouse (boards and job-boards hosts, EU too) | ~200k | sent and confirmed on a real form | One real send (one send only). Others stopped at required questions the CV and answers do not cover. |
+| Ashby (jobs.ashbyhq.com) | ~76k | sent and confirmed on a real form | One real send (one send only). Others stopped at required questions, or found a closed posting, or a Submit button that stayed disabled. |
+| Lever (jobs.lever.co, jobs.eu.lever.co) | ~101k | filled on real forms, send not confirmed | Two clicks, neither confirmed by the page's words: on one the address moved to `/thanks`, whose page says "Application submitted!" to any visitor, but the text had been read before the page changed, a timing fault since fixed. Other forms stopped at required questions, or at the right to work or a background check, which a test cannot answer. |
 | JazzHR (applytojob.com) | ~154k | stops at a captcha most of the time | reCAPTCHA did not pass with a click on 5 postings; it often turned into an image puzzle. |
 | BambooHR (bamboohr.com) | ~87k | stops at a captcha most of the time | reCAPTCHA did not pass with a click on 5 postings; it often turned into an image puzzle. |
-| Personio (jobs.personio.de, jobs.personio.com) | ~64k | stops at a captcha about half the time | Turnstile passed on 2 of 4 postings. A real Allgeier Inovar form ended blocked. |
+| Personio (jobs.personio.de, jobs.personio.com) | ~64k | stops at a captcha about half the time | Turnstile passed on 2 of 4 postings. A real form ended blocked. |
 | SmartRecruiters (jobs.smartrecruiters.com) | ~519k | filled on real forms, no send tried yet | The CV attaches and the phone is taken. Seven real postings stopped before a send control: some at required questions, some at the right to work or a statement that the answers are true, which a test cannot answer. Two ran out of steps there. |
-| Recruitee (recruitee.com) | ~26k | sent and confirmed on a real form | One real send, Accso (one send only). Other forms stopped at required questions that test answers do not fit. |
-| Teamtailor (teamtailor.com) | ~30k | sent and confirmed on a real form | One real send, knowmad mood (one send only). The first click there was refused for its test phone number, so nothing went then. Other forms stopped at required questions. |
-| Workable (apply.workable.com) | ~35k | filled on real forms, no send tried yet | Two Activate Interactive forms stopped at a required work-authorisation question, which the test does not answer. The earlier send attempt found a closed posting. Nothing sent. |
-| Paylocity (recruiting.paylocity.com) | ~228k | filled on real forms, no send tried yet | Two forms (Hartz, Advanced Air Systems) asked many required questions, one of them about the right to work, which the test does not answer. The earlier send attempt found a closed posting. Nothing sent. |
-| Breezy (breezy.hr) | ~50k | sent and confirmed on a real form | One real send, Eureka Robotics (one send only). |
+| Recruitee (recruitee.com) | ~26k | sent and confirmed on a real form | One real send (one send only). Other forms stopped at required questions that test answers do not fit. |
+| Teamtailor (teamtailor.com) | ~30k | sent and confirmed on a real form | One real send (one send only). An earlier click was refused for its test phone number, so nothing went then. Other forms stopped at required questions. |
+| Workable (apply.workable.com) | ~35k | filled on real forms, no send tried yet | Forms stopped at a required work-authorisation question, which a test does not answer. An earlier send attempt found a closed posting. Nothing sent. |
+| Paylocity (recruiting.paylocity.com) | ~228k | filled on real forms, no send tried yet | Forms asked many required questions, one of them about the right to work, which a test does not answer. An earlier send attempt found a closed posting. Nothing sent. |
+| Breezy (breezy.hr) | ~50k | sent and confirmed on a real form | One real send (one send only). |
 | Workday (myworkdayjobs.com, myworkdaysite.com) | ~1,481k | not supported | Needs an account. |
 | iCIMS (icims.com) | ~622k | not supported | Needs an account. |
 

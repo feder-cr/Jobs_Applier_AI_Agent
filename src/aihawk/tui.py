@@ -1,4 +1,4 @@
-"""AIHawk in the terminal: give it your resume, get the jobs that fit, select them and apply."""
+﻿"""AIHawk in the terminal: give it your resume, get the jobs that fit, select them and apply."""
 
 from __future__ import annotations
 
@@ -23,8 +23,9 @@ from aihawk.store import SUBMITTED, Sent, Stored, said, sent_word
 
 # Below this width there is no room for the location beside the company and the role.
 WIDE_ENOUGH = 100
+SEARCH_SETTINGS = {"titles", "places", "exclude", "max_age_days"}
 RESUME_QUESTION = "Where is your resume? PDF, .docx or text."
-RESUME_HINT = "Enter reads it · Esc for later · Ctrl+C quits"
+RESUME_HINT = "Enter reads it Â· Esc for later Â· Ctrl+C quits"
 STATUS_TEXT = {
     "new": "",
     "scored": "",
@@ -33,7 +34,6 @@ STATUS_TEXT = {
     "submitted": "sent",
     "unconfirmed": "not confirmed",
     "refused": "refused",
-    "needs_input": "needs answer",
     "blocked": "blocked",
     "failed": "failed",
 }
@@ -44,8 +44,10 @@ class TextPrompt(ModalScreen[str | None]):
 
     BINDINGS: ClassVar = [Binding("escape", "skip", "Skip")]
 
-    def __init__(self, question: str, *, placeholder: str = "", password: bool = False, hint: str = "Enter answers · Esc leaves this form for later · Ctrl+C quits") -> None:
+    def __init__(self, question: str, *, placeholder: str = "", password: bool = False, hint: str = "Enter answers Â· Esc goes back Â· Ctrl+C quits", value: str | None = None) -> None:
         super().__init__()
+        # With a value to change, Enter on an empty line clears it, and only Esc leaves it as it is.
+        self.value = value
         self.question = question
         self.placeholder = placeholder
         self.password = password
@@ -54,12 +56,12 @@ class TextPrompt(ModalScreen[str | None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
             yield Static(self.question, id="question", markup=False)
-            yield Input(placeholder=self.placeholder, password=self.password, id="answer")
+            yield Input(value=self.value or "", placeholder=self.placeholder, password=self.password, id="answer")
             yield Static(self.hint, classes="hint")
 
     @on(Input.Submitted)
     def answered(self, event: Input.Submitted) -> None:
-        self.dismiss(event.value.strip() or None)
+        self.dismiss(event.value.strip() if self.value is not None else event.value.strip() or None)
 
     def action_skip(self) -> None:
         self.dismiss(None)
@@ -110,7 +112,7 @@ class SentList(ModalScreen[None]):
         with Vertical(id="wide"):
             yield Static("Applications", id="question", markup=False)
             yield DataTable(id="sent", cursor_type="row")
-            yield Static("Enter opens a job in full · Esc goes back", classes="hint")
+            yield Static("Enter opens a job in full Â· Esc goes back", classes="hint")
             yield Footer()
 
     def on_mount(self) -> None:
@@ -148,9 +150,9 @@ class SentDetails(ModalScreen[None]):
         item, proof = self.item, self.item.proof
         lines = [
             item.job.title,
-            f"{item.job.company} · {item.job.location}",
+            f"{item.job.company} Â· {item.job.location}",
             "",
-            f"{sent_word(item)} · {item.when}",
+            f"{sent_word(item)} Â· {item.when}",
             f"Posting: {item.job.url}",
             f"Address after the send: {proof.url or '-'}",
             f"Screenshot: {proof.screenshot or '-'}",
@@ -179,10 +181,10 @@ class JobDetails(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         job, report = self.item.job, self.item.report or {}
-        lines = [f"{job.title}", f"{job.company} · {job.location}", job.url, ""]
+        lines = [f"{job.title}", f"{job.company} Â· {job.location}", job.url, ""]
         if report:
-            answers = " · ".join(f"{name.replace('_', ' ')}: {report.get(name, '?')}" for name in QUESTIONS)
-            lines += [f"Score {report.get('score', 0):.1f}/5 · posting looks {report.get('legitimacy', '?')}", answers, "", report.get("summary", "")]
+            answers = " Â· ".join(f"{name.replace('_', ' ')}: {report.get(name, '?')}" for name in QUESTIONS)
+            lines += [f"Score {report.get('score', 0):.1f}/5 Â· posting looks {report.get('legitimacy', '?')}", answers, "", report.get("summary", "")]
             if report.get("gaps"):
                 lines += ["", "Gaps:", *(f"  - {gap}" for gap in report["gaps"])]
         if self.item.note:
@@ -201,6 +203,40 @@ class JobDetails(ModalScreen[None]):
 
     def action_open_link(self) -> None:
         webbrowser.open(self.item.job.url)
+
+
+class Settings(ModalScreen[str | None]):
+    """Everything that can be changed, one row each. Enter changes the row, Esc goes back."""
+
+    BINDINGS: ClassVar = [Binding("escape,q,e", "close", "Back")]
+
+    def __init__(self, rows: list[tuple[str, str, str]]) -> None:
+        super().__init__()
+        self.rows = rows
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="wide"):
+            yield Static("Settings", id="question", markup=False)
+            yield DataTable(id="settings", cursor_type="row", show_header=False)
+            yield Static("Enter changes it Â· Esc goes back", classes="hint")
+            yield Footer()
+
+    def on_mount(self) -> None:
+        table = self.query_one(DataTable)
+        room = max(20, int(self.app.size.width * 0.95) - 8 - 4 - 22)
+        table.add_column("What", key="what", width=22)
+        table.add_column("Now", key="now", width=room)
+        for key, label, now in self.rows:
+            table.add_row(Text(label), Text(now), key=key)
+        table.focus()
+
+    @on(DataTable.RowSelected)
+    def chosen(self, event: DataTable.RowSelected) -> None:
+        event.stop()
+        self.dismiss(event.row_key.value)
+
+    def action_close(self) -> None:
+        self.dismiss(None)
 
 
 class SignIn(ModalScreen[None]):
@@ -228,7 +264,7 @@ class AIHawk(App[None]):
     ModalScreen { align: center middle; background: $background 60%; }
     #dialog { width: 80%; max-width: 100; height: auto; max-height: 85%; padding: 1 2; background: $surface; border: thick $primary; }
     #wide { width: 95%; height: auto; max-height: 85%; padding: 1 2; background: $surface; border: thick $primary; }
-    #sent { height: auto; max-height: 24; }
+    #sent, #settings { height: auto; max-height: 24; }
     #question { text-style: bold; margin-bottom: 1; }
     #summary { height: auto; max-height: 24; margin: 1 0; }
     .hint { color: $text-muted; }
@@ -240,8 +276,9 @@ class AIHawk(App[None]):
         Binding("s", "sent", "Sent"),
         Binding("o", "open_link", "Open"),
         Binding("m", "more", "More"),
-        Binding("r", "new_resume", "New resume"),
-        Binding("l", "sign_in", "Sign in"),
+        Binding("e", "settings", "Settings"),
+        Binding("r", "new_resume", show=False),
+        Binding("l", "sign_in", show=False),
         Binding("q", "quit", "Quit"),
         # Textual's own Ctrl+C only says "press ctrl+q", and an input under it copies: at any prompt Ctrl+C now leaves.
         Binding("ctrl+c", "quit", show=False, priority=True),
@@ -314,11 +351,11 @@ class AIHawk(App[None]):
         wanted = config.filters.titles() or "no resume yet"
         place = ", ".join(config.filters.locations[:3])
         chosen = f"{len(self.selected)} selected" if self.selected else ""
-        left = " · ".join(part for part in (config.name, wanted, place, chosen) if part)
+        left = " Â· ".join(part for part in (config.name, wanted, place, chosen) if part)
         self.query_one("#heading", Static).update(f"AIHawk  {left}" + (f"   [{progress}]" if progress else ""))
 
     def row(self, item: Stored) -> tuple[Text | str, ...]:
-        mark = "●" if item.job.id in self.selected else ""
+        mark = "â—" if item.job.id in self.selected else ""
         score = f"{item.score:.1f}" if item.score is not None else "-"
         can_apply = "auto" if self.session.plugin(item) else "hand"
         status = STATUS_TEXT.get(item.status, item.status)
@@ -358,7 +395,7 @@ class AIHawk(App[None]):
         try:
             if session.needs_key():
                 key = await self.push_screen_wait(
-                    TextPrompt("Your OrcaRouter key. Get one at orcarouter.ai; it stays on this computer.", placeholder="sk-orca-...", password=True, hint="Enter saves it · Esc stops here · Ctrl+C quits")
+                    TextPrompt("Your OrcaRouter key. Get one at orcarouter.ai; it stays on this computer.", placeholder="sk-orca-...", password=True, hint="Enter saves it Â· Esc stops here Â· Ctrl+C quits")
                 )
                 if not key:
                     self.say("AIHawk needs a model key to read your resume and judge jobs. Quit and start again when you have one.")
@@ -369,7 +406,7 @@ class AIHawk(App[None]):
                 while path is None:
                     answer = await self.push_screen_wait(TextPrompt(RESUME_QUESTION, placeholder=str(Path.home() / "resume.pdf"), hint=RESUME_HINT))
                     if not answer:
-                        self.say("Press r when you have a resume to give me.")
+                        self.say("Press e when you have a resume to give me.")
                         return
                     path = Path(answer.strip("\"' ")).expanduser()
                     if not path.is_file():
@@ -461,6 +498,67 @@ class AIHawk(App[None]):
         else:
             self.say("Nothing has been sent yet. Space selects a job, a sends it.")
 
+    def setting_rows(self) -> list[tuple[str, str, str]]:
+        config = self.session.config
+        titles = [form.text for form in config.filters.plan.nodes[0].forms] if config.filters.plan.nodes else list(config.filters.include)
+        return [
+            ("resume", "Resume", "loaded" if config.cv.is_file() else "none yet"),
+            ("sign_in", "Sign in", "your mail and job sites, in the browser"),
+            ("key", "OrcaRouter key", f"from {config.api_key_env}" if config.key_from_environment() else "saved" if config.api_key() else "none yet"),
+            ("titles", "Look for", ", ".join(titles)),
+            ("places", "Where", ", ".join(config.filters.locations)),
+            ("exclude", "Leave out", ", ".join(config.filters.exclude)),
+            ("max_age_days", "Posted within (days)", str(config.max_age_days)),
+            ("model", "Forms and CVs model", config.model),
+            ("judge_model", "Scoring model", config.judge_model),
+            ("quick_model", "Search plan model", config.quick_model),
+            ("decision_model", "Shortlist model", config.decision_model),
+            ("folder", "Your files", str(config.workspace)),
+        ]
+
+    def action_settings(self) -> None:
+        if self.applying() or self.signing_in:
+            self.say("One moment: the browser is in use.")
+        else:
+            self.settings()
+
+    @work(group="settings")
+    async def settings(self) -> None:
+        search_again = False
+        while (choice := await self.push_screen_wait(Settings(self.setting_rows()))) is not None:
+            if choice == "resume":
+                self.new_resume()
+                return
+            if choice == "sign_in":
+                self.sign_in()
+                return
+            if choice == "folder":
+                webbrowser.open(self.session.config.workspace.as_uri())
+            elif choice == "key":
+                await self.change_key()
+            else:
+                label, now = next((label, now) for key, label, now in self.setting_rows() if key == choice)
+                answer = await self.push_screen_wait(TextPrompt(label, value=now, hint="Enter saves it Â· Esc leaves it as it was"))
+                if answer is not None:
+                    try:
+                        self.session.change_setting(choice, answer)
+                        search_again = search_again or choice in SEARCH_SETTINGS
+                    except ConfigError as error:
+                        self.say(str(error))
+        self.show_heading()
+        if search_again:
+            self.say("Searching again with the new settings.")
+            self.start()
+
+    async def change_key(self) -> None:
+        config = self.session.config
+        if config.key_from_environment():
+            self.say(f"The key comes from the {config.api_key_env} variable, which wins over one typed here.")
+            return
+        key = await self.push_screen_wait(TextPrompt("Your OrcaRouter key. Get one at orcarouter.ai; it stays on this computer.", placeholder="sk-orca-...", password=True, hint="Enter saves it Â· Esc leaves it as it was"))
+        if key:
+            self.session.save_key(key)
+
     def action_new_resume(self) -> None:
         self.new_resume()
 
@@ -526,7 +624,7 @@ class AIHawk(App[None]):
         self.busy = True
         self.show_heading("applying")
         try:
-            await self.session.send(ready, self.answer, self.say, self.refresh_jobs)
+            await self.session.send(ready, self.say, self.refresh_jobs)
         except Exception as error:  # noqa: BLE001  Said on the screen, as in start; the batch stops where it failed.
             self.failed(error)
         finally:
@@ -546,6 +644,3 @@ class AIHawk(App[None]):
         else:
             return True
         return False
-
-    async def answer(self, question: str) -> str | None:
-        return await self.push_screen_wait(TextPrompt(question))

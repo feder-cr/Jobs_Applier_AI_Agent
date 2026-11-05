@@ -14,7 +14,7 @@ from openai import AsyncOpenAI
 from pypdf import PdfReader
 from pypdf.errors import PyPdfError
 
-from aihawk.config import CONFIG_FILE, Config, ConfigError
+from aihawk.config import CONFIG_FILE, Config, ConfigError, load_config
 from aihawk.llm import structured
 
 _WORD_TEXT = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
@@ -194,6 +194,45 @@ async def install_resume(client: AsyncOpenAI, config: Config, path: Path) -> dic
     return profile
 
 
+def save_setting(config: Config, name: str, value: str) -> None:
+    """One setting as the Settings screen changes it. `titles`, `places` and `exclude` are lists written with commas; the others
+    are read as they stand, and an empty one goes back to its default."""
+    path = config.workspace / CONFIG_FILE
+    settings = (yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}) if path.is_file() else {}
+    filters = settings.setdefault("filters", {})
+    words = list(dict.fromkeys(word.strip() for word in value.split(",") if word.strip()))
+    if name == "titles":
+        if not words:
+            raise ConfigError("the search needs at least one job title")
+        nodes = (filters.get("plan") or {}).get("nodes") or []
+        if nodes:
+            kept = {form["text"]: form["weight"] for form in nodes[0]["forms"]}
+            nodes[0]["forms"] = [{"text": word, "weight": kept.get(word, 1.0)} for word in words]
+        else:
+            filters["include"] = words
+    elif name == "places":
+        # Places the person names replace the ones read from the CV, whose country codes would rule the new ones out.
+        filters.update({"locations": words, "cities": words, "countries": []})
+    elif name == "exclude":
+        filters["exclude"] = words
+    elif value.strip():
+        settings[name] = int(value) if name == "max_age_days" and value.strip().isdigit() else value.strip()
+    else:
+        settings.pop(name, None)
+    # Refused here, before the file changes: a setting that would not load must not stop the next start.
+    path.parent.mkdir(parents=True, exist_ok=True)
+    before = path.read_text(encoding="utf-8") if path.is_file() else None
+    path.write_text(yaml.safe_dump(settings, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    try:
+        load_config(config.workspace)
+    except ConfigError:
+        if before is None:
+            path.unlink()
+        else:
+            path.write_text(before, encoding="utf-8")
+        raise
+
+
 def read_answers(config: Config) -> dict[str, str]:
     if not config.answers.is_file():
         return {}
@@ -205,11 +244,4 @@ def add_answers(config: Config, answers: dict[str, str]) -> None:
     """Remember what the person said. An answer they gave wins over one read again from a CV."""
     config.workspace.mkdir(parents=True, exist_ok=True)
     merged = {**answers, **read_answers(config)}
-    config.answers.write_text(yaml.safe_dump(merged, allow_unicode=True, sort_keys=False), encoding="utf-8")
-
-
-def answer_question(config: Config, question: str, answer: str) -> None:
-    """A question the person just answered replaces any earlier answer to it."""
-    config.workspace.mkdir(parents=True, exist_ok=True)
-    merged = {**read_answers(config), question: answer}
     config.answers.write_text(yaml.safe_dump(merged, allow_unicode=True, sort_keys=False), encoding="utf-8")

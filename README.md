@@ -1,73 +1,68 @@
-# AIHawk
+<div align="center">
 
-Give it your resume, get the jobs that fit, select them and apply. Runs in your terminal, with a browser you can watch. Needs Python 3.11 or newer.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.png">
+  <img alt="AIHawk" src="assets/logo-light.png" width="380">
+</picture>
 
-```sh
-pipx install git+https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk
+**Your resume in. From 10 million postings, the jobs that fit. Select them, press one key, and watch a real browser apply.**
+
+<sub>THE EARLIER AIHAWK WAS FEATURED IN</sub><br>
+[**Business Insider**](https://www.businessinsider.com/aihawk-applies-jobs-for-you-linkedin-risks-inaccuracies-mistakes-2024-11) ·
+[**TechCrunch**](https://techcrunch.com/2024/10/10/a-reporter-used-ai-to-apply-to-2843-jobs/) ·
+[**Semafor**](https://www.semafor.com/article/09/12/2024/linkedins-have-nots-and-have-bots) ·
+[**Wired**](https://www.wired.it/article/aihawk-come-automatizzare-ricerca-lavoro/) ·
+[**The Verge**](https://www.theverge.com/2024/10/10/24266898/ai-is-enabling-job-seekers-to-think-like-spammers) ·
+[**Vanity Fair**](https://www.vanityfair.it/article/intelligenza-artificiale-candidature-di-lavoro) ·
+[**404 Media**](https://www.404media.co/i-applied-to-2-843-roles-the-rise-of-ai-powered-job-application-bots/)
+
+</div>
+
+---
+
+Windows, in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/run.ps1 | iex
 ```
 
-Or `uv tool install git+https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk`; uv leaves `aihawk` off your PATH until you run `uv tool update-shell` and open a new terminal. Or, in a virtual environment (on Windows, `aihawk-env\Scripts\pip` and `aihawk-env\Scripts\aihawk`; a `pip install` in a very long folder path can fail there with `OSError [Errno 2]` on openai, and pipx or a short folder avoids that):
+Linux:
 
-```sh
-python -m venv aihawk-env
-aihawk-env/bin/pip install git+https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk
-aihawk-env/bin/aihawk resume.pdf
+```bash
+curl -LsSf https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/run.sh | sh
 ```
 
-The resume can be anywhere on your disk: a PDF, a `.docx` or a text file. A scanned PDF has no text to read; export it with text, or save it as `.docx`. Captured from a test search, with an invented CV:
+That is the only command, now and every time after: it installs what is missing, updates AIHawk and starts it. Everything else is on the screen.
 
-![The list of jobs, best first, with their scores](docs/demo-list.svg)
-
-![One job: its score, gaps and reasons](docs/demo-job.svg)
-
-The first time, AIHawk asks for an [OrcaRouter](https://orcarouter.ai) key and keeps it in `~/.aihawk/key`; after that, `aihawk` alone reopens your list. To change the key, edit or delete that file, or set `ORCAROUTER_API_KEY`, which wins over the file. If OrcaRouter refuses a key from the file, AIHawk forgets it and asks again.
-
-The first search with each new job database downloads its job index, about 740 MB, into `~/.aihawk/data/index`; a search reads it on your computer. The descriptions of the jobs AIHawk judges are read from the release over the internet.
-
-**Your data.** Your CV, your answers, the postings' texts and the pages' contents, screenshots included, go to the model gateway OrcaRouter and its providers; an application goes to the employer's site. The rest stays in `~/.aihawk`: the CV, the answers, the key (`key`), the proofs (`data/proofs/`), `applied.csv`, the job index and the browser profile with your sign-ins. You need a paid OrcaRouter key. In our measured runs on eleven real sites, with deepseek-v4.1-flash, a form cost 0.4 to 3.3 cents in model calls (1.5 on average), and none of those runs reached the send.
-
-**Responsibility.** Applications go out in your name, and you answer for what is sent. Job sites have their own terms, and some do not allow automated applications: read them before you select their jobs. AIHawk asks once, with a yes, before it sends the selection; as a last resort the model can run a script in the page, which could send a form without asking (see [SECURITY.md](SECURITY.md)). The refusal of clicks that would send reads the control's words and type, so a control worded oddly, or a final button that only says Continue, can get past it.
-
-## Keys
-
-| Key | What it does |
-|---|---|
-| space | select a job |
-| enter | the score, the gaps and the reasons |
-| a | send the selected jobs, or the current one, after one yes |
-| s | the jobs sent, and what each page said |
-| o | open the posting in your browser |
-| m | score more jobs |
-| r | give a new resume |
-| l | open the browser to sign in; press Enter in the terminal when done |
-| q | quit (Ctrl+C quits too) |
+![AIHawk: the jobs that fit, why each one fits, select, and send. A test search with an invented CV.](docs/demo.gif)
 
 ## What it does
 
-- **Reads** your resume, writes a search plan from it, and takes your contact details from it.
-- **Finds** the postings whose titles fit the plan, in a job database published as a release and rebuilt daily by [`jobs-database.yml`](.github/workflows/jobs-database.yml): about 10.2 million postings. Postings older than 60 days are left out by default.
-- **Shortlists** the 100 postings with the best title fit: Jev, the decision model, answers six questions about each, and the best 25 are kept.
-- **Scores** each shortlisted job from 1 to 5 against your resume, with its gaps.
-- **Applies**: writes a CV for the job and fills the form in a visible browser through [invisible-playwright-mcp](https://github.com/feder-cr/invisible_playwright_mcp). What a form asks and your files do not say, it asks you, and remembers. The first apply or sign-in downloads the browser engine, about 268 MB on Windows.
+1. **Reads your resume** and writes a search plan from it. You can change it on the screen.
+2. **Narrows down the jobs.** About 10.2 million postings from 24 public sources, rebuilt daily. 600 by their titles, on your computer. 100 read by [Jev](https://github.com/feder-cr/jev), a decision model. 25 scored from 1 to 5, with the gaps and the reasons.
+3. **Applies.** You select the jobs and say yes once. For each one it writes a CV, fills the form in a browser you can watch, through [invisible-playwright-mcp](https://github.com/feder-cr/invisible_playwright_mcp), sends it, and keeps what the page said.
 
-## Sending
+## Where it applies
 
-The model fills the form and names the submit button; it is told not to send, and clicks that would send are refused. Your `a` and Enter is the one yes: AIHawk clicks the control the model named. Each send keeps what the page said in `applied.csv` and `data/proofs/`; `s` lists them.
+| | |
+|---|---|
+| **Sent and confirmed by the page** | Greenhouse, Ashby, Breezy, Recruitee, Teamtailor |
+| **Forms filled, send not confirmed yet** | Lever, SmartRecruiters, Workable, Paylocity |
+| **Often stopped by a captcha** | JazzHR, BambooHR, Personio |
+| **By hand, for now** | Workday, iCIMS and the rest: they need an account |
 
-## Sites
+One send each so far, so "it can send", not "it sends reliably": [what has really been seen](docs/sites.md). A site is one Markdown file that explains its pages to the model, with no code: [add yours](docs/plugins.md).
 
-Sites vary a lot: Greenhouse, Ashby, Breezy, Recruitee and Teamtailor have one confirmed real send each, the others fill forms without sending, stop at a captcha or at questions, or need an account. [docs/sites.md](docs/sites.md) gives each site's status and what stops it. Other postings are listed for applying by hand. The Gmail and Outlook plugins take a code or a link from your mailbox. They tell the model to read only, which is an instruction, not a guarantee: the code refuses only clicks that look like sending, Enter, and visits to sites other than the form's and the mailbox's. A click that deletes or archives mail is not refused. They have not been tried on a real mailbox yet.
+## Before you send
 
-A plugin is a Markdown file in [`src/aihawk/plugins/`](src/aihawk/plugins) that explains one site's form to the model. Add a site with a file and no code: see [docs/plugins.md](docs/plugins.md). Your own go in `~/.aihawk/plugins/`.
+- **It goes out in your name, unread, after one yes.** The model takes what your CV says and works out what it implies. Where it has nothing, it writes "Please see my attached CV", picks the closest option and ticks the boxes the form requires, statements such as the right to work included. You answer for all of it. Sites have terms of their own, and some do not allow this.
+- **Nothing checks what the model does in the browser.** It is told to leave the send to AIHawk, and it could send early or half filled: [SECURITY.md](SECURITY.md).
+- **Your CV, the postings and the pages, screenshots included, go to [OrcaRouter](https://orcarouter.ai) and its providers**, on your paid key. A form cost 0.4 to 3.3 cents in our runs. The rest stays in `~/.aihawk`, sign-ins included.
+- **The first run downloads about 740 MB** of job index, and the first form about 268 MB of browser. Windows and Linux: the browser has no macOS build.
+- **The job data is not ours.** Each posting belongs to its employer. Some sources state no licence, and one asks not to be republished as listings; the published database includes it. [Every source](docs/data-sources.md).
 
-## Plan and models
+---
 
-Models go through OrcaRouter: `model` (default `deepseek/deepseek-v4.1-flash`) writes the CV and fills forms; `quick_model` (default `google/gemini-3.5-flash`) writes the plan; `decision_model` (default `typesafe/jev-1.14`, which is Jev) shortlists the jobs; `judge_model` (default `deepseek/deepseek-v4.1-flash`) scores them. `base_url` can name another gateway; it must serve OpenAI's chat API and the decision model's own endpoint, `/systemone`.
+[Configuration](docs/configuration.md) · [Wiki](https://github.com/feder-cr/Jobs_Applier_AI_Agent/wiki) · [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Notice](NOTICE) · [MIT](LICENSE)
 
-- **Update:** `pipx upgrade aihawk`, or `uv tool upgrade aihawk`.
-- **Uninstall:** `pipx uninstall aihawk` (or `uv tool uninstall aihawk`), then delete `~/.aihawk`, which holds your CV, key and sign-ins.
-- **The search:** the plan is `filters.plan` in `~/.aihawk/aihawk.yaml`; restart `aihawk` after editing it.
-
-More: the [wiki](https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk/wiki), [configuration](docs/configuration.md), [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), [CHANGELOG.md](CHANGELOG.md). The job database merges public sources, whose licences and posting links are in [NOTICE](NOTICE) and [docs/data-sources.md](docs/data-sources.md). Some sources state no licence, and one asks that its postings not be republished as job listings; the published database includes that source. Each posting belongs to its employer. The report's shape is adapted from [career-ops](https://github.com/santifer/career-ops) (MIT).
-
-[MIT](LICENSE). The former Dots project is at [feder-cr/invisible_dots](https://github.com/feder-cr/invisible_dots).
+The former Dots project is at [feder-cr/invisible_dots](https://github.com/feder-cr/invisible_dots).

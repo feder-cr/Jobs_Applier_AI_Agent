@@ -24,7 +24,7 @@ DEFAULT_JUDGE_MODEL = "deepseek/deepseek-v4.1-flash"
 # Answers the six questions that shortlist the postings. Kept as the default: judge.py turns its answers into evidence by rules
 # that were checked on this model, and another model answers differently, so those rules need checking again.
 DEFAULT_DECISION_MODEL = "typesafe/jev-1.14"
-DEFAULT_DATABASE = "https://github.com/feder-cr/Jobs_Applier_AI_Agent_AIHawk/releases/download/jobs-latest/manifest.json"
+DEFAULT_DATABASE = "https://github.com/feder-cr/Jobs_Applier_AI_Agent/releases/download/jobs-latest/manifest.json"
 DEFAULT_MAX_AGE_DAYS = 60
 
 
