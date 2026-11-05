@@ -819,8 +819,8 @@ def test_a_cv_in_a_script_the_font_cannot_draw_is_not_uploaded_and_the_persons_o
     session.close()
     assert path == own
     assert list((tmp_path / "data" / "cvs").glob("*.pdf")) == [own]
-    assert said[0] == "writing a CV for this job"
-    assert len(said) == 2 and said[1].startswith("the CV written for this job cannot show ") and "your own CV is sent" in said[1]
+    assert said[0] == f"{JOB.company}: writing a CV for this job"
+    assert len(said) == 2 and said[1].startswith(f"{JOB.company}: the CV written for this job cannot show ") and "your own CV is sent" in said[1]
 
 
 def test_the_pdf_holds_the_text_accents_and_markup_safely(tmp_path: Path) -> None:

@@ -19,7 +19,7 @@ from aihawk.judge import evidence, fuse, questions
 from aihawk.llm import explain, make_client, refused
 from aihawk.plugins import Plugin, always_plugins, load_plugins, plugin_for
 from aihawk.profile import answer_question, install_resume
-from aihawk.store import SUBMITTED, Store, Stored, safe_name, write_applied
+from aihawk.store import SENT_WORDS, SUBMITTED, Store, Stored, safe_name, write_applied
 
 # The funnel: the next WIDE postings by title are weighed by the decision model, and the best JUDGED of them are scored by the judge model.
 WIDE = 100
@@ -176,7 +176,7 @@ class Session:
     async def _cv_for(self, item: Stored, cv: str, log: Log) -> Path:
         if item.cv_path and Path(item.cv_path).is_file():
             return Path(item.cv_path)
-        log("writing a CV for this job")
+        log(f"{item.job.company}: writing a CV for this job")
         job = await asyncio.to_thread(with_description, item.job)
         tailored = await tailor_cv(self.client, self.config.model, job, cv)
         path = self.config.data_dir / "cvs" / f"{safe_name(item.job.id)}.pdf"
@@ -186,7 +186,7 @@ class Session:
         except MissingGlyphs as error:
             # The font cannot draw this posting's language, and a PDF with blanks where the text is must not be uploaded.
             own = self._own_cv()
-            log(f"the CV written for this job cannot show {str(error)[:12]!r}, which the PDF font does not have: your own CV is sent with this application")
+            log(f"{item.job.company}: the CV written for this job cannot show {str(error)[:12]!r}, which the PDF font does not have: your own CV is sent with this application")
             self.store.set_cv(item.job.id, own)
             return own
         path.with_suffix(".md").write_text(tailored, encoding="utf-8")
@@ -209,12 +209,14 @@ class Session:
             for item in pending:
                 outcome = await self.apply(item, log)
                 done()
+                log(f"{item.job.company}: {SENT_WORDS.get(outcome.status, outcome.status)}. {outcome.proof.evidence}".strip())
                 if outcome.status in ASKED and outcome.questions:
                     asking.append((item, outcome.questions))
             pending = []
             for item, asked in asking:
                 if await self._answer(item, asked, ask):
-                    pending.append(item)
+                    # As it is now: the first try wrote its CV, and this one sends the same CV.
+                    pending.append(self.store.get(item.job.id) or item)
             if not pending:
                 return
 
@@ -243,7 +245,7 @@ class Session:
         reaches = frozenset(host for extra in extras for host in extra.reaches)
         try:
             cv_file = await self._cv_for(item, cv, log)
-            log(f"filling the form on {plugin.name}")
+            log(f"{item.job.company}: filling the form on {plugin.name}")
             outcome = await apply_to_job(
                 self.client, self.config.model, job, cv, answers, cv_file, self.config.data_dir, self.config.browser_profile, guidance, reaches, self.config.api_key_env
             )
