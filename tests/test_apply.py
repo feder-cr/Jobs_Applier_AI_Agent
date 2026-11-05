@@ -797,3 +797,13 @@ def test_the_pdf_holds_the_text_accents_and_markup_safely(tmp_path: Path) -> Non
     text = " ".join(page.extract_text() for page in PdfReader(path).pages)
     for piece in ("Niccolò Rossi", "Experience", "Lead", "A&B <Corp>", "Plain line"):
         assert piece in text
+
+
+def test_asking_for_a_sign_in_code_is_not_a_send_but_submitting_one_is() -> None:
+    def button(text: str) -> dict[str, object]:
+        return {"tag": "button", "type": "submit", "in_form": True, "text": text}
+
+    for text in ("Send code", "Send verification code", "Invia codice", "Enviar código", "Code senden"):
+        assert not sends_form(button(text), True), text
+    for text in ("Submit code", "Send", "Send application"):
+        assert sends_form(button(text), True), text

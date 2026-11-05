@@ -159,6 +159,8 @@ _APPLICATION = r"(?:application\w*|submission\w*|candidatur\w*|bewerbung\w*|doma
 _FINISH_ANY = re.compile(rf"\b{_FINISH_LATIN}\b|{_FINISH_CJK}", re.IGNORECASE)
 _FINISH_WHOLE = re.compile(rf"\W*(?:{_FINISH_LATIN}|{_FINISH_CJK})\W*", re.IGNORECASE)
 _FINISH_WITH_APPLICATION = re.compile(rf"\b{_FINISH_LATIN}\b(?:\W+\w+){{0,2}}?\W+{_APPLICATION}", re.IGNORECASE)
+# Asking a site to mail a sign-in code sends no application. "Submit code" is left out: on some sites it does send.
+_ASKS_FOR_CODE = re.compile(r"\b(?:send|invia|enviar|envoyer|senden)\b.*\b(?:code|codice|c[oó]digo|otp)\b|\bcode\s+senden\b", re.IGNORECASE)
 _APPLY = re.compile(r"\b(apply|applica)\b", re.IGNORECASE)
 # What a button inside a form says when it does not send it: a step, an answer (Ashby's Yes and No are buttons with no
 # type), or a file to attach. Continue is a step: a submit-type Continue is the next step of a multi-step form far more
@@ -208,6 +210,8 @@ def sends_form(element: dict[str, Any], form_touched: bool) -> bool:
     one. Confirm, Finish or Complete about something else is a step, as Continue is. A link is judged by its words alone.
     Otherwise a submit button, or a button with no type inside a form, sends unless its words name a step, an answer or a file."""
     tag, kind, text = element.get("tag", ""), element.get("type", ""), element.get("text", "")
+    if _ASKS_FOR_CODE.search(text):
+        return False
     if _SENDS.search(text) or _finishes(text):
         return True
     # "Apply" opens the form from a job's page, and sends it once the form has been filled.

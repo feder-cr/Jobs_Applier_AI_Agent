@@ -32,7 +32,7 @@ The first search with each new job database downloads its job index, 672 MB, int
 
 **Your data.** Your CV, your answers, the postings' texts and the pages' contents, screenshots included, go to the model gateway OrcaRouter and its providers; an application goes to the employer's site. The rest stays in `~/.aihawk`: the CV, the answers, the key (`key`), the proofs (`data/proofs/`), `applied.csv`, the job index and the browser profile with your sign-ins. You need a paid OrcaRouter key; a form costs cents in model calls.
 
-**Responsibility.** Applications go out in your name, and you answer for what is sent. Job sites have their own terms, and some do not allow automated applications: read them before you select their jobs. AIHawk asks once, with a yes, before it sends the selection; as a last resort the model can run a script in the page, which could send a form without asking (see [SECURITY.md](SECURITY.md)). The refusal of clicks that would send reads the control's words and type, so a control worded oddly can get past it.
+**Responsibility.** Applications go out in your name, and you answer for what is sent. Job sites have their own terms, and some do not allow automated applications: read them before you select their jobs. AIHawk asks once, with a yes, before it sends the selection; as a last resort the model can run a script in the page, which could send a form without asking (see [SECURITY.md](SECURITY.md)). The refusal of clicks that would send reads the control's words and type, so a control worded oddly, or a final button that only says Continue, can get past it.
 
 ## Keys
 

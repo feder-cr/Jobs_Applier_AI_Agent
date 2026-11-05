@@ -2,7 +2,7 @@
 
 A plugin tells the model how one job site's application form works. It is a Markdown file: a front matter between two `---` lines, then the instructions in plain prose. The model reads the instructions when it fills a form on that site.
 
-A plugin is a prompt, not code. It cannot change what AIHawk allows. The model is told not to send a form, clicks that would send it are refused, it writes nothing that the CV and the answers do not say, and it does not get past a captcha or a login. Those rules are in `src/aihawk/apply.py`, out of a plugin's reach.
+A plugin is a prompt, not code. It cannot change what AIHawk allows. The model is told not to send a form, clicks whose words would send it are refused, it writes nothing that the CV and the answers do not say, and it does not get past a captcha or a login. Those rules are in `src/aihawk/apply.py`, out of a plugin's reach.
 
 ## Where a plugin lives
 

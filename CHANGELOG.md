@@ -3,6 +3,11 @@
 ## Unreleased
 
 - Added [docs/sites.md](docs/sites.md): each site's status from real forms and what stops it; the README links to it.
+- Added [docs/data-sources.md](docs/data-sources.md), each source with its licence and how to ask for its removal, and [docs/configuration.md](docs/configuration.md).
+- A CV written in a script its font cannot draw is no longer uploaded with blanks: your own CV goes instead, and you are told.
+- A model error that a smaller batch cannot cure stops at once and says why, instead of ranking by title almost silently.
+- The job database is shown with its real date, with a warning when it is over 7 days old, and a search emptied by the age limit says so.
+- The send check knows more languages' send words, and no longer refuses "Confirm email address", "Complete your profile" or "Send code".
 
 ## 1.0.0 - 2026-11-04
 
