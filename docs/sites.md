@@ -16,10 +16,10 @@ What AIHawk can do on each site, from the real forms it has been run on. Posting
 | Workable (apply.workable.com) | ~35k | reaches the send button, no send tried yet | One real form filled in about 7 minutes, and the send button named. Not clicked. |
 | Paylocity (recruiting.paylocity.com) | ~228k | reaches the send button, no send tried yet | One real form of 5 steps filled in about 27 minutes, and the send button named. Not clicked. |
 | Breezy (breezy.hr) | ~50k | sent and confirmed on a real form | One real send (one send only). |
-| Workday (myworkdayjobs.com, myworkdaysite.com) | ~1,481k | not supported | Needs an account. |
-| iCIMS (icims.com) | ~622k | not supported | Needs an account. |
+| Workday (myworkdayjobs.com, myworkdaysite.com) | ~1,481k | tried, no plugin | Needs an account on each company's site: a form stops at the sign-in unless you are signed in. Not tried on a real form. |
+| iCIMS (icims.com) | ~622k | tried, no plugin | Needs an account: a form stops at the sign-in unless you are signed in. Not tried on a real form. |
 
-Postings per status, in the index: sent and confirmed ~484k; reaches the send button, no send tried yet ~782k; stops at a captcha most or half of the time ~305k; not supported ~2,103k.
+Postings per status, in the index: sent and confirmed ~484k; reaches the send button, no send tried yet ~782k; stops at a captcha most or half of the time ~305k; tried with no plugin ~2,103k.
 
 Notes:
 

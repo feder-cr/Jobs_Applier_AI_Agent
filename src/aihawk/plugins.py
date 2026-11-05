@@ -3,10 +3,10 @@
 A plugin is a prompt, not code. Its front matter says which sites it is for and how a posting's link becomes the form's
 link; its body is added to the model's instructions when it fills a form on those sites. To support a new site, add a
 file to src/aihawk/plugins/, or to a plugins/ folder beside your aihawk.yaml, which wins over a bundled one of the same
-name. AIHawk applies only where a plugin exists; other postings are listed for applying by hand.
+name. A plugin helps the model on its site; every posting is tried, with one or without.
 
 A plugin with `when: always` in its front matter has no hosts: its body is added to every form's instructions, beside the
-site's own plugin, and it never makes a site count as one AIHawk can apply to. The mail plugins are of that kind.
+site's own plugin, The mail plugins are of that kind.
 
 """
 

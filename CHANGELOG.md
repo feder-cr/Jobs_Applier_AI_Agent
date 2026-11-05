@@ -18,6 +18,7 @@
 - A form no longer stops to ask. The model fills every required field from what the CV says and implies, and a written field it has nothing for says to see the attached CV.
 - The checks on the model's calls are gone, for far less code: it is told not to send, and nothing holds it to that. See SECURITY.md.
 - Less to carry: your own CV goes with every form, in place of one written for each job, and there is one gateway, one key variable and one folder.
+- Every posting is tried. A plugin helps the model where there is one, and there is no list of sites AIHawk will not touch.
 - A setting of the wrong type in `aihawk.yaml` is one plain line instead of a traceback.
 
 ## 1.0.0 - 2026-11-04

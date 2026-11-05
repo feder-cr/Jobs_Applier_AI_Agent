@@ -82,7 +82,7 @@ Postings are counted in the job index. One send each so far, the last of them, o
 | **Sent and confirmed by the page** | Greenhouse, Ashby, Lever, Breezy, Recruitee, Teamtailor | ~484k |
 | **Reaches the send button, send not confirmed yet** | SmartRecruiters, Paylocity, Workable | ~782k |
 | **Often stopped by a captcha** | JazzHR, BambooHR, Personio | ~305k |
-| **By hand, for now: they need an account** | Workday, iCIMS | ~2,103k |
+| **Tried with no plugin** | Workday, iCIMS and every other site. A sign-in or a puzzle stops the form: sign in with `e`, and it can go on | ~2,103k and more |
 
 A site is one Markdown file that explains its pages to the model, with no code: [add yours](docs/plugins.md).
 

@@ -141,7 +141,7 @@ def test_a_judged_posting_with_no_text_says_so_in_its_status_and_keeps_its_score
 
 def companies(app: AIHawk) -> list[str]:
     table = app.query_one(DataTable)
-    return [str(table.get_row_at(index)[3]) for index in range(table.row_count)]
+    return [str(table.get_row_at(index)[2]) for index in range(table.row_count)]
 
 
 def test_a_resume_is_all_it_takes_to_get_the_best_jobs_first(home: Path, resume: Path) -> None:
@@ -152,8 +152,6 @@ def test_a_resume_is_all_it_takes_to_get_the_best_jobs_first(home: Path, resume:
             assert companies(app) == ["Bestco", "Lowly", "Noplugin"]
             table = app.query_one(DataTable)
             assert table.get_row_at(0)[1] == "4.5"
-            assert table.get_row_at(0)[2] == "auto"
-            assert table.get_row_at(2)[2] == "hand"
 
     asyncio.run(run())
     config = load_config(home)
@@ -252,7 +250,7 @@ def test_space_space_a_then_enter_sends_each_selected_job_once_and_asks_no_quest
             await pilot.pause(0.1)
             assert not isinstance(app.screen, TextPrompt)
             table = app.query_one(DataTable)
-            assert [table.get_row_at(index)[6] for index in range(2)] == ["sent", "sent"]
+            assert [table.get_row_at(index)[5] for index in range(2)] == ["sent", "sent"]
             assert app.selected == set()
 
     asyncio.run(run())
@@ -275,7 +273,7 @@ def test_escape_on_the_batch_sends_none_and_the_selection_stays(home: Path, resu
             await pilot.press("escape")
             await wait_for_apply(pilot, app)
             assert app.selected == {"high"}
-            assert app.query_one(DataTable).get_row_at(0)[6] == ""
+            assert app.query_one(DataTable).get_row_at(0)[5] == ""
 
     asyncio.run(run())
     assert calls == []
@@ -319,23 +317,6 @@ def test_a_job_already_sent_is_not_sent_twice(home: Path, resume: Path, restored
 
     asyncio.run(run())
     assert len(calls) == 1
-
-
-def test_a_site_no_plugin_knows_says_so_and_nothing_runs(home: Path, resume: Path, restored_apply: Any) -> None:
-    calls: list[Any] = []
-
-    async def run() -> None:
-        app = scripted_app(home, resume)
-        fake_apply(app, [], calls)
-        async with app.run_test(size=(140, 40)) as pilot:
-            await settle(pilot, app)
-            app.query_one(DataTable).move_cursor(row=2)
-            await pilot.press("a")
-            await pilot.pause(0.2)
-            await wait_for_apply(pilot, app)
-
-    asyncio.run(run())
-    assert calls == []
 
 
 def test_the_auto_submit_flag_is_gone() -> None:
@@ -411,7 +392,7 @@ def test_each_send_says_how_it_went_and_where_to_read_more(home: Path, resume: P
 
 def test_at_80_columns_the_status_shows_and_at_100_the_location_too(home: Path, resume: Path) -> None:
     async def run() -> None:
-        for width, labels in ((80, 6), (100, 7)):
+        for width, labels in ((80, 5), (100, 6)):
             app = scripted_app(home, resume)
             async with app.run_test(size=(width, 24)) as pilot:
                 await settle(pilot, app)
@@ -742,7 +723,7 @@ def test_a_posting_whose_words_look_like_markup_is_shown_as_it_is(home: Path) ->
             app.refresh_jobs()
             await pilot.pause()
             row = app.query_one(DataTable).get_row_at(0)
-            assert (str(row[3]), str(row[4]), str(row[5])) == ("Co [/y]", "[/x] Engineer", "Milan [bold")
+            assert (str(row[2]), str(row[3]), str(row[4])) == ("Co [/y]", "[/x] Engineer", "Milan [bold")
 
     asyncio.run(run())
 
@@ -836,3 +817,20 @@ def test_the_persons_own_cv_goes_with_the_form_and_a_new_resume_replaces_it(home
     assert files == [CV_TEXT, CV_TEXT + "A later role at Beta."]
     session.close()
 
+
+def test_a_site_with_no_plugin_is_tried_like_any_other(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    session = Session(home)
+    session._client = ScriptedModelForApp()  # type: ignore[assignment]
+    asyncio.run(session.load_resume(resume))
+    url = "https://careers.nobody.example/job/1"
+    session.store.add(Job("any", "Firm", "Python Engineer", "Milan", url, url, "A posting.", "", 1.0))
+    asked: list[Any] = []
+
+    async def fill(_client: Any, _model: str, job: Any, *_rest: Any, **_options: Any) -> Outcome:
+        asked.append(job.apply_url)
+        return Outcome("blocked", "a sign-in")
+
+    monkeypatch.setattr(session_module, "apply_to_job", fill)
+    outcome = asyncio.run(session.apply(session.store.get("any"), lambda _: None))  # type: ignore[arg-type]
+    assert asked == [url] and outcome.status == "blocked"
+    session.close()
