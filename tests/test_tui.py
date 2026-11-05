@@ -23,8 +23,10 @@ from aihawk.apply import Outcome
 from aihawk.cli import main as cli_main
 from aihawk.config import ConfigError, load_config
 from aihawk.database import Job
+from aihawk.documents import MissingGlyphs, missing_glyphs, write_cv_pdf
 from aihawk.llm import explain
 from aihawk.profile import add_answers, answer_question, install_resume, read_answers, read_resume
+from aihawk.session import Session
 from aihawk.store import Proof, Stored
 from aihawk.tui import AIHawk, JobDetails, SendBatch, SentDetails, SentList, SignIn, TextPrompt
 from fakes import ScriptedBrowser
@@ -510,6 +512,29 @@ def test_an_answer_the_person_gave_outlives_a_new_resume(tmp_path: Path) -> None
     assert read_answers(config) == {"email": "typed@example.com", "phone": "1"}
     answer_question(config, "email", "new@example.com")
     assert read_answers(config)["email"] == "new@example.com"
+
+
+def test_a_new_resume_forgets_the_cvs_of_the_jobs_not_sent_and_keeps_those_sent(home: Path, resume: Path, tmp_path: Path) -> None:
+    session = Session(home)
+    session._client = ScriptedModelForApp()  # type: ignore[assignment]
+    asyncio.run(session.load_resume(resume))
+    for job_id, status in (("not-sent", "scored"), ("sent", "submitted")):
+        session.store.add(Job(job_id, "Firm", "Python Engineer", "Milan", f"https://a.example/{job_id}", "https://a.example/apply", "", "", 1.0))
+        session.store.set_cv(job_id, tmp_path / f"{job_id}.pdf")
+        session.store.set_status(job_id, status)
+    newer = tmp_path / "newer.txt"
+    newer.write_text(CV_TEXT + "\nA later role at Beta.", encoding="utf-8")
+    asyncio.run(session.load_resume(newer))
+    assert session.store.get("not-sent").cv_path is None  # type: ignore[union-attr]
+    assert session.store.get("sent").cv_path == str(tmp_path / "sent.pdf")  # type: ignore[union-attr]
+    session.close()
+
+
+def test_the_cv_font_lacks_some_latin_letters_and_a_cv_with_one_is_not_written(tmp_path: Path) -> None:
+    assert missing_glyphs("Łódź") == "ź"
+    with pytest.raises(MissingGlyphs):
+        write_cv_pdf("Ś", tmp_path / "cv.pdf")
+    assert not (tmp_path / "cv.pdf").exists()
 
 
 def test_a_new_resume_never_invents_a_contact_detail(home: Path, resume: Path) -> None:

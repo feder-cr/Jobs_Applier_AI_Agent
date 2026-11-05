@@ -74,6 +74,8 @@ class Session:
 
     async def load_resume(self, path: Path) -> None:
         await install_resume(self.client, self.config, path)
+        # A CV tailored from the old resume is not sent again: the jobs not yet sent are written again from the new one.
+        self.store.forget_cvs()
         self.config = load_config(self.workspace)
 
     def plugin(self, item: Stored) -> Plugin | None:
@@ -139,7 +141,9 @@ class Session:
         order = fuse([job.lexical for job in jobs], [value or 0.0 for value in values])
         best = {jobs[index].id for index in sorted(range(len(jobs)), key=lambda index: -order[index])[:JUDGED]}
         self.store.set_statuses([job.id for job in jobs if job.id in best], "shortlisted")
-        self.store.set_statuses([job.id for job in jobs if job.id not in best], "passed_over")
+        # A posting the judge did not read is not passed over for good: it stays new, so a later search can judge it.
+        judged_out = [job.id for job, value in zip(jobs, values, strict=True) if value is not None and job.id not in best]
+        self.store.set_statuses(judged_out, "passed_over")
         return len(best)
 
     async def score(self, items: list[Stored], on_scored: Callable[[], None], log: Log) -> None:

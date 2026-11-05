@@ -151,6 +151,13 @@ def _items(value: object, name: str) -> list[Any]:
     return value
 
 
+def _days(value: object, name: str) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise ConfigError(f"{name} must be a whole number of days, not {value!r}") from None
+
+
 def _text(value: object, name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ConfigError(f"{name} must be a word or phrase, not {value!r}")
@@ -225,12 +232,14 @@ def load_config(workspace: Path) -> Config:
         raise ConfigError(f"{path} must be a mapping of settings")
 
     filters = raw.get("filters") or {}
+    if not isinstance(filters, dict):
+        raise ConfigError("filters must be a mapping with include, exclude, locations, cities, countries and plan")
     return Config(
         workspace=workspace,
         name=str(raw.get("name") or ""),
         goals=str(raw.get("goals") or ""),
         database=str(raw.get("database") or DEFAULT_DATABASE),
-        max_age_days=int(raw.get("max_age_days", DEFAULT_MAX_AGE_DAYS)),
+        max_age_days=_days(raw.get("max_age_days", DEFAULT_MAX_AGE_DAYS), "max_age_days"),
         model=str(raw.get("model") or DEFAULT_MODEL),
         quick_model=str(raw.get("quick_model") or DEFAULT_QUICK_MODEL),
         judge_model=str(raw.get("judge_model") or DEFAULT_JUDGE_MODEL),

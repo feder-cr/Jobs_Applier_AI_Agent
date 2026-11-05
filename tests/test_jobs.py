@@ -432,3 +432,13 @@ def test_settings_that_cannot_be_used_are_refused(tmp_path: Path, text: str) -> 
     (tmp_path / "aihawk.yaml").write_text(text, encoding="utf-8")
     with pytest.raises(ConfigError):
         load_config(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("text", "key"),
+    [("max_age_days: sixty", "max_age_days"), ("max_age_days: [1]", "max_age_days"), ("filters: [python]", "filters")],
+)
+def test_a_setting_of_the_wrong_type_is_a_config_error_that_names_the_key(tmp_path: Path, text: str, key: str) -> None:
+    (tmp_path / "aihawk.yaml").write_text(text, encoding="utf-8")
+    with pytest.raises(ConfigError, match=key):
+        load_config(tmp_path)

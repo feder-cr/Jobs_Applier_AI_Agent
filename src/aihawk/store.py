@@ -212,6 +212,11 @@ class Store:
         self._db.execute("UPDATE jobs SET cv_path = ?, updated = ? WHERE id = ?", (str(path), _now(), job_id))
         self._db.commit()
 
+    def forget_cvs(self) -> None:
+        """The tailored CVs of the jobs not yet sent are dropped, so each is written again. The sent ones keep theirs: they are history."""
+        self._db.execute("UPDATE jobs SET cv_path = NULL WHERE status NOT IN (?, ?)", SUBMITTED)
+        self._db.commit()
+
     def set_status(self, job_id: str, status: str, note: str = "") -> None:
         self._db.execute("UPDATE jobs SET status = ?, note = ?, updated = ? WHERE id = ?", (status, note, _now(), job_id))
         self._db.commit()

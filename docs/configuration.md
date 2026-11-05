@@ -2,6 +2,8 @@
 
 AIHawk reads `aihawk.yaml` in its folder, `~/.aihawk` by default (see `--home`). A missing file, or a missing key, takes the default below. Restart `aihawk` after you edit the file.
 
+Loading a resume rewrites this file, and the rewrite drops the comments you put in it, so keep your notes elsewhere.
+
 | Key | Default | What it does |
 |---|---|---|
 | `name` | empty | Your name for this search, shown at the top of the list. |

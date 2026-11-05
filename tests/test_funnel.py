@@ -117,6 +117,20 @@ def test_a_failed_verdict_is_counted_once_and_the_others_are_as_they_were(tmp_pa
     assert len(session.store.with_status("shortlisted")) == JUDGED
 
 
+def test_a_judge_that_reads_nothing_passes_no_posting_over_for_good(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def unread(client: Any, model: str, cv: str, jobs: list[Job], asked: dict[str, Any], progress: Any, why: Any) -> list[None]:
+        progress(len(jobs))
+        why("OrcaRouter answered 500")
+        return [None] * len(jobs)
+
+    monkeypatch.setattr(session_module, "evidence", unread)
+    session = session_with(tmp_path, 30)
+    assert funnel(session) == JUDGED
+    assert shortlisted(session) == ids(range(5, 30))
+    assert {item.job.id for item in session.store.with_status("new")} == ids(range(5))
+    assert session.store.with_status("passed_over") == []
+
+
 def test_the_funnel_says_how_many_descriptions_and_postings_it_has_read(tmp_path: Path) -> None:
     session = session_with(tmp_path, 30)
     heard: list[str] = []

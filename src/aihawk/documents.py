@@ -121,8 +121,8 @@ def missing_glyphs(markdown: str) -> str:
 
 
 def write_cv_pdf(markdown: str, path: Path) -> None:
-    """The CV as a PDF with selectable text, in the Vera font reportlab ships: Latin scripts only. Text it cannot draw
-    raises MissingGlyphs, and no file is written."""
+    """The CV as a PDF with selectable text, in the Vera font reportlab ships. Vera lacks some Latin letters, such as the
+    Polish ś and ą, so text with one raises MissingGlyphs, and no file is written."""
     missing = missing_glyphs(markdown)
     if missing:
         raise MissingGlyphs(missing)
