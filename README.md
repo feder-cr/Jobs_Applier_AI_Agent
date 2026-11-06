@@ -7,7 +7,7 @@
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/assets/banner-dark.gif">
   <img alt="AIHawk. An animation: the app starts from a terminal and narrows 10 million job postings to the 25 that fit a resume; you pick three and say yes once; a Firefox window fills each form and submits it; the app shows them sent. An illustration, with invented companies and an invented person." src="https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/assets/banner-light.gif" width="100%">
 </picture>
-<h3 align="center">An AI web agent that applies to jobs for you while you sleep.</h3>
+<h3 align="center">An AI job application bot: automated job search, then it auto-applies to the jobs that match your resume, while you sleep.</h3>
 
 <sub>FEATURED IN</sub><br>
 <a href="https://www.businessinsider.com/aihawk-applies-jobs-for-you-linkedin-risks-inaccuracies-mistakes-2024-11"><b>Business Insider</b></a> ·
@@ -23,7 +23,7 @@
 
 ## How it works
 
-Give it your resume. It finds the jobs that fit, you pick, and it applies.
+Give it your resume. The job search finds the postings that fit, you pick, and it fills in and sends each job application on the company's own form.
 
 | Step | What happens |
 |---|---|
