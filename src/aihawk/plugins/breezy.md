@@ -7,7 +7,7 @@ The page follows the browser's language, so labels may not be in English: go by 
 
 Fields are named `cName`, `cEmail` and `cPhoneNumber`, which is one text field with no country list. `cAddress` and a desired salary, with its currency and period beside it, may be required. Some forms also have `cSummary` for a summary of experience and `cCoverLetter`. A required summary may be written only from the CV's own words. Leave `smsConsent` unticked unless the answers file says otherwise. Do not use the Indeed or LinkedIn links.
 
-The CV upload is a link, "Carica Curriculum" on an Italian page and "Attached" once a file is in place, near the top, with no file input and no id: select it by that text. It carries a "Required" mark when the CV is required. Uploading may fill fields from the CV, so read the page again afterwards and correct them.
+The CV goes to `a.resume`, the link labelled "Carica Curriculum" in Italian, and the page then shows "Allegato" beside it. Uploading fills `cSummary` from the CV's own words. The upload is a link, "Carica Curriculum" on an Italian page and "Attached" once a file is in place, near the top, with no file input and no id: select it by that text. It carries a "Required" mark when the CV is required. Uploading may fill fields from the CV, so read the page again afterwards and correct them.
 
 "Aggiungi posizione" (add position) and "Aggiungi Studi e formazione" (add education) are links that add an entry: leave them empty unless required.
 

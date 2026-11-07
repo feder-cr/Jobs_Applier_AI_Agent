@@ -12,7 +12,7 @@ Gender, ethnicity, veteran and disability questions are lists too (`#gender`, `#
 
 Education can repeat: "Add another" adds a row (`#school--0`, `#degree--0`, `#discipline--0`). Its months are lists (`#start-month--0`) and its years are number fields (`#start-year--0`).
 
-A closed posting sends the browser to the board's own page at `/<company>?error=true`, which says the job is no longer open, in the page's language: call finish_form with status blocked and say the posting is closed.
+The CV goes to `[aria-labelledby='upload-label-resume'] button`; the input `#resume` is hidden and refuses the file. The send control is `button[type='submit']`. A closed posting sends the browser to the board's own page at `/<company>?error=true`, which says the job is no longer open, in the page's language: call finish_form with status blocked and say the posting is closed.
 
 A field's error goes in an element with the id `<field>-error`, which the field names in `aria-describedby`: after a send that did not go through, read those elements and fix the fields they name.
 

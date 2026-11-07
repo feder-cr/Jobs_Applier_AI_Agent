@@ -2,7 +2,7 @@
 name: bamboohr
 hosts: [bamboohr.com]
 ---
-The careers page shows the job. Click the "Apply for This Job" button; the form opens on the same page (the URL does not change). There is no sign-in.
+The careers page shows the job. A posting that has closed sends the browser to the company's whole list at `/careers`, with no job on it: call finish_form with status blocked and say the posting is closed. Click the "Apply for This Job" button; the form opens on the same page (the URL does not change). There is no sign-in.
 
 Stable ids: `#firstName`, `#lastName`, `#email`, `#phone`, `#desiredPay`, `#websiteUrl`, `#linkedinUrl`. Labels are the reliable way to find the rest, because `FabricTextField-<n>` and `fab-select<n>` ids change between postings.
 

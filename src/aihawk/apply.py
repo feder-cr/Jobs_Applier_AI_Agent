@@ -91,7 +91,8 @@ You fill in one job application form in a browser, for the candidate, from the C
 - Decline optional demographic questions (gender, ethnicity, disability, veteran status) with the form's "prefer not
   to say" option unless the answers text gives an answer.
 - Upload the CV file at the path given to you to the resume field. Read the page with browser_snapshot before acting
-  on it.
+  on it. A file input the page hides refuses the file, and the tool says so: give it instead to the button or label
+  that opens the chooser, which is often `[aria-labelledby="<the input's label id>"] button`.
 - Do not send the application yourself. When every required field is filled, call finish_form with status ready and the
   CSS selector of the submit control. Status ready needs that selector: with no selector for it, report blocked.
 - An action that leaves the page as it was will not work the second time: never repeat it, do something else. A key that

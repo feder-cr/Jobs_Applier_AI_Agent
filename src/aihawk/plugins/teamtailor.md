@@ -11,6 +11,6 @@ Phone: `input[name="candidate[phone]"]`, with the country set by the button "Cha
 
 A tag field (Skills, for example) turns each typed skill into a chip when Enter is pressed in its input. The chips are what the form sends; text left in the input is not sent.
 
-Upload the CV to `#candidate_resume_remote_url` ("Upload resume"). Do not click "Apply with LinkedIn". The cookie banner is open on the page: decline or leave it, do not treat it as a question. Sign-in is not needed. The send control is `input[name=commit]`, "Submit application": report ready only on the page before it.
+Upload the CV to `#candidate_resume_remote_url` ("Upload resume"). Do not click "Apply with LinkedIn". The cookie banner's decline button is found by its `aria-label` in the page's language, such as `[aria-label='Rifiuta tutti i cookie non necessari']`. The banner is open on the page: decline or leave it, do not treat it as a question. Sign-in is not needed. The send control is `input[name=commit]`, "Submit application": report ready only on the page before it.
 
 After sending: the address gains `/thanks/` and the page says it received the application, in Spanish "Gracias por la solicitud" and "Hemos recibido tu solicitud". Read the page: if the form is still there, the application was not received.
