@@ -311,6 +311,9 @@ def merge(connection: duckdb.DuckDBPyConnection, work: Path) -> dict[str, int]:
             SELECT best.key, {columns}, best.sources
             FROM {every_row} AS row
             JOIN best ON row.filename = best.winner.filename AND row.file_row_number = best.winner.row
+            -- In key order, so a file holds one range of keys and a row group a narrow one: a reader that asks for a
+            -- posting by its key reads the one row group that can hold it, whatever build it is.
+            ORDER BY best.key
         ) TO '{out.as_posix()}' (
             FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE {ROW_GROUP}, FILE_SIZE_BYTES '{MAX_FILE}', FILENAME_PATTERN 'jobs_{{i}}'
         )
@@ -326,6 +329,12 @@ def merge(connection: duckdb.DuckDBPyConnection, work: Path) -> dict[str, int]:
         ) TO '{(out / INDEX).as_posix()}' (FORMAT parquet, COMPRESSION zstd, COMPRESSION_LEVEL 9)
     """)
     return {"rows_in": int(rows_in), "rows_out": rows_out}
+
+
+def file_entry(connection: duckdb.DuckDBPyConnection, path: Path) -> dict[str, object]:
+    """A description file as the manifest names it: its size, and the first and last key it holds."""
+    first, last = connection.execute("SELECT min(key), max(key) FROM read_parquet(?)", [path.as_posix()]).fetchone()
+    return {"name": path.name, "bytes": path.stat().st_size, "first_key": first, "last_key": last}
 
 
 def main() -> None:
@@ -351,13 +360,15 @@ def main() -> None:
     counts = merge(connection, work)
     out = work / "out"
     manifest = {
-        "schema": 1,
+        # 2: the description files are in key order and say their first and last key, and the release carries a
+        # delta of the index for each build. Everything schema 1 had is still here, for an AIHawk not yet updated.
+        "schema": 2,
         "built_at": datetime.now(UTC).isoformat(timespec="seconds"),
         **counts,
         "seconds": round(time.monotonic() - started),
         "columns": ["key", *COMMON, "sources"],
         "index": {"name": INDEX, "bytes": (out / INDEX).stat().st_size},
-        "files": [{"name": path.name, "bytes": path.stat().st_size} for path in sorted(out.glob("jobs_*.parquet"))],
+        "files": [file_entry(connection, path) for path in sorted(out.glob("jobs_*.parquet"))],
         "sources": reports,
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")

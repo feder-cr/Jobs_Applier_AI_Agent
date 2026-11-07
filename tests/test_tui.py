@@ -28,9 +28,10 @@ from aihawk.config import ConfigError, load_config
 from aihawk.database import Job
 from aihawk.llm import explain
 from aihawk.profile import install_resume, read_answers, read_resume
+from aihawk.screens import JobDetails, SendBatch, SentDetails, SentList, Settings, SignIn, TextPrompt
 from aihawk.session import Session
 from aihawk.store import Proof, Store, Stored
-from aihawk.tui import AIHawk, JobDetails, SendBatch, SentDetails, SentList, Settings, SignIn, TextPrompt
+from aihawk.tui import AIHawk
 from fakes import ScriptedBrowser
 
 PROFILE = {

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import itertools
 import json
 import sys
 import uuid
@@ -137,3 +138,42 @@ def test_every_source_names_its_home_and_licence() -> None:
     assert len(names) == len(set(names))
     assert all(source.home.startswith("https://") and source.license for source in build.SOURCES)
     assert json.dumps(names)
+
+
+def test_descriptions_are_written_in_key_order_and_each_file_says_its_range(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A reader asks for a posting by key and reads the one file, and the one row group, that can hold it.
+    monkeypatch.setattr(build, "MAX_FILE", "100KB")
+    write_source(tmp_path, "s", [(f"https://a.example/{uuid.uuid4().hex}", "Job", uuid.uuid4().hex * 4) for _ in range(6000)])
+    merged(tmp_path)
+    connection = duckdb.connect()
+    entries = [build.file_entry(connection, path) for path in sorted((tmp_path / "out").glob("jobs_*.parquet"))]
+    assert len(entries) > 1
+    for path, entry in zip(sorted((tmp_path / "out").glob("jobs_*.parquet")), entries, strict=True):
+        keys = [row[0] for row in connection.execute("SELECT key FROM read_parquet(?)", [path.as_posix()]).fetchall()]
+        assert keys == sorted(keys) and (entry["first_key"], entry["last_key"]) == (keys[0], keys[-1])
+    ranges = sorted((entry["first_key"], entry["last_key"]) for entry in entries)
+    assert all(earlier[1] < later[0] for earlier, later in itertools.pairwise(ranges))
+
+
+def write_index(path: Path, rows: list[tuple[str, str]]) -> None:
+    connection = duckdb.connect()
+    connection.execute(f"CREATE TABLE i (key VARCHAR, {', '.join(f'{column} VARCHAR' for column in publish.INDEX_COLUMNS)})")
+    connection.executemany("INSERT INTO i (key, url, title) VALUES (?, ?, ?)", [(key, f"https://{key}", title) for key, title in rows])
+    connection.execute(f"COPY i TO '{path.as_posix()}' (FORMAT parquet)")
+
+
+def test_a_delta_holds_the_postings_new_or_changed_and_the_keys_gone(tmp_path: Path) -> None:
+    write_index(tmp_path / "before.parquet", [("a", "Gone"), ("b", "Old title"), ("c", "Same")])
+    write_index(tmp_path / "after.parquet", [("b", "New title"), ("c", "Same"), ("d", "New")])
+    adds, drops = publish.write_delta((tmp_path / "before.parquet").as_posix(), tmp_path / "after.parquet", tmp_path / "delta.parquet")
+    assert (adds, drops) == (2, 1)
+    rows = duckdb.connect().execute(f"SELECT op, key, title FROM read_parquet('{(tmp_path / 'delta.parquet').as_posix()}') ORDER BY key").fetchall()
+    assert rows == [("drop", "a", None), ("add", "b", "New title"), ("add", "d", "New")]
+
+
+def test_deltas_go_to_their_month_and_only_the_dated_builds_are_ever_cleared() -> None:
+    assert publish.deltas_release("jobs-20261107-103405") == "jobs-deltas-202611"
+    assert publish.build_of({"base_url": "https://github.com/o/r/releases/download/jobs-20261107-103405"}) == "jobs-20261107-103405"
+    assert publish.build_of({"build": "jobs-20261107-153405", "base_url": "x"}) == "jobs-20261107-153405"
+    tags = ["jobs-latest", "jobs-deltas-202611", "golden-abc", "jobs-20261107-103405"]
+    assert [tag for tag in tags if publish.DATED.match(tag)] == ["jobs-20261107-103405"]

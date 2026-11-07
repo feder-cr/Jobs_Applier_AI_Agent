@@ -1,4 +1,4 @@
-﻿"""AIHawk in the terminal: give it your resume, get the jobs that fit, select them and apply."""
+"""AIHawk in the terminal: give it your resume, get the jobs that fit, select them and apply."""
 
 from __future__ import annotations
 
@@ -10,20 +10,16 @@ from rich.text import Text
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical, VerticalScroll
-from textual.screen import ModalScreen
-from textual.widgets import DataTable, Footer, Input, RichLog, Static
+from textual.widgets import DataTable, Footer, RichLog, Static
 
 from aihawk.apply import MAILBOXES, mail_provider
 from aihawk.config import KEY_ENV, KEY_URL, ConfigError
 from aihawk.database import DatabaseError
-from aihawk.documents import QUESTIONS
 from aihawk.llm import SPEND, explain, money, refused
+from aihawk.screens import WIDE_ENOUGH, JobDetails, SendBatch, SentDetails, SentList, Settings, SignIn, TextPrompt
 from aihawk.session import Session
-from aihawk.store import SUBMITTED, Sent, Stored, said, sent_word
+from aihawk.store import SUBMITTED, Stored
 
-# Below this width there is no room for the location beside the company and the role.
-WIDE_ENOUGH = 100
 SEARCH_SETTINGS = {"places", "exclude", "max_age_days"}
 # Scored jobs kept below the cursor. The judge follows the person down the list and stops there, so a long search never
 # pays to score what nobody will reach. Scoring runs in small chunks, to stop as soon as the count is met.
@@ -38,228 +34,6 @@ KEY_HINT = f"Get one at {KEY_URL} · it stays on this computer · Enter saves it
 MAIL_NOT_SIGNED_IN = "The mailbox is not signed in."
 MAIL_NAMES = {"gmail": "Gmail", "outlook": "Outlook"}
 RESUME_HINT = "PDF, .docx or text · Enter reads it · Esc for later"
-
-
-class TextPrompt(ModalScreen[str | None]):
-    """One question, one line of answer. Enter answers, Escape skips."""
-
-    BINDINGS: ClassVar = [Binding("escape", "skip", "Skip")]
-
-    def __init__(self, question: str, *, placeholder: str = "", password: bool = False, hint: str = "Enter · Esc goes back", value: str | None = None) -> None:
-        super().__init__()
-        # With a value to change, Enter on an empty line clears it, and only Esc leaves it as it is.
-        self.value = value
-        self.question = question
-        self.placeholder = placeholder
-        self.password = password
-        self.hint = hint
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="dialog"):
-            yield Static(self.question, id="question", markup=False)
-            yield Input(value=self.value or "", placeholder=self.placeholder, password=self.password, id="answer")
-            yield Static(self.hint, classes="hint")
-
-    @on(Input.Submitted)
-    def answered(self, event: Input.Submitted) -> None:
-        self.dismiss(event.value.strip() if self.value is not None else event.value.strip() or None)
-
-    def action_skip(self) -> None:
-        self.dismiss(None)
-
-
-class SendBatch(ModalScreen[bool]):
-    """The one question before anything is sent: these jobs, now. Enter sends them all, Escape cancels."""
-
-    BINDINGS: ClassVar = [Binding("enter", "answer(True)", "Send"), Binding("escape", "answer(False)", "Cancel")]
-
-    def __init__(self, items: list[Stored]) -> None:
-        super().__init__()
-        self.items = items
-
-    def compose(self) -> ComposeResult:
-        count = len(self.items)
-        lines = [f"{index}. {item.job.company}: {item.job.title}" for index, item in enumerate(self.items, 1)]
-        with Vertical(id="dialog"):
-            yield Static(f"Send {count} application{'' if count == 1 else 's'} now?", id="question", markup=False)
-            yield Static("In your name, in the browser window · Enter sends · Esc cancels", classes="hint")
-            with VerticalScroll(id="summary"):
-                yield Static("\n".join(lines), markup=False)
-            yield Footer()
-
-    def action_answer(self, send: bool) -> None:
-        self.dismiss(send)
-
-
-def short(text: str) -> str:
-    return " ".join(text.split())[:110]
-
-
-def when_short(when: str) -> str:
-    """A time as a person reads it: 2026-11-05 10:00."""
-    return when[:16].replace("T", " ")
-
-
-class SentList(ModalScreen[None]):
-    """Every job tried, the newest first. Enter opens one in full."""
-
-    BINDINGS: ClassVar = [Binding("escape,q,s", "close", "Back")]
-
-    def __init__(self, items: list[Sent]) -> None:
-        super().__init__()
-        self.items = items
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="wide"):
-            yield Static("Applications", id="question", markup=False)
-            yield DataTable(id="sent", cursor_type="row")
-            yield Static("Enter opens one · Esc goes back", classes="hint")
-            yield Footer()
-
-    def on_mount(self) -> None:
-        table = self.query_one(DataTable)
-        # What is left beside the time and the status, inside this screen's 95% and its padding, goes to the words.
-        wide = self.app.size.width >= WIDE_ENOUGH
-        left = int(self.app.size.width * 0.95) - 8 - 2 * (5 if wide else 3) - 16 - 19
-        words = [("Company", left // 5), ("Role", left * 3 // 10)] if wide else [("Company", left)]
-        for label, width in (("When", 16), *words, ("Status", 19), *([("What the page said", left // 2)] if wide else [])):
-            table.add_column(label, key=label, width=width)
-        for item in self.items:
-            cells = (when_short(item.when), item.job.company, *([item.job.title] if wide else []), sent_word(item), *([short(said(item))] if wide else []))
-            table.add_row(*(Text(cell) for cell in cells), key=item.job.id)
-        table.focus()
-
-    @on(DataTable.RowSelected)
-    def chosen(self, event: DataTable.RowSelected) -> None:
-        # Stopped here: the same event would reach the app and open the main list's job as well.
-        event.stop()
-        item = next(item for item in self.items if item.job.id == event.row_key.value)
-        self.app.push_screen(SentDetails(item))
-
-    def action_close(self) -> None:
-        self.dismiss(None)
-
-
-class SentDetails(ModalScreen[None]):
-    BINDINGS: ClassVar = [Binding("escape,enter,q", "close", "Back")]
-
-    def __init__(self, item: Sent) -> None:
-        super().__init__()
-        self.item = item
-
-    def compose(self) -> ComposeResult:
-        item, proof = self.item, self.item.proof
-        lines = [
-            item.job.title,
-            f"{item.job.company} · {item.job.location}",
-            "",
-            f"{sent_word(item)} · {item.when}" + (f" · {money(item.cost)}" if item.cost is not None else ""),
-            f"Posting: {item.job.url}",
-            f"Address after the send: {proof.url or '-'}",
-            f"Screenshot: {proof.screenshot or '-'}",
-            "",
-            f"Filled in:\n{item.note or '-'}",
-            "",
-            f"What the page said: {proof.evidence or '-'}",
-            "",
-            proof.text or "The page's text was not read.",
-        ]
-        with Vertical(id="dialog"):
-            with VerticalScroll(id="summary"):
-                yield Static("\n".join(lines), markup=False)
-            yield Footer()
-
-    def action_close(self) -> None:
-        self.dismiss(None)
-
-
-class JobDetails(ModalScreen[None]):
-    BINDINGS: ClassVar = [Binding("space", "select", "Select"), Binding("o", "open_link", "Open"), Binding("escape,enter,q", "close", "Back")]
-
-    def __init__(self, item: Stored) -> None:
-        super().__init__()
-        self.item = item
-
-    def compose(self) -> ComposeResult:
-        job, report = self.item.job, self.item.report or {}
-        lines = [f"{job.title}", f"{job.company} · {job.location}", job.url, ""]
-        if report:
-            answers = " · ".join(f"{name.replace('_', ' ')}: {report.get(name, '?')}" for name in QUESTIONS)
-            lines += [f"Score {report.get('score', 0):.1f}/5 · posting looks {report.get('legitimacy', '?')}", answers, "", report.get("summary", "")]
-            if report.get("gaps"):
-                lines += ["", "Gaps:", *(f"  - {gap}" for gap in report["gaps"])]
-            if not job.description.strip():
-                lines += ["", "Scored from the title alone: the posting had no text to read."]
-        if self.item.note:
-            lines += ["", "Last attempt:", self.item.note]
-        with Vertical(id="dialog"):
-            with VerticalScroll(id="summary"):
-                yield Static("\n".join(lines), markup=False)
-            yield Footer()
-
-    def action_close(self) -> None:
-        self.dismiss(None)
-
-    def action_select(self) -> None:
-        self.dismiss(None)
-        self.app.action_toggle()  # type: ignore[attr-defined]
-
-    def action_open_link(self) -> None:
-        webbrowser.open(self.item.job.url)
-
-
-class Settings(ModalScreen[str | None]):
-    """Everything that can be changed, one row each. Enter changes the row, Esc goes back."""
-
-    BINDINGS: ClassVar = [Binding("escape,q,e", "close", "Back")]
-
-    def __init__(self, rows: list[tuple[str, str, str]], title: str = "Settings") -> None:
-        super().__init__()
-        self.rows = rows
-        self.title_text = title
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="wide"):
-            yield Static(self.title_text, id="question", markup=False)
-            yield DataTable(id="settings", cursor_type="row", show_header=False)
-            yield Static("Enter changes it · Esc goes back", classes="hint")
-            yield Footer()
-
-    def on_mount(self) -> None:
-        table = self.query_one(DataTable)
-        room = max(20, int(self.app.size.width * 0.95) - 8 - 4 - 22)
-        table.add_column("What", key="what", width=22)
-        table.add_column("Now", key="now", width=room)
-        for key, label, now in self.rows:
-            table.add_row(Text(label), Text(now), key=key)
-        table.focus()
-
-    @on(DataTable.RowSelected)
-    def chosen(self, event: DataTable.RowSelected) -> None:
-        event.stop()
-        self.dismiss(event.row_key.value)
-
-    def action_close(self) -> None:
-        self.dismiss(None)
-
-
-class SignIn(ModalScreen[None]):
-    """The browser window is open for the person to sign in. Nothing is typed for them; a key here says they are done."""
-
-    BINDINGS: ClassVar = [Binding("enter,escape", "done", "Done")]
-
-    def __init__(self, text: str, hint: str = "Enter here when you are done · the window closes") -> None:
-        super().__init__()
-        self.text = text
-        self.hint = hint
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="dialog"):
-            yield Static(self.text, id="question", markup=False)
-            yield Static(self.hint, classes="hint")
-
-    def action_done(self) -> None:
-        self.dismiss(None)
 
 
 class AIHawk(App[None]):
