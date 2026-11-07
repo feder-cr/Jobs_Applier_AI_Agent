@@ -6,7 +6,7 @@ Every iCIMS page wraps the form in an iframe, `#icims_content_iframe`, and the s
 
 The form has steps, the Candidate Profile first, then pages of questions: "Candidate Questions" at `/questions`, "EEO", "Job Specific Questions". The first page asks for `#email`, with two boxes the form requires, `#accept_privacy` and `#accept_gdpr`. An email the site does not know goes to the Candidate Profile; one it knows signs in with the password, through `login.icims.com`, which is iCIMS's own sign-in, and may then offer a passkey: decline it. A step already done shows as Completed: leave it as it is.
 
-The Submit button of the last step of questions, `#quesp_form_submit_i`, sends the application: there is no review page after it. That button is the send control: name it in finish_form and never click it. Seen on a real form: the application was sent by the model, not by the app.
+A button labelled Submit sends the application, whatever the step list shows after it: there is no review page. On a real form it was `#quesp_form_submit_i` on "Job Specific Questions", step 4 of 5, and the application went then, sent by the model and not by the app. That button is the send control: name it in finish_form and never click it.
 
 The Candidate Profile makes the account: `PersonProfileFields.Login` is the email again, `PersonProfileFields.Password` and `PersonProfileFields.Password_Confirm` take the `account_password` from the answers. Sending this page with `#cp_form_submit_i` creates the account, whatever comes after: from then on, finish with made_account true.
 
