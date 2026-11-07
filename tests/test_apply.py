@@ -15,6 +15,7 @@ import pytest
 
 from aihawk import apply as apply_module
 from aihawk.apply import (
+    LOOP_STOP,
     PAGE_CHARS,
     SYSTEM,
     Outcome,
@@ -186,10 +187,77 @@ def test_the_servers_way_of_driving_a_page_comes_after_the_rules_and_before_the_
     assert text.index(SYSTEM) < text.index("Try selectors first.") < text.index("About a site.")
 
 
-def test_a_model_that_never_finishes_is_blocked_and_nothing_is_sent() -> None:
-    model = ScriptedModel(*["thinking"] * 150)
+def test_the_same_call_with_the_same_answer_is_warned_then_stopped_and_nothing_is_sent() -> None:
+    browser = ScriptedBrowser()
+    model = ScriptedModel(*[[tool_call("browser_press_key", key="End")] for _ in range(LOOP_STOP)])
+    report = asyncio.run(fill_form(browser, [], model, "m", "brief"))  # type: ignore[arg-type]
+    assert report["status"] == "blocked" and "going round in circles: browser_press_key" in report["summary"]
+    told = [m["content"] for m in model.requests[-1]["messages"] if isinstance(m, dict) and m.get("role") == "user"]
+    assert sum("nothing on the page changes" in str(text) for text in told) == 1
+    assert len(browser.calls) == LOOP_STOP and browser.clicks() == []
+
+
+class _MovingList(ScriptedBrowser):
+    """A list whose highlighted row moves down at every key."""
+
+    async def call_tool(self, name: str, arguments: dict | None = None):  # type: ignore[override]
+        result = await super().call_tool(name, arguments)
+        result.content[0].text = f"row {len(self.calls)} highlighted"
+        return result
+
+
+def test_a_key_that_moves_down_a_list_is_not_a_loop() -> None:
+    steps = [[tool_call("browser_press_key", key="ArrowDown")] for _ in range(3 * LOOP_STOP)]
+    model = ScriptedModel(*steps, [tool_call("finish_form", status="blocked", summary="list read", submit_selector="")])
+    report = asyncio.run(fill_form(_MovingList(), [], model, "m", "brief"))  # type: ignore[arg-type]
+    assert report["summary"] == "list read"
+
+
+def test_a_model_that_only_talks_is_stopped() -> None:
+    model = ScriptedModel("thinking", "still thinking", "nearly")
     report = asyncio.run(fill_form(ScriptedBrowser(), [], model, "m", "brief"))  # type: ignore[arg-type]
-    assert report == {"status": "blocked", "summary": "The form was not finished in 150 steps."}
+    assert report["status"] == "blocked" and "without using the tools" in report["summary"]
+
+
+MAILBOX = "https://mail.google.com/mail/u/0/"
+
+
+def test_waiting_in_the_mailbox_for_a_code_is_not_a_loop() -> None:
+    steps = [[tool_call("browser_navigate", url=MAILBOX)], *[[tool_call("browser_read_text", selector="body")] for _ in range(2 * LOOP_STOP)]]
+    model = ScriptedModel(*steps, [tool_call("finish_form", status="blocked", summary="code read", submit_selector="")])
+    report = asyncio.run(fill_form(ScriptedBrowser(), [], model, "m", "brief"))  # type: ignore[arg-type]
+    assert report["summary"] == "code read"
+
+
+def test_a_visit_to_the_mailbox_that_waits_too_long_ends_with_no_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(apply_module, "MAILBOX_WAIT_S", -1)
+    model = ScriptedModel([tool_call("browser_navigate", url=MAILBOX)], [tool_call("browser_read_text", selector="body")])
+    report = asyncio.run(fill_form(ScriptedBrowser(), [], model, "m", "brief"))  # type: ignore[arg-type]
+    assert report == {"status": "blocked", "summary": apply_module.NO_CODE, "submit_selector": ""}
+
+
+@pytest.mark.parametrize(("confidence", "stopped"), [(0.95, True), (0.5, False)])
+def test_a_loop_no_fingerprint_sees_is_stopped_when_a_model_is_sure_of_it(monkeypatch: pytest.MonkeyPatch, confidence: float, stopped: bool) -> None:
+    monkeypatch.setattr(apply_module, "LOOP_CHECK_AFTER", 2)
+    verdict = json.dumps({"stuck": True, "confidence": confidence, "reason": "uploads the CV and fills the fields again"})
+    steps = [[tool_call("browser_press_key", key="ArrowDown")], [tool_call("browser_press_key", key="ArrowDown")], verdict]
+    model = ScriptedModel(*steps, [tool_call("finish_form", status="blocked", summary="went on", submit_selector="")])
+    report = asyncio.run(fill_form(_MovingList(), [], model, "m", "brief"))  # type: ignore[arg-type]
+    assert (report["summary"] == "Stopped going round in circles: uploads the CV and fills the fields again") is stopped
+    assert (report["summary"] == "went on") is not stopped
+
+
+def test_a_send_control_that_matches_several_elements_goes_back_to_the_model() -> None:
+    browser = ScriptedBrowser({"button[type='button']": 3})
+    model = ScriptedModel(
+        [tool_call("finish_form", status="ready", summary="filled", submit_selector="button[type='button']")],
+        [tool_call("finish_form", status="ready", summary="filled", submit_selector="#send")],
+    )
+    report = asyncio.run(fill_form(browser, [], model, "m", "brief"))  # type: ignore[arg-type]
+    assert report["submit_selector"] == "#send"
+    told = [m["content"] for m in model.requests[-1]["messages"] if isinstance(m, dict) and m.get("role") == "tool"]
+    assert "matches 3 elements" in told[-1]
+    assert browser.clicks() == []
 
 
 def test_the_plugins_text_reaches_the_verifying_model_as_its_rules_while_the_page_stays_text_to_check(tmp_path: Path) -> None:
@@ -403,6 +471,48 @@ def test_a_page_that_says_nothing_yet_is_read_again_when_it_changes(tmp_path: Pa
     outcome = run(ScriptedModel(ready(), *says), browser, tmp_path / "proof.png")
     assert outcome.status == "submitted" and outcome.proof.url == "https://u/thanks"
     assert browser.clicks() == ["#send"]
+
+
+class MovesAfterItIsRead(ScriptedBrowser):
+    """A Workday form: its Review step stays on the page after the click, and is read, before the address moves on."""
+
+    def __init__(self) -> None:
+        super().__init__({"#send": SUBMIT}, page={"url": "https://u/apply", "text": "Review: Submit"})
+
+    async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
+        result = await super().call_tool(name, arguments)
+        if name == "browser_read_text" and self.clicks():
+            self.page = {"url": "https://u/completed/application", "text": "Application received"}
+        return result
+
+
+def test_a_page_judged_before_it_moved_on_is_judged_again_where_it_went(tmp_path: Path) -> None:
+    says = (json.dumps({"outcome": "rejected", "evidence": "still the Review step"}), VERIFIED)
+    browser = MovesAfterItIsRead()
+    outcome = run(ScriptedModel(ready(), *says), browser, tmp_path / "proof.png")
+    assert outcome.status == "submitted" and outcome.proof.url == "https://u/completed/application"
+    assert browser.clicks() == ["#send"]
+
+
+class ClickNeverLands(ScriptedBrowser):
+    """A send control the browser never could click: a hidden button the selector found first."""
+
+    async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
+        result = await super().call_tool(name, arguments)
+        if name == "browser_click":
+            return SimpleNamespace(isError=True, content=[SimpleNamespace(text="Page.click: 'button' not actionable in 15s after 290 attempts. Last reason: missing visible")])
+        return result
+
+
+def test_a_send_control_never_clicked_is_blocked_so_it_can_be_tried_again(tmp_path: Path) -> None:
+    unknown = json.dumps({"outcome": "unknown", "evidence": "the form is still there"})
+    outcome = run(ScriptedModel(ready(), unknown), ClickNeverLands({"#send": SUBMIT}), tmp_path / "proof.png")
+    assert outcome.status == "blocked" and "never clicked" in outcome.summary
+
+
+def test_a_page_that_confirms_wins_over_a_click_that_never_landed(tmp_path: Path) -> None:
+    outcome = run(ScriptedModel(ready(), VERIFIED), ClickNeverLands({"#send": SUBMIT}), tmp_path / "proof.png")
+    assert outcome.status == "submitted"
 
 
 class ClickBreaks(ScriptedBrowser):
