@@ -14,6 +14,7 @@ from typing import Any
 
 from aihawk.database import Job
 from aihawk.judge import fuse
+from aihawk.secret import is_sealed, seal, unseal
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -42,6 +43,11 @@ CREATE TABLE IF NOT EXISTS jobs (
     cost REAL
 )
 """
+
+# The one password AIHawk makes for the job sites that need an account. Kept sealed: encrypted in the store with a key in
+# its own file beside it, and opened only when an answer is read.
+ACCOUNT_PASSWORD = "account_password"
+SECRET_ANSWERS = frozenset({ACCOUNT_PASSWORD})
 
 ACCOUNTS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS accounts (
@@ -147,6 +153,7 @@ def write_applied(path: Path, sent: list[Sent]) -> None:
 class Store:
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
+        self._key_file = path.with_name("secret.key")
         self._db = sqlite3.connect(path)
         self._db.row_factory = sqlite3.Row
         self._db.execute(SCHEMA)
@@ -229,7 +236,17 @@ class Store:
 
     # The answers: what the person said about themselves, given to the model with the CV when a form is filled.
     def answers(self) -> dict[str, str]:
-        return {row["name"]: row["value"] for row in self._db.execute("SELECT name, value FROM answers ORDER BY rowid")}
+        """The answers in plain words. A secret one kept plain by an older AIHawk is sealed now, on this first read."""
+        rows = self._db.execute("SELECT name, value FROM answers ORDER BY rowid").fetchall()
+        for row in rows:
+            if row["name"] in SECRET_ANSWERS and not is_sealed(row["value"]):
+                self._db.execute("UPDATE answers SET value = ? WHERE name = ?", (seal(row["value"], self._key_file), row["name"]))
+                self._db.commit()
+        return {row["name"]: unseal(row["value"], self._key_file) for row in rows}
+
+    def _at_rest(self, name: str, value: str) -> str:
+        """How an answer is written to the store: sealed when it is a secret, as it is otherwise."""
+        return seal(value, self._key_file) if name in SECRET_ANSWERS else value
 
     def answers_text(self) -> str:
         """The answers as the model reads them: one line each, name and value."""
@@ -237,7 +254,7 @@ class Store:
 
     def add_answers(self, answers: dict[str, str], source: str) -> None:
         """Answers that are new. One already there is kept: what the person said wins over what is read again from a CV."""
-        rows = [(name, value.strip(), source, _now()) for name, value in answers.items() if value and value.strip()]
+        rows = [(name, self._at_rest(name, value.strip()), source, _now()) for name, value in answers.items() if value and value.strip()]
         self._db.executemany("INSERT OR IGNORE INTO answers (name, value, source, updated) VALUES (?, ?, ?, ?)", rows)
         self._db.commit()
 
@@ -247,7 +264,7 @@ class Store:
             self._db.execute(
                 "INSERT INTO answers (name, value, source, updated) VALUES (?, ?, ?, ?) "
                 "ON CONFLICT(name) DO UPDATE SET value = excluded.value, source = excluded.source, updated = excluded.updated",
-                (name, value.strip(), source, _now()),
+                (name, self._at_rest(name, value.strip()), source, _now()),
             )
         else:
             self._db.execute("DELETE FROM answers WHERE name = ?", (name,))

@@ -51,3 +51,47 @@ def test_the_account_password_is_made_once_and_has_every_class_of_character(tmp_
         assert any(c in string.digits for c in made) and any(c in PASSWORD_SYMBOLS for c in made)
     assert len({new_password() for _ in range(10)}) == 10
     store.close()
+
+
+def test_the_account_password_is_sealed_on_disk_and_plain_when_read(tmp_path: Path) -> None:
+    # Encrypted in the store with a key in its own file beside it; whoever reads jobs.db alone does not read the password.
+    import sqlite3
+
+    store = Store(tmp_path / "jobs.db")
+    store.set_answer(ACCOUNT_PASSWORD, "Secret!9xWorkday")
+    store.set_answer("email", "ada@example.com")
+    assert store.answers()[ACCOUNT_PASSWORD] == "Secret!9xWorkday"
+    assert "account_password: Secret!9xWorkday" in store.answers_text()
+    store.close()
+    raw = dict(sqlite3.connect(tmp_path / "jobs.db").execute("SELECT name, value FROM answers").fetchall())
+    assert raw["email"] == "ada@example.com"
+    assert raw[ACCOUNT_PASSWORD].startswith("sealed:") and "Secret!9x" not in raw[ACCOUNT_PASSWORD]
+    assert (tmp_path / "secret.key").is_file()
+
+
+def test_a_plain_password_left_by_an_older_store_is_sealed_on_its_first_read(tmp_path: Path) -> None:
+    import sqlite3
+
+    Store(tmp_path / "jobs.db").close()
+    old = sqlite3.connect(tmp_path / "jobs.db")
+    old.execute("INSERT INTO answers (name, value, source, updated) VALUES (?, ?, 'generated', 't')", (ACCOUNT_PASSWORD, "Plain!1pass"))
+    old.commit()
+    old.close()
+    store = Store(tmp_path / "jobs.db")
+    assert store.answers()[ACCOUNT_PASSWORD] == "Plain!1pass"
+    store.close()
+    raw = sqlite3.connect(tmp_path / "jobs.db").execute("SELECT value FROM answers WHERE name = ?", (ACCOUNT_PASSWORD,)).fetchone()[0]
+    assert raw.startswith("sealed:")
+
+
+def test_a_sealed_password_with_a_replaced_key_says_so(tmp_path: Path) -> None:
+    import pytest
+
+    from aihawk.secret import SecretError
+
+    store = Store(tmp_path / "jobs.db")
+    store.set_answer(ACCOUNT_PASSWORD, "Secret!9x")
+    store.close()
+    (tmp_path / "secret.key").write_bytes(b"ZmFrZWtleWZha2VrZXlmYWtla2V5ZmFrZWtleWZha2U=")
+    with pytest.raises(SecretError, match="key file replaced"):
+        Store(tmp_path / "jobs.db").answers()

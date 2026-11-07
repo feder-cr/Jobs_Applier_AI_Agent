@@ -23,6 +23,7 @@ dynamic = ["version"]
 # invisible-playwright-mcp is never pinned: an install takes its newest release.
 dependencies = [
     "click>=8.1",
+    "cryptography>=42",
     "duckdb>=1.1",
     "invisible-playwright-mcp",
     "mcp>=1.9",
