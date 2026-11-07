@@ -15,7 +15,21 @@ import duckdb
 import pytest
 
 from aihawk.config import Arc, ConfigError, Filters, Form, Node, Plan, load_config
-from aihawk.database import DatabaseError, Job, local_index, page_text, rarity, search, stored_description, stored_descriptions, with_description
+from aihawk.database import (
+    INDEX_COLUMNS,
+    DatabaseError,
+    Job,
+    _apply,
+    _chain,
+    description_files,
+    local_index,
+    page_text,
+    rarity,
+    search,
+    stored_description,
+    stored_descriptions,
+    with_description,
+)
 from aihawk.store import COLUMNS, Proof, Store, said, sent_word, write_applied
 
 JOB = Job("g:a:1", "Acme", "Senior Python Engineer", "Rome, Italy", "u", "a", "d")
@@ -303,7 +317,7 @@ def test_many_descriptions_come_in_order_and_empty_where_there_is_no_reference(t
     _, jobs = search(database(tmp_path), Filters(include=("python",)), 60, tmp_path)
     refs = [job.ref for job in jobs] + ["", "no-reference"]
     counts: list[int] = []
-    texts = stored_descriptions(refs, counts.append)
+    texts = stored_descriptions(refs, done=counts.append)
     assert texts == [stored_description(ref) for ref in refs[:-2]] + ["", ""]
     assert sorted(texts[:-2]) == ["Build", "Learn"] and counts[-1] == len(refs)
 
@@ -480,3 +494,84 @@ def test_a_new_folder_defaults_to_the_published_database(tmp_path: Path) -> None
     config = load_config(tmp_path)
     assert config.model == "deepseek/deepseek-v4.1-flash" and config.database.endswith("/jobs-latest/manifest.json")
 
+
+
+def _index_rows(path: Path, rows: list[tuple[str, str]]) -> None:
+    connection = duckdb.connect()
+    connection.execute(f"CREATE TABLE i ({', '.join(f'{column} VARCHAR' for column in INDEX_COLUMNS)})")
+    connection.executemany("INSERT INTO i (key, url, title) VALUES (?, ?, ?)", [(key, f"https://{key}", title) for key, title in rows])
+    connection.execute(f"COPY i TO '{path.as_posix()}' (FORMAT parquet)")
+
+
+def _delta_rows(path: Path, rows: list[tuple[str, str, str | None]]) -> None:
+    connection = duckdb.connect()
+    columns = ", ".join(f"{column} VARCHAR" for column in INDEX_COLUMNS)
+    connection.execute(f"CREATE TABLE d (op VARCHAR, {columns})")
+    connection.executemany("INSERT INTO d (op, key, url, title) VALUES (?, ?, ?, ?)",
+                           [(op, key, f"https://{key}" if title else None, title) for op, key, title in rows])
+    connection.execute(f"COPY d TO '{path.as_posix()}' (FORMAT parquet)")
+
+
+def test_the_chain_of_deltas_is_followed_from_the_build_this_computer_has() -> None:
+    deltas = [{"build": "b2", "after": "b1"}, {"build": "b3", "after": "b2"}, {"build": "b4", "after": "b3"}]
+    assert _chain(deltas, "b2") == deltas[1:]
+    assert _chain(deltas, "b4") == []
+    assert _chain(deltas, "b0") is None
+    assert _chain([{"build": "b2", "after": "b1"}, {"build": "b4", "after": "b3"}], "b1") is None
+
+
+def test_deltas_are_applied_in_one_rewrite_and_the_newest_action_on_a_key_wins(tmp_path: Path) -> None:
+    index = tmp_path / "index.parquet"
+    _index_rows(index, [("a", "Old A"), ("b", "B"), ("c", "C")])
+    # First delta: a changes, d arrives. Second: d goes again, e arrives, b goes.
+    _delta_rows(tmp_path / "delta-jobs-20261107-010000.parquet", [("add", "a", "New A"), ("add", "d", "D")])
+    _delta_rows(tmp_path / "delta-jobs-20261107-060000.parquet", [("drop", "d", None), ("add", "e", "E"), ("drop", "b", None)])
+    chain = [{"url": (tmp_path / "delta-jobs-20261107-010000.parquet").as_posix()}, {"url": (tmp_path / "delta-jobs-20261107-060000.parquet").as_posix()}]
+    _apply(index, chain)
+    rows = duckdb.connect().execute(f"SELECT key, title FROM read_parquet('{index.as_posix()}') ORDER BY key").fetchall()
+    assert rows == [("a", "New A"), ("c", "C"), ("e", "E")]
+
+
+def test_a_description_is_found_by_its_key_in_the_file_whose_range_holds_it(tmp_path: Path) -> None:
+    connection = duckdb.connect()
+    for name, rows in (("jobs_0.parquet", [("a/1", "First"), ("a/2", "Second")]), ("jobs_1.parquet", [("b/1", "Third")])):
+        connection.execute("CREATE OR REPLACE TABLE t (key VARCHAR, description VARCHAR)")
+        connection.executemany("INSERT INTO t VALUES (?, ?)", rows)
+        connection.execute(f"COPY (SELECT * FROM t ORDER BY key) TO '{(tmp_path / name).as_posix()}' (FORMAT parquet)")
+    manifest = {"base_url": tmp_path.as_posix(), "files": [
+        {"name": "jobs_1.parquet", "first_key": "b/1", "last_key": "b/1"},
+        {"name": "jobs_0.parquet", "first_key": "a/1", "last_key": "a/2"},
+    ]}
+    files = description_files(manifest, "unused")
+    assert [first for first, _, _ in files] == ["a/1", "b/1"]
+    assert stored_descriptions(["b/1", "a/2", "zz/9", ""], files) == ["Third", "Second", "", ""]
+
+
+def test_an_index_kept_here_is_downloaded_once_then_brought_up_to_date_by_its_deltas(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    release = tmp_path / "release"
+    release.mkdir()
+    snapshot = release / "index.parquet"
+    _index_rows(snapshot, [("a", "A"), ("b", "B")])
+    downloads: list[str] = []
+
+    def served(url: str, *_: object, **__: object) -> io.BytesIO:
+        downloads.append(url)
+        return io.BytesIO(snapshot.read_bytes())
+
+    monkeypatch.setattr("urllib.request.urlopen", served)
+    cache = tmp_path / "cache"
+    first = {"build": "b1", "deltas": [], "index": {"name": "index.parquet", "bytes": snapshot.stat().st_size},
+             "built_at": "2026-11-07T01:00:00+00:00", "base_url": "https://a.example/b1"}
+    path = local_index(first, "https://a.example/manifest.json", cache)
+    assert duckdb.connect().execute(f"SELECT count(*) FROM read_parquet('{path.as_posix()}')").fetchone()[0] == 2
+    assert len(downloads) == 1
+    _delta_rows(release / "delta-jobs-b2.parquet", [("add", "c", "C"), ("drop", "a", None)])
+    second = {**first, "build": "b2", "base_url": "https://a.example/b2",
+              "deltas": [{"build": "b2", "after": "b1", "url": (release / "delta-jobs-b2.parquet").as_posix(), "adds": 1, "drops": 1}]}
+    lines: list[str] = []
+    path = local_index(second, "https://a.example/manifest.json", cache, lines.append)
+    assert len(downloads) == 1, "the whole index is never downloaded again"
+    assert lines == ["updating the job index: 1 postings new or changed, 1 gone"]
+    keys = [row[0] for row in duckdb.connect().execute(f"SELECT key FROM read_parquet('{path.as_posix()}') ORDER BY key").fetchall()]
+    assert keys == ["b", "c"]
+    assert local_index(second, "https://a.example/manifest.json", cache) == path and len(downloads) == 1

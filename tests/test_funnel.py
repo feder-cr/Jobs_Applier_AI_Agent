@@ -173,7 +173,7 @@ def test_the_places_a_posting_names_have_no_empty_part(cities: list[str], locati
 
 
 def test_a_description_database_that_cannot_be_read_is_said_once_and_the_funnel_goes_on(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    def unreadable(refs: list[str], done: Any, problem: Any) -> list[str]:
+    def unreadable(refs: list[str], files: Any, done: Any, problem: Any) -> list[str]:
         problem("Some job descriptions could not be read from the job database, so those postings are judged without them.")
         return [""] * len(refs)
 

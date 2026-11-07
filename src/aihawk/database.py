@@ -8,11 +8,13 @@ import json
 import math
 import re
 import urllib.request
+from bisect import bisect_right
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from html.parser import HTMLParser
 from http.client import HTTPException
+from itertools import pairwise
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -25,6 +27,9 @@ RECALL = 600
 # What being in the person's own city is worth, against a node of the plan: about as much as a named skill.
 CITY_WEIGHT = 1.5
 # What a remote posting's location says when it does not narrow the job to a place.
+# The columns an index kept on this computer holds: the release's own, without the file and row that point into one
+# build's files, since a description is found by its key.
+INDEX_COLUMNS = ("key", "url", "title", "company", "ats", "location", "country", "remote", "salary_min", "salary_max", "salary_currency", "posted_at")
 NO_PLACE = ("", "remote", "anywhere", "worldwide", "global")
 
 
@@ -77,35 +82,67 @@ def page_text(markup: str) -> str:
     return re.sub(r"\n\s*\n+", "\n\n", "".join(parser.parts)).strip()
 
 
-def stored_descriptions(refs: list[str], done: Callable[[int], None] = lambda _: None, problem: Callable[[str], None] = lambda _: None) -> list[str]:
+def description_files(manifest: dict[str, Any], location: str) -> tuple[tuple[str, str, str], ...]:
+    """Where a description is found by its posting's key: each file's first key, last key and address, in key order.
+    Empty for a database from before schema 2, whose files are not in key order."""
+    base = _base(manifest, location)
+    found = [(item["first_key"], item["last_key"], f"{base}/{item['name']}") for item in manifest.get("files", []) if "first_key" in item]
+    return tuple(sorted(found))
+
+
+def _holder(key: str, files: tuple[tuple[str, str, str], ...]) -> str | None:
+    """The file whose range of keys holds this one, or None."""
+    at = bisect_right([first for first, _, _ in files], key) - 1
+    return files[at][2] if at >= 0 and key <= files[at][1] else None
+
+
+def stored_descriptions(
+    refs: list[str],
+    files: tuple[tuple[str, str, str], ...] = (),
+    done: Callable[[int], None] = lambda _: None,
+    problem: Callable[[str], None] = lambda _: None,
+) -> list[str]:
     """The descriptions the database holds for these postings, in order; empty where its sources published none.
 
-    One connection, and one query per file: a file's footer is fetched once for the search, not once per posting, which
-    downloads far less over HTTP.
+    A ref is a file and a row, `<file>#<row>`, in a database from before schema 2, or a posting's key, found in the one file
+    whose range holds it. One connection, and one query per file: a file's footer is fetched once for the search, not once
+    per posting, and a key read in a file in key order reads only the row group that can hold it.
     `done` is told how many have been read, as each file is. A read that fails is told once to `problem`, and the
     descriptions read before it are kept: the search goes on with what it has.
     """
     texts = [""] * len(refs)
-    by_file: dict[str, list[tuple[int, int]]] = {}
+    by_row: dict[str, list[tuple[int, int]]] = {}
+    by_key: dict[str, list[tuple[int, str]]] = {}
     count = 0
     for position, ref in enumerate(refs):
-        if "#" not in ref:
+        if "#" in ref:
+            file, number = ref.rsplit("#", 1)
+            by_row.setdefault(file, []).append((position, int(number)))
+        elif ref and (file := _holder(ref, files)):
+            by_key.setdefault(file, []).append((position, ref))
+        else:
             count += 1
             done(count)
-            continue
-        file, number = ref.rsplit("#", 1)
-        by_file.setdefault(file, []).append((position, int(number)))
-    if by_file:
+    if by_row or by_key:
         connection = duckdb.connect()
         try:
             connection.execute("INSTALL httpfs; LOAD httpfs;")
-            for file, places in by_file.items():
-                marks = ", ".join(str(number) for _, number in places)
+            for file, rows in by_row.items():
+                marks = ", ".join(str(number) for _, number in rows)
                 query = f"SELECT file_row_number, description FROM read_parquet(?, file_row_number = true) WHERE file_row_number IN ({marks})"
                 found = dict(connection.execute(query, [file]).fetchall())
-                for position, number in places:
+                for position, number in rows:
                     texts[position] = found.get(number) or ""
-                count += len(places)
+                count += len(rows)
+                done(count)
+            for file, keys in by_key.items():
+                # Constants, not a subquery: that is what lets the reader skip every row group whose range cannot hold them.
+                marks = ", ".join("?" for _ in keys)
+                query = f"SELECT key, description FROM read_parquet(?) WHERE key IN ({marks})"
+                found = dict(connection.execute(query, [file, *(key for _, key in keys)]).fetchall())
+                for position, key in keys:
+                    texts[position] = found.get(key) or ""
+                count += len(keys)
                 done(count)
         except duckdb.Error:
             problem("Some job descriptions could not be read from the job database, so those postings are judged without them.")
@@ -114,16 +151,17 @@ def stored_descriptions(refs: list[str], done: Callable[[int], None] = lambda _:
     return texts
 
 
-def stored_description(ref: str) -> str:
+def stored_description(ref: str, files: tuple[tuple[str, str, str], ...] = ()) -> str:
     """The description the database holds for one posting; empty when its sources published none."""
-    return stored_descriptions([ref])[0]
+    return stored_descriptions([ref], files)[0]
 
 
-def with_description(job: Job, timeout: float = 30.0) -> Job:
+def with_description(job: Job, timeout: float = 30.0, files: tuple[tuple[str, str, str], ...] = ()) -> Job:
     """The job with its description: the database's, or else the text of its page. One job, the one being judged."""
     if job.description.strip():
         return job
-    stored = stored_description(job.ref)
+    # Found by its key where the database says where keys are: that holds for every job, whatever build it came from.
+    stored = stored_description(job.id if files else job.ref, files)
     if stored.strip():
         return replace(job, description=stored)
     try:
@@ -164,16 +202,105 @@ def _base(manifest: dict[str, Any], location: str) -> str:
 
 
 def local_index(manifest: dict[str, Any], location: str, cache: Path, log: Callable[[str], None] = lambda _: None) -> Path:
-    """Today's index on this computer: downloaded once per database, in one rename, and the older ones removed."""
+    """The index on this computer, as of the manifest's build.
+
+    A database that publishes deltas, schema 2, is downloaded whole once and then kept up to date by applying the deltas
+    it has not seen, in order. One from before keeps the old way: downloaded once per build, the older copies removed.
+    """
     source = f"{_base(manifest, location)}/{manifest['index']['name']}"
     if not source.startswith(("http://", "https://")):
         return Path(source)
     cache.mkdir(parents=True, exist_ok=True)
+    if manifest.get("build") and "deltas" in manifest:
+        return _kept_index(manifest, source, cache, log)
     stamp = re.sub(r"[^0-9]", "", manifest["built_at"])
     path = cache / f"index-{stamp}.parquet"
     if path.is_file():
         return path
-    log(f"downloading the job index built {built_at(manifest):%Y-%m-%d} ({manifest['index']['bytes'] // 1_000_000} MB), once per database")
+    _download(manifest, source, path, log)
+    for old in cache.glob("index-*.parquet"):
+        if old != path:
+            old.unlink()
+    return path
+
+
+def _chain(deltas: list[dict[str, Any]], have: str) -> list[dict[str, Any]] | None:
+    """The deltas that lead from the build this computer has to the newest, in order: none when it has the newest already,
+    None when they cannot be followed."""
+    if deltas and deltas[-1]["build"] == have:
+        return []
+    start = next((at for at, delta in enumerate(deltas) if delta["after"] == have), None)
+    if start is None:
+        return None
+    chain = deltas[start:]
+    if any(later["after"] != earlier["build"] for earlier, later in pairwise(chain)):
+        return None
+    return chain
+
+
+def _apply(path: Path, chain: list[dict[str, Any]]) -> None:
+    """Apply the deltas to the index in one rewrite. A key in several deltas takes its newest row, as Delta Lake's log does:
+    the last action on a key is its state, so a posting added, then changed, then gone, ends gone."""
+    columns = ", ".join(INDEX_COLUMNS)
+    partial = path.with_suffix(".applying")
+    connection = duckdb.connect()
+    try:
+        connection.execute("INSTALL httpfs; LOAD httpfs;")
+        connection.execute(
+            """CREATE TABLE changes AS
+               SELECT * EXCLUDE (filename, newest) FROM (
+                   SELECT *, row_number() OVER (PARTITION BY key ORDER BY filename DESC) AS newest
+                   FROM read_parquet(?, filename = true, union_by_name = true)
+               ) WHERE newest = 1""",
+            [[delta["url"] for delta in chain]],
+        )
+        connection.execute(f"""
+            COPY (
+                SELECT {columns} FROM read_parquet(?) WHERE key NOT IN (SELECT key FROM changes)
+                UNION ALL
+                SELECT {columns} FROM changes WHERE op = 'add'
+            ) TO '{partial.as_posix()}' (FORMAT parquet, COMPRESSION zstd)
+        """, [path.as_posix()])
+    except duckdb.Error as error:
+        partial.unlink(missing_ok=True)
+        raise DatabaseError(f"the job index could not be brought up to date: {error}") from error
+    finally:
+        connection.close()
+    partial.replace(path)
+
+
+def _kept_index(manifest: dict[str, Any], source: str, cache: Path, log: Callable[[str], None]) -> Path:
+    path = cache / "index.parquet"
+    state = cache / "index.build"
+    build = manifest["build"]
+    have = state.read_text(encoding="utf-8").strip() if path.is_file() and state.is_file() else ""
+    if have == build:
+        return path
+    chain = _chain(manifest["deltas"], have) if have else None
+    if chain is not None:
+        log(f"updating the job index: {sum(delta['adds'] for delta in chain):,} postings new or changed, {sum(delta['drops'] for delta in chain):,} gone")
+        _apply(path, chain)
+        state.write_text(build, encoding="utf-8")
+        return path
+    # The first time, or a gap no delta covers: the whole index, once, in the columns kept here.
+    whole = cache / "index.download"
+    _download(manifest, source, whole, log)
+    connection = duckdb.connect()
+    try:
+        connection.execute(f"COPY (SELECT {', '.join(INDEX_COLUMNS)} FROM read_parquet(?)) TO '{path.as_posix()}' (FORMAT parquet, COMPRESSION zstd)",
+                           [whole.as_posix()])
+    finally:
+        connection.close()
+    whole.unlink()
+    state.write_text(build, encoding="utf-8")
+    for old in cache.glob("index-*.parquet"):
+        old.unlink()
+    return path
+
+
+def _download(manifest: dict[str, Any], source: str, path: Path, log: Callable[[str], None]) -> None:
+    """The release's whole index into `path`, in one rename at the end, saying how far it has come."""
+    log(f"downloading the job index built {built_at(manifest):%Y-%m-%d} ({manifest['index']['bytes'] // 1_000_000} MB), once")
     partial = path.with_suffix(".part")
     try:
         with urllib.request.urlopen(source, timeout=120) as response, partial.open("wb") as out:
@@ -188,13 +315,9 @@ def local_index(manifest: dict[str, Any], location: str, cache: Path, log: Calla
     except OSError as error:
         partial.unlink(missing_ok=True)
         if error.errno == errno.ENOSPC:
-            raise DatabaseError(f"The disk is full: the job index needs {manifest['index']['bytes'] // 1_000_000} MB free in {cache}. Free some space, then start AIHawk again.") from error
+            raise DatabaseError(f"The disk is full: the job index needs {manifest['index']['bytes'] // 1_000_000} MB free in {path.parent}. Free some space, then start AIHawk again.") from error
         raise DatabaseError(unreachable(error)) from error
     partial.replace(path)
-    for old in cache.glob("index-*.parquet"):
-        if old != path:
-            old.unlink()
-    return path
 
 
 def _word_pattern(words: tuple[str, ...]) -> str:
@@ -341,6 +464,9 @@ def search(
         raise DatabaseError("the plan weighs nothing: give a node a weight above 0")
     manifest = load_manifest(location)
     index = str(local_index(manifest, location, cache, log))
+    # An index kept up to date here has no file and row: a posting's description is then found by its key.
+    held = {row[0] for row in duckdb.connect().execute("DESCRIBE SELECT * FROM read_parquet(?)", [index]).fetchall()}
+    pointer = "part, row_number" if "part" in held else "NULL AS part, NULL AS row_number"
     base = _base(manifest, location)
     texts = tuple(dict.fromkeys(form.text for node in nodes for form in node.forms))
     patterns = {text: _whole_words((text,)) for text in texts}
@@ -364,7 +490,7 @@ def search(
         rows = [
             _Posting(*row)
             for row in connection.execute(
-                f"""SELECT key, coalesce(company, ''), title, coalesce(location, ''), url, part, row_number,
+                f"""SELECT key, coalesce(company, ''), title, coalesce(location, ''), url, {pointer},
                         TRY_CAST(posted_at AS TIMESTAMP)
                     FROM read_parquet(?) WHERE {' AND '.join(clauses)}""",
                 [index, *parameters],
@@ -403,7 +529,7 @@ def search(
             row.url,
             row.url,
             "",
-            f"{base}/{row.part}#{row.number}",
+            f"{base}/{row.part}#{row.number}" if row.part is not None else row.key,
             score / best,
         )
         for score, row in ranked

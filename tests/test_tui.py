@@ -697,7 +697,7 @@ def test_a_posting_with_no_stored_text_is_scored_on_its_own_pages_text(home: Pat
     session.store.add(Job("told", "Firm", "Python Engineer", "Milan", "https://a.example/2", "https://a.example/2", "Stored text.", "", 1.0))
     fetched: list[str] = []
 
-    def page(job: Job) -> Job:
+    def page(job: Job, *_: Any) -> Job:
         fetched.append(job.id)
         return replace(job, description="The text of its page.")
 
