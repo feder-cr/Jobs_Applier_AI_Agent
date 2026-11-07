@@ -18,7 +18,7 @@ from aihawk.apply import MAILBOXES, mail_provider
 from aihawk.config import KEY_ENV, KEY_URL, ConfigError
 from aihawk.database import DatabaseError
 from aihawk.documents import QUESTIONS
-from aihawk.llm import explain, refused
+from aihawk.llm import SPEND, explain, money, refused
 from aihawk.session import Session
 from aihawk.store import SUBMITTED, Sent, Stored, said, sent_word
 
@@ -147,9 +147,9 @@ class SentDetails(ModalScreen[None]):
         item, proof = self.item, self.item.proof
         lines = [
             item.job.title,
-            f"{item.job.company} Â· {item.job.location}",
+            f"{item.job.company} · {item.job.location}",
             "",
-            f"{sent_word(item)} Â· {item.when}",
+            f"{sent_word(item)} · {item.when}" + (f" · {money(item.cost)}" if item.cost is not None else ""),
             f"Posting: {item.job.url}",
             f"Address after the send: {proof.url or '-'}",
             f"Screenshot: {proof.screenshot or '-'}",
@@ -178,10 +178,10 @@ class JobDetails(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         job, report = self.item.job, self.item.report or {}
-        lines = [f"{job.title}", f"{job.company} Â· {job.location}", job.url, ""]
+        lines = [f"{job.title}", f"{job.company} · {job.location}", job.url, ""]
         if report:
-            answers = " Â· ".join(f"{name.replace('_', ' ')}: {report.get(name, '?')}" for name in QUESTIONS)
-            lines += [f"Score {report.get('score', 0):.1f}/5 Â· posting looks {report.get('legitimacy', '?')}", answers, "", report.get("summary", "")]
+            answers = " · ".join(f"{name.replace('_', ' ')}: {report.get(name, '?')}" for name in QUESTIONS)
+            lines += [f"Score {report.get('score', 0):.1f}/5 · posting looks {report.get('legitimacy', '?')}", answers, "", report.get("summary", "")]
             if report.get("gaps"):
                 lines += ["", "Gaps:", *(f"  - {gap}" for gap in report["gaps"])]
             if not job.description.strip():
@@ -218,7 +218,7 @@ class Settings(ModalScreen[str | None]):
         with Vertical(id="wide"):
             yield Static(self.title_text, id="question", markup=False)
             yield DataTable(id="settings", cursor_type="row", show_header=False)
-            yield Static("Enter changes it Â· Esc goes back", classes="hint")
+            yield Static("Enter changes it · Esc goes back", classes="hint")
             yield Footer()
 
     def on_mount(self) -> None:
@@ -428,6 +428,8 @@ class AIHawk(App[None]):
 
     async def judge(self) -> None:
         session = self.session
+        await session.priced()
+        before = SPEND.total
         if session.store.with_status("new"):
             self.say("Reading the best postings; a minute or two.")
         # The counters the session offers are not shown: the scores filling the list are the progress.
@@ -439,7 +441,7 @@ class AIHawk(App[None]):
             return
         self.say(f"Scoring {len(items)}.")
         await session.score(items, self.refresh_jobs, self.say)
-        self.say("Done.")
+        self.say(f"Done, {money(SPEND.total - before)}.")
 
     # The keys.
 
@@ -507,6 +509,7 @@ class AIHawk(App[None]):
             ("judge_model", "Scoring model", config.judge_model),
             ("quick_model", "Search plan model", config.quick_model),
             ("decision_model", "Shortlist model", config.decision_model),
+            ("spent", "Spent since the start", money(SPEND.total) + (f", plus {SPEND.unpriced} calls the price list does not cover" if SPEND.unpriced else "")),
             ("folder", "Your files", str(config.workspace)),
         ]
 
@@ -531,6 +534,8 @@ class AIHawk(App[None]):
             if choice == "sign_in":
                 self.sign_in()
                 return
+            if choice == "spent":
+                continue
             if choice == "folder":
                 webbrowser.open(self.session.config.workspace.as_uri())
             elif choice == "mail":

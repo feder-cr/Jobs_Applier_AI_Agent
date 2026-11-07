@@ -15,7 +15,7 @@ from aihawk.config import KEY_ENV, KEY_URL, Config, ConfigError, load_config
 from aihawk.database import built_at, search, stored_descriptions, with_description
 from aihawk.documents import score_job
 from aihawk.judge import evidence, fuse, questions
-from aihawk.llm import explain, make_client, refused
+from aihawk.llm import SPEND, explain, make_client, money, refused
 from aihawk.plugins import Plugin, always_plugins, load_plugins, plugin_for
 from aihawk.profile import ensure_account_password, import_answers_file, install_resume, save_setting
 from aihawk.store import SENT_WORDS, SUBMITTED, Store, Stored, write_applied
@@ -92,6 +92,10 @@ class Session:
         url, _ = MAILBOXES[provider]
         where = await sign_in_browser(self.config.browser_profile, self.config.data_dir / "browser", wait, url)
         return signed_in(provider, where)
+
+    async def priced(self) -> None:
+        """The gateway's price list, read once, so each call's cost can be counted."""
+        await SPEND.load_prices(self.client)
 
     async def find(self, log: Log) -> int:
         """Bring the postings for this search from the job database into the store; how many are new."""
@@ -183,10 +187,11 @@ class Session:
         """Send each application once; each with what came of it."""
         results = []
         for item in items:
+            before = SPEND.total
             outcome = await self.apply(item, log)
             results.append((item, outcome))
             done()
-            log(f"{item.job.company}: {SENT_WORDS.get(outcome.status, outcome.status)}. {outcome.proof.evidence}".strip())
+            log(f"{item.job.company}: {SENT_WORDS.get(outcome.status, outcome.status)}. {outcome.proof.evidence} ({money(SPEND.total - before)})".replace("  (", " ("))
         return results
 
     async def apply(self, item: Stored, log: Log) -> Outcome:
@@ -200,6 +205,8 @@ class Session:
         answers = self.store.answers_text()
         extras = always_plugins(self.plugins)
         guidance = "\n\n".join([*([plugin.instructions] if plugin else []), *(extra.instructions for extra in extras)])
+        await self.priced()
+        before = SPEND.total
         try:
             cv_file = self._own_cv()
             log(f"{item.job.company}: filling the form")
@@ -212,6 +219,7 @@ class Session:
             outcome = Outcome("failed", explain(error))
         self.store.set_status(item.job.id, outcome.status, outcome.summary)
         self.store.set_proof(item.job.id, outcome.proof)
+        self.store.set_cost(item.job.id, SPEND.total - before)
         # The file for the person outside the app. One that another program holds open must not stop the next send.
         try:
             write_applied(self.config.workspace / "applied.csv", self.store.sent())

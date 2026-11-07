@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     page_text TEXT,
     screenshot TEXT,
     first_seen TEXT NOT NULL,
-    updated TEXT NOT NULL
+    updated TEXT NOT NULL,
+    cost REAL
 )
 """
 
@@ -88,6 +89,7 @@ class Sent:
     note: str
     when: str
     proof: Proof
+    cost: float | None = None
 
 
 @dataclass(frozen=True)
@@ -141,6 +143,10 @@ class Store:
         self._db.row_factory = sqlite3.Row
         self._db.execute(SCHEMA)
         self._db.execute(ANSWERS_SCHEMA)
+        # A store from before the cost was kept gets the column; the rows keep their nulls.
+        if "cost" not in {row[1] for row in self._db.execute("PRAGMA table_info(jobs)")}:
+            self._db.execute("ALTER TABLE jobs ADD COLUMN cost REAL")
+            self._db.commit()
 
     def close(self) -> None:
         self._db.close()
@@ -169,7 +175,7 @@ class Store:
         """Every job tried, the newest first."""
         marks = ",".join("?" * len(SENT_WORDS))
         rows = self._db.execute(f"SELECT * FROM jobs WHERE status IN ({marks}) ORDER BY COALESCE(sent_at, updated) DESC", tuple(SENT_WORDS)).fetchall()
-        return [Sent(self._job(row), row["status"], row["note"] or "", row["sent_at"] or row["updated"], self._proof(row)) for row in rows]
+        return [Sent(self._job(row), row["status"], row["note"] or "", row["sent_at"] or row["updated"], self._proof(row), row["cost"]) for row in rows]
 
     @staticmethod
     def _proof(row: sqlite3.Row) -> Proof:
@@ -243,6 +249,10 @@ class Store:
 
     def set_status(self, job_id: str, status: str, note: str = "") -> None:
         self._db.execute("UPDATE jobs SET status = ?, note = ?, updated = ? WHERE id = ?", (status, note, _now(), job_id))
+        self._db.commit()
+
+    def set_cost(self, job_id: str, cost: float) -> None:
+        self._db.execute("UPDATE jobs SET cost = ? WHERE id = ?", (cost, job_id))
         self._db.commit()
 
     def set_proof(self, job_id: str, proof: Proof) -> None:
