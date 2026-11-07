@@ -33,7 +33,9 @@ HF_API = "https://huggingface.co/api/datasets"
 RAW = "https://raw.githubusercontent.com"
 # Files of about 128 MB and row groups of 2048 rows: small row groups let a search read only the rows it needs over HTTP.
 # A group is a whole description column chunk, which DuckDB cannot write below 2048 rows.
-MAX_FILE = "128MB"
+# Postings to a description file: about 120 MB at the measured 590 bytes a posting, under GitHub's 2 GiB a file, and small
+# enough that one file is sorted by key in memory.
+ROWS_PER_FILE = 200_000
 ROW_GROUP = 2048
 INDEX = "index.parquet"
 
@@ -257,6 +259,9 @@ def connect(work: Path) -> duckdb.DuckDBPyConnection:
     connection.execute(f"SET temp_directory = '{(work / 'tmp').as_posix()}'")
     connection.execute("SET preserve_insertion_order = false")
     connection.execute("SET max_temp_directory_size = '40GB'")
+    # Below the runner's 16 GB, so DuckDB spills to the temp directory before the system runs out: a build that sorted
+    # with the default limit used 12.4 GiB of 12.4 and stopped.
+    connection.execute("SET memory_limit = '9GB'")
     return connection
 
 
@@ -306,18 +311,30 @@ def merge(connection: duckdb.DuckDBPyConnection, work: Path) -> dict[str, int]:
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
     columns = ", ".join(f"row.{column}" for column in COMMON)
+    # The files are in key order, so a reader that asks for a posting by its key reads the one row group that can hold it,
+    # whatever build it came from. Sorting ten million rows with their descriptions at once ran a runner out of memory,
+    # so only the keys are sorted, into ranges of ROWS_PER_FILE; the rows go to their range's part in one pass; and each
+    # part, a file's worth, is sorted alone.
+    connection.execute(f"CREATE OR REPLACE TEMP TABLE ranges AS SELECT key, (row_number() OVER (ORDER BY key) - 1) // {ROWS_PER_FILE} AS part FROM best")
+    parts = work / "tmp" / "parts"
+    shutil.rmtree(parts, ignore_errors=True)
     connection.execute(f"""
         COPY (
-            SELECT best.key, {columns}, best.sources
+            SELECT best.key, {columns}, best.sources, ranges.part
             FROM {every_row} AS row
             JOIN best ON row.filename = best.winner.filename AND row.file_row_number = best.winner.row
-            -- In key order, so a file holds one range of keys and a row group a narrow one: a reader that asks for a
-            -- posting by its key reads the one row group that can hold it, whatever build it is.
-            ORDER BY best.key
-        ) TO '{out.as_posix()}' (
-            FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE {ROW_GROUP}, FILE_SIZE_BYTES '{MAX_FILE}', FILENAME_PATTERN 'jobs_{{i}}'
+            JOIN ranges ON ranges.key = best.key
+        ) TO '{parts.as_posix()}' (
+            -- One open file a range, each holding a row group in memory: small row groups keep fifty of them light.
+            FORMAT parquet, COMPRESSION zstd, PARTITION_BY (part), ROW_GROUP_SIZE {ROW_GROUP}
         )
     """)
+    for part in sorted(parts.glob("part=*"), key=lambda folder: int(folder.name.split("=")[1])):
+        connection.execute(f"""
+            COPY (SELECT * FROM read_parquet('{part.as_posix()}/*.parquet', hive_partitioning = false) ORDER BY key)
+            TO '{(out / f"jobs_{part.name.split('=')[1]}.parquet").as_posix()}' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE {ROW_GROUP})
+        """)
+        shutil.rmtree(part)
     rows_out = connection.execute(f"SELECT count(*) FROM read_parquet('{out.as_posix()}/jobs_*.parquet')").fetchone()[0]
     if rows_out != rows_out_expected:
         raise SystemExit(f"{rows_out_expected} postings chosen and {rows_out} written")

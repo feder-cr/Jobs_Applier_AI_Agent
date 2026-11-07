@@ -90,7 +90,7 @@ def test_the_index_points_at_each_description_without_holding_it(tmp_path: Path)
 
 
 def test_row_groups_stay_at_the_measured_size_and_the_files_stay_small(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(build, "MAX_FILE", "100KB")
+    monkeypatch.setattr(build, "ROWS_PER_FILE", 1000)
     write_source(tmp_path, "s", [(f"https://a.example/{number}", f"Job {number}", uuid.uuid4().hex + uuid.uuid4().hex) for number in range(20000)])
     merged(tmp_path)
     files = sorted((tmp_path / "out").glob("jobs_*.parquet"))
@@ -142,7 +142,7 @@ def test_every_source_names_its_home_and_licence() -> None:
 
 def test_descriptions_are_written_in_key_order_and_each_file_says_its_range(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # A reader asks for a posting by key and reads the one file, and the one row group, that can hold it.
-    monkeypatch.setattr(build, "MAX_FILE", "100KB")
+    monkeypatch.setattr(build, "ROWS_PER_FILE", 1000)
     write_source(tmp_path, "s", [(f"https://a.example/{uuid.uuid4().hex}", "Job", uuid.uuid4().hex * 4) for _ in range(6000)])
     merged(tmp_path)
     connection = duckdb.connect()
