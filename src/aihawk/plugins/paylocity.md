@@ -14,7 +14,7 @@ The address uses `#public-site-address-address-1` (a combobox: read the page aft
 
 The mobile number is written with no spaces, such as `+447700900123`: with spaces it is refused as "Invalid phone number format".
 
-These forms often require a full home address, work history and references. Add the roles from the CV with "Add Work History" until the page's errors stop naming it. If a reference is required and neither the CV nor the answers name one, call finish_form with status blocked and say so: a person's name is not something to invent.
+These forms often require a full home address, work history and references. Add the roles from the CV with "Add Work History" until the page's errors stop naming it.
 
 Dropdowns are `div[role="combobox"]` showing "--" until a choice is made, such as `#info\.haveYouAppliedWithUsBefore`. "How did you hear about us" is a radio list (`#info\.howDidYouHearAboutUs`): choose what the answers say.
 

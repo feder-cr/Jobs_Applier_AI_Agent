@@ -9,7 +9,7 @@ The form is on the posting's Application tab (`#job-application-form`), at `/app
 
 Location is a typeahead with the placeholder "Start typing...".
 
-Yes and No questions, such as work authorization or visa sponsorship, are answered by clicking a button labelled "Yes" or "No", and each pair follows its question's label. Those buttons carry generated ids, so read the question's own container with browser_read_html and take the button from inside it: a selector borrowed from another question answers the wrong one. Read the page afterwards to see the answer selected, and if a required question will not take one, call finish_form with status blocked and name the question.
+Yes and No questions, such as work authorization or visa sponsorship, are answered by clicking a button labelled "Yes" or "No", and each pair follows its question's label. Those buttons carry generated ids, so read the question's own container with browser_read_html and take the button from inside it: a selector borrowed from another question answers the wrong one. Read the page afterwards to see the answer selected.
 
 The submit control is the button "Submit Application". On two forms in the trials it stayed disabled and the click did not land, so nothing was sent: read the page for a required field still empty, fill it, and read the page again. If it stays disabled, call finish_form with status blocked and name the fields the page marks as missing. Why it stays disabled on a form that looks complete is not known.
 

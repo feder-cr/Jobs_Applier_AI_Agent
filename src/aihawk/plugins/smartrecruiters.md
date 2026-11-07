@@ -22,6 +22,6 @@ The form scrolls inside its own container, so PageUp and PageDown move nothing: 
 
 The "Preliminary questions" step often asks for the right to work, sponsorship, and a block of required boxes with the person's name and today's date, stating that the answers are true. Its fields carry an id `question_<uuid>` on a wrapper and on the control alike: type into `input#question_<uuid>` or `textarea#question_<uuid>`, never the bare id, which browser_type refuses ("not an input"). Seen on a real form, one step lost that way.
 
-The last step's footer control sends the application: `[data-test='footer-submit']`, labelled "Submit". Its label is what the page says, for example "Submit application". Never click it. If a plain CSS selector matches only that control, name it as the submit control; if none does, call finish_form with status blocked and say that the send control could not be named.
+The last step's footer control sends the application: `[data-test='footer-submit']`, labelled "Submit". Its label is what the page says, for example "Submit application". Never click it. Name it as the submit control only when a plain CSS selector matches that control alone.
 
 After sending: read the page: if the form is still there, the application was not received.

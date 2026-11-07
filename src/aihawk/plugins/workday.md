@@ -11,13 +11,13 @@ Sign in or create the account. The step "Create Account/Sign In" shows `SignInWi
 
 Both forms carry a hidden text field `beecatcher` (name `website`, "This input is for robots only"): never type in it.
 
-A code sent by email. After "Create Account", or at sign-in, the site may ask to verify the email address with a code it sent. Workday's messages are expected from an address at `myworkday.com`, often `<company>@myworkday.com`, though no real Workday mail has been read: search the sender domain `myworkday.com` first and the subject "verification code" second, as the mail instructions say, then come back to the form's address, read the page again and type the code where it asks. If no such message is there within the two looks the mail instructions allow, call finish_form with status blocked and say no code arrived.
+A code sent by email. After "Create Account", or at sign-in, the site may ask to verify the email address with a code it sent. Workday's messages are expected from an address at `myworkday.com`, often `<company>@myworkday.com`, though no real Workday mail has been read: read it as the mail instructions say, then come back to the form's address, read the page again and type the code where it asks.
 
 If sign-in with the account_password fails and the site says the account already exists, call finish_form with status blocked and say the account needs a password the answers do not hold. Do not try another password: Workday locks an account after a few attempts, and that account is the person's only way back to this company.
 
 The steps after sign-in, shown in the progress bar: "My Information", "My Experience", "Application Questions", "Voluntary Disclosures", "Self Identify" on some sites, and "Review". Each step ends with `[data-automation-id="bottom-navigation-next-button"]` ("Save and Continue"), and the page lists its errors at the top in red when a required field is missing: read them and fix each field before clicking again.
 
-What follows was read on a local copy of this flow, not on a company's Workday, so treat it as what to expect and the page as the truth. A step named here that the progress bar does not show is simply not there: go on. A field named here that the page does not show is not there either: use the labels the page gives. A required field with no answer in the CV or the answers ends the form: call finish_form with status blocked and name that field.
+What follows was read on a local copy of this flow, not on a company's Workday, so treat it as what to expect and the page as the truth. A step named here that the progress bar does not show is simply not there: go on. A field named here that the page does not show is not there either: use the labels the page gives.
 
 My Information: "How Did You Hear About Us?" is a list and "Have you previously worked for ..." a yes or no. Then the legal name (`legalNameSection_firstName`, `legalNameSection_lastName`), the address (`addressSection_addressLine1`, `addressSection_city`, `addressSection_postalCode`, with a region list on most countries) and the phone (`phone-device-type`, a country code list, `phone-number`).
 

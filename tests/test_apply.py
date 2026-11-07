@@ -518,10 +518,38 @@ def test_sign_in_on_a_mailbox_opens_it_and_says_where_the_page_is_after_the_pers
     assert server.calls[2] == ("browser_navigate", {"url": url}) and server.calls[3] == ("browser_navigate", {"url": url})
 
 
-def test_the_mailbox_may_be_opened_twice_and_the_third_look_ends_the_form_blocked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # The plugins say twice; the code holds the model to it, whatever it reasons, so a code that never comes costs few steps.
-    looks = [[tool_call("browser_navigate", url="https://mail.google.com/mail/u/0/#search/from%3Aexample.com")]] * 3
+def go(url: str) -> list[Any]:
+    return [tool_call("browser_navigate", url=url)]
+
+
+def mailbox_pages(browser: ScriptedBrowser) -> int:
+    return sum(1 for name, arguments in browser.calls if name == "browser_navigate" and "mail.google.com" in arguments["url"])
+
+
+def test_moving_about_inside_one_mailbox_visit_is_free(tmp_path: Path) -> None:
+    # Finding one message takes several pages of the mailbox, so the limit counts arrivals at it, not pages of it.
     browser = ScriptedBrowser({"#send": SUBMIT}, page={"url": "https://u/apply", "text": "the form"})
-    outcome = run(ScriptedModel(*looks, ready()), browser, tmp_path / "shot.png")
-    assert outcome.status == "blocked" and outcome.summary == apply_module.NO_CODE
-    assert sum(1 for name, arguments in browser.calls if name == "browser_navigate" and "mail.google.com" in arguments["url"]) == 2
+    model = ScriptedModel(
+        go("https://mail.google.com/mail/u/0/#search/subject%3Averification"),
+        go("https://mail.google.com/mail/u/0/#inbox"),
+        go("https://mail.google.com/mail/u/0/#search/newer_than%3A1d"),
+        ready(),
+    )
+    report = asyncio.run(fill_form(browser, [], model, "m", "the brief"))  # type: ignore[arg-type]
+    assert report["status"] == "ready" and mailbox_pages(browser) == 3
+
+
+def test_the_third_arrival_at_the_mailbox_ends_the_form_blocked(tmp_path: Path) -> None:
+    # Two visits, then the code stops the model, whatever it reasons: a code that is not there by now is not coming.
+    browser = ScriptedBrowser({"#send": SUBMIT}, page={"url": "https://u/apply", "text": "the form"})
+    model = ScriptedModel(
+        go("https://mail.google.com/mail/u/0/#search/subject%3Averification"),
+        go("https://u/apply"),
+        go("https://mail.google.com/mail/u/0/#search/subject%3Averification"),
+        go("https://u/apply"),
+        go("https://mail.google.com/mail/u/0/#inbox"),
+        ready(),
+    )
+    report = asyncio.run(fill_form(browser, [], model, "m", "the brief"))  # type: ignore[arg-type]
+    assert report == {"status": "blocked", "summary": apply_module.NO_CODE, "submit_selector": ""}
+    assert mailbox_pages(browser) == 2
