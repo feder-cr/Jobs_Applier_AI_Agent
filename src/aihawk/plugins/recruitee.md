@@ -17,4 +17,4 @@ A required field has a * with the title "This field is required and can not be l
 
 The submit control has `data-testid="submit-application-form-button"`, labelled "Send", "Versturen" or "Senden".
 
-After sending: the page says "Fertig!" and "Danke für deine Bewerbung!" on a German form, at an address ending in `/applied`. Recruitee usually sends an auto-confirmation email only for applications made on the careers site, not for applications by email or added by hand. Its wording is written per job. Read the page: if the form is still there, the application was not received.
+After sending: the page says "Fertig!" and "Danke für deine Bewerbung!" on a German form, at an address ending in `/applied`. Read the page: if the form is still there, the application was not received.

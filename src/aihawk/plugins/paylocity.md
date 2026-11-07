@@ -20,10 +20,10 @@ Dropdowns are `div[role="combobox"]` showing "--" until a choice is made, such a
 
 `#info\.dateAvailableToStart` takes MM/DD/YYYY and has a picker button beside it; work history dates take MM/YYYY.
 
-`#info\.skills` is a tag field ("Type a skill and press enter"). Leave it empty unless the form requires a skill. To add one, type one value from the CV or the answers, then press Enter, which makes it a tag; repeat for each.
+`#info\.skills` is a tag field ("Type a skill and press enter").
 
 "Add Work History" and "Add Education" add rows, with the same fields numbered `.0`, `.1`. "Select Cover Letter" is a file: leave it empty unless required.
 
-Demographic questions on the last steps are voluntary, and they are where this site eats its steps: on a real form they took most of 148. Set them in one pass, without reading the whole page between them, and because they are voluntary, give up on one after two tries and move on rather than the three the menus rules allow. `#acknowledgements\.eeoGender`, `#acknowledgements\.racialOrEthnicGroup`, `#acknowledgements\.disability`, `#acknowledgements\.militaryService` and `#expandedIdentityQuestions\.identifyAsLegalGender\.0` are listboxes with their options under `#<id>__listbox`: take the one whose text declines to answer, which was the last option in each of them, and never a guess at an answer. `#ethnicityOptions` and `#pronounOptions` are typeaheads: type `Prefer not to say` and take the first row of `#<id>-dropdown-list-container`, which reads "Create Prefer not to say" and sets the value all the same.
+Demographic questions on the last steps are voluntary, and they are where this site eats its steps: two tries on one of them is enough, then move on. `#acknowledgements\.eeoGender`, `#acknowledgements\.racialOrEthnicGroup`, `#acknowledgements\.disability`, `#acknowledgements\.militaryService` and `#expandedIdentityQuestions\.identifyAsLegalGender\.0` are listboxes with their options under `#<id>__listbox`: take the one whose text declines to answer, which was the last option in each of them, and never a guess at an answer. `#ethnicityOptions` and `#pronounOptions` are typeaheads: type `Prefer not to say` and take the first row of `#<id>-dropdown-list-container`, which reads "Create Prefer not to say" and sets the value all the same.
 
 After sending: read the page: if the form is still there, the application was not received.

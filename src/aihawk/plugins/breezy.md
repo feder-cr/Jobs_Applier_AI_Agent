@@ -17,4 +17,4 @@ Race, gender and veteran questions (`race_ethnicity`, `gender`, `eeoc.veteran_st
 
 The send control is `button[type='submit']`, the form's last control, labelled "Invia candidatura" on an Italian page.
 
-After sending: the page says "Application Submitted" and "Your application has been submitted successfully. Good luck!", at an address ending in `/apply/submitted`. A submitted application can show as applied while the candidate's email is still unverified, because Breezy counts it as applied at submit. Breezy may send a four-digit verification code by email. Read the page: if the form is still there, the application was not received.
+After sending: the page says "Application Submitted" and "Your application has been submitted successfully. Good luck!", at an address ending in `/apply/submitted`. Read the page: if the form is still there, the application was not received.

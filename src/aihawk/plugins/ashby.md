@@ -9,7 +9,7 @@ The form is on the posting's Application tab (`#job-application-form`), at `/app
 
 Location is a typeahead with the placeholder "Start typing...".
 
-Yes and No questions, such as work authorization or visa sponsorship, are answered by clicking a button labelled "Yes" or "No", and each pair follows its question's label. Those buttons carry generated ids, so read the question's own container with browser_read_html and take the button from inside it: a selector borrowed from another question answers the wrong one. On a real form `div:has(> label[for="<question uuid>"]) button:nth-of-type(2)` was No and the radio answers were reached by their own `label[for="<question uuid>_<option uuid>-labeled-..."]`. Read the page afterwards to see the answer selected.
+Yes and No questions, such as work authorization or visa sponsorship, are answered by clicking a button labelled "Yes" or "No", and each pair follows its question's label. Those buttons carry generated ids, so take each one from its own question's container: on a real form `div:has(> label[for="<question uuid>"]) button:nth-of-type(2)` was No and the radio answers were reached by their own `label[for="<question uuid>_<option uuid>-labeled-..."]`. Read the page afterwards to see the answer selected.
 
 A consent checkbox `#<uuid>__systemfield_data_consent_ack-labeled-checkbox` is required where the form has one.
 
