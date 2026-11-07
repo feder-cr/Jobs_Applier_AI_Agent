@@ -16,7 +16,7 @@ What AIHawk can do on each site, from the real forms it has been run on. Posting
 | Workable (apply.workable.com) | ~35k | send clicked, not confirmed | One real form filled and sent: the button stayed on "Submitting…" beside an unticked Cloudflare box, and the browser was closed with no answer from the page. |
 | Paylocity (recruiting.paylocity.com) | ~228k | reaches the send button, not always | One real form of 5 steps filled in about 27 minutes, and the send button named. A later run stopped at 150 steps, and the next two reached the button, in about 10 and 8 minutes. No send has gone. |
 | Breezy (breezy.hr) | ~50k | sent and confirmed on a real form | One real send (one send only). |
-| Workday (myworkdayjobs.com, myworkdaysite.com) | ~1,481k | tried, no plugin | Needs an account on each company's site: a form stops at the sign-in unless you are signed in. Not tried on a real form. |
+| Workday (myworkdayjobs.com, myworkdaysite.com) | ~1,481k | plugin written, not yet run on a real form | Needs an account on each company's site. The plugin was written from a real site read on 2026-11-07 up to the "Create Account" page: it signs in or creates the account with the candidate's email and a Workday password from the answers, and reads a verification code from the mail when the site asks for one. The steps after sign-in come from Workday's usual form, not from a run. |
 | iCIMS (icims.com) | ~622k | tried, no plugin | Needs an account: a form stops at the sign-in unless you are signed in. Not tried on a real form. |
 
 Postings per status, in the index: sent and confirmed ~484k; reaches the send button, no send confirmed ~782k; stops at a captcha most or half of the time ~305k; tried with no plugin ~2,103k.
