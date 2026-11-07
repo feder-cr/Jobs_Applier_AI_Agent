@@ -15,6 +15,6 @@ Questions a company adds have names like `section_..._question_0`, as radio butt
 
 Race, gender and veteran questions (`race_ethnicity`, `gender`, `eeoc.veteran_status`) have an "unspecified" choice: pick that. Their ids do not match their labels (`#race_hispanic` is labelled "asian"), so choose by the label, not the id.
 
-The send control is `button[type='submit']`, the form's last control, labelled "Invia candidatura" on an Italian page.
+The send control is the form's last button, labelled "Invia candidatura" on an Italian page. On some forms it is `button[type='submit']`; on others it is `type='button'`, and `button[type='button']` then matches several buttons, the first of them hidden: seen on a real form, where the click went to a hidden button and nothing was sent. Name it by its text.
 
 After sending: the page says "Application Submitted" and "Your application has been submitted successfully. Good luck!", at an address ending in `/apply/submitted`. Read the page: if the form is still there, the application was not received.

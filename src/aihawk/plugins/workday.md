@@ -23,6 +23,6 @@ My Experience: work experience, education and skills are blocks added with "Add"
 
 Application Questions: the company's own questions, mostly lists and yes or no, all usually required. Voluntary Disclosures and Self Identify: demographic questions with a "prefer not to say" or "I do not wish to answer" option, and a "Terms and Conditions" checkbox that is required.
 
-Review shows every answer; the send control is `[data-automation-id="bottom-navigation-next-button"]` there, labelled "Submit".
+Review shows every answer; the send control is `[data-automation-id="bottom-navigation-next-button"]` there, labelled "Submit". Some sites name that button `[data-automation-id="pageFooterNextButton"]` instead, on every step.
 
-After sending: the page says the application was submitted and offers the candidate home or more jobs; the address leaves `/apply`. If the Review page is still there with its "Submit" button, or errors show at the top, the application was not received.
+After sending: the address leaves `/apply` for `/jobTasks/completed/application`, and the page says the application was submitted and offers the candidate home or more jobs. The Review page can stay on screen for some seconds after the click, its "Submit" button included: seen on a real form, where it was read as a refusal just before the address moved on. Only errors shown at the top mean the application was not received.
