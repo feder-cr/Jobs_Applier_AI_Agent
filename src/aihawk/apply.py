@@ -266,16 +266,53 @@ async def submit_and_verify(session: Browser, client: AsyncOpenAI, model: str, s
     return Outcome("unconfirmed", f"{summary}\nClicked, not confirmed by the page: {verdict['evidence']}", proof=proof)
 
 
+class _Traced:
+    """The browser with every call written to a file: what a dry run is for, to see what the model did on a site."""
+
+    def __init__(self, session: Browser, path: Path, secrets: tuple[str, ...]) -> None:
+        self.session, self.path, self.secrets = session, path, tuple(secret for secret in secrets if secret)
+        self.started = time.monotonic()
+
+    def _hide(self, text: str) -> str:
+        for secret in self.secrets:
+            text = text.replace(secret, "(hidden)")
+        return text
+
+    def _write(self, line: str) -> None:
+        with self.path.open("a", encoding="utf-8") as out:
+            out.write(f"[{time.monotonic() - self.started:6.0f}s] {self._hide(line)}\n")
+
+    async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
+        self._write(f"-> {name} {json.dumps(arguments or {}, ensure_ascii=False)[:300]}")
+        result = await self.session.call_tool(name, arguments)
+        text = " ".join(tool_text(result).split())[:300]
+        self._write(f"<- {'ERROR ' if result.isError else ''}{text}")
+        return result
+
+
+def _secrets_in(answers: str) -> tuple[str, ...]:
+    """The values a trace must not show: the account password among the answers."""
+    return tuple(line.split(":", 1)[1].strip() for line in answers.splitlines() if line.startswith("account_password:"))
+
+
 async def run_on_page(session: Browser, tools: list[dict[str, Any]], client: AsyncOpenAI, model: str, job: Job, cv_text: str, answers: str, cv_file: Path, shot: Path, guidance: str = "", page_rules: str = "") -> Outcome:
     brief = (
         f"The form: {job.apply_url}\nThe job: {job.title} at {job.company}\nThe CV file to upload: {cv_file}\n\n"
         f"The CV:\n{cv_text}\n\nThe answers:\n{answers}"
     )
+    dry_run = bool(os.environ.get(DRY_RUN_ENV, "").strip())
+    if dry_run:
+        # A trial is for looking: every step goes to a file beside the proofs, and the password never does.
+        traced = _Traced(session, shot.parent.parent / "dry-run.log", _secrets_in(answers))
+        traced._write(f"== {job.company}: {job.title} at {job.apply_url}")
+        session = traced
     report = await fill_form(session, tools, client, model, brief, guidance, page_rules)
     summary = str(report.get("summary", ""))
+    if dry_run:
+        traced._write(f"== finish_form: {json.dumps(report, ensure_ascii=False)[:500]}")
     if report.get("status") != "ready" or not report.get("submit_selector"):
         return Outcome("blocked", summary)
-    if os.environ.get(DRY_RUN_ENV, "").strip():
+    if dry_run:
         # A trial of the flow: the form is filled and the send control named, and nothing leaves for the employer.
         url, screenshot = await _where(session, shot)
         proof = Proof("", url, "", "", "", screenshot)

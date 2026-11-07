@@ -478,11 +478,14 @@ def test_a_dry_run_fills_the_form_names_the_send_control_and_sends_nothing(tmp_p
     # A trial of a site or a plugin with a test CV: the environment variable stops the application before the click.
     monkeypatch.setenv(apply_module.DRY_RUN_ENV, "1")
     browser = ScriptedBrowser({"#send": SUBMIT}, page={"url": "https://u/apply", "text": "the form"})
-    outcome = run(ScriptedModel(ready()), browser, tmp_path / "shot.png")
+    outcome = asyncio.run(run_on_page(browser, [], ScriptedModel(ready()), "m", JOB, "cv", "account_password: Secret!9x\nemail: a@b.c", Path("cv.pdf"), tmp_path / "proofs" / "shot.png"))  # type: ignore[arg-type]
     assert outcome.status == "blocked"
     assert outcome.summary.startswith("Dry run (AIHAWK_DRY_RUN is set): filled, send control #send found, nothing sent.")
     assert not browser.clicks()
     assert outcome.proof.url == "https://u/apply"
+    # Every step is written beside the proofs, and the password never is.
+    trace = (tmp_path / "dry-run.log").read_text(encoding="utf-8")
+    assert "== Acme: Engineer at https://u/apply" in trace and "== finish_form:" in trace and "Secret!9x" not in trace
 
 
 @pytest.mark.parametrize(

@@ -6,7 +6,7 @@ Loading a resume rewrites this file, and the rewrite drops the comments you put 
 
 ## A trial that sends nothing
 
-With the environment variable `AIHAWK_DRY_RUN` set to anything, an application stops once the form is filled and the send control is found: the job is recorded as blocked, with a screenshot, and nothing reaches the employer. For trying a site or a plugin with a test CV.
+With the environment variable `AIHAWK_DRY_RUN` set to anything, an application stops once the form is filled and the send control is found: the job is recorded as blocked, with a screenshot, and nothing reaches the employer. Every step the model took on the page is written to `data/dry-run.log`, with the account password hidden. For trying a site or a plugin with a test CV.
 
 ## Your answers
 
