@@ -9,7 +9,7 @@ The sections are headed "Personal information", "Profile", "Resume", "Details" a
 
 `#firstname`, `#lastname`, `#email` and `#input_phone` are the basics, and the phone has a country button before it: choose the country there and type the national number. An "invalid phone" error that shows while typing can clear when the number is typed again whole. Some forms also ask for an address: `#address`, `#city`, `#postcode` and `#country`.
 
-Upload the CV under the "Resume" heading. On a real form the file input there, `#input_files_input_<id>`, refused browser_upload_files (the click landed on an icon), and the input `#description_input_<id>` in the same section took the file, which then showed by name beside it: try `input[type="file"]` in that section first, and that second id when the first is refused. Do not use "Autofill application" or "Import resume from".
+Upload the CV under the "Resume" heading. Read that section's inputs with browser_evaluate to get the generated id, then give the file to `#description_input_<id>`, which took it on a real form. The obvious one, `#input_files_input_<id>`, refused browser_upload_files there because the click landed on an icon. The file then shows by name beside the input. Do not use "Autofill application" or "Import resume from".
 
 "Experience" and "Education" with a "+ Add" button are usually optional: leave them empty unless required.
 
@@ -21,6 +21,6 @@ A `gdpr` checkbox states that the person read the privacy notice and consents to
 
 The submit control is `form > button[type='submit']`, the button "Submit application" (in Portuguese, "Enviar candidatura").
 
-A Cloudflare box "verifying you are not a robot" can sit above the submit button. Seen on a real form with the button stuck on "Submitting…" beside the box, unticked: if it shows before sending, tick it first.
+A Cloudflare box "verifying you are not a robot" can sit above the submit button. Tick it before the form is sent if it is there. The one real send on this site died on exactly that box: the button stayed on "Submitting…" beside it, unticked, and nothing was received. So if the button reads "Submitting…", do not click it again: find that box, click its centre with browser_click_at because it sits in a frame, and read the page. If the button still reads "Submitting…" after two reads, call finish_form with status blocked and name the Cloudflare check. Whether ticking it releases the send is not known.
 
 After sending: read the page: if the form is still there, the application was not received.

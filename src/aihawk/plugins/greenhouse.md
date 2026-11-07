@@ -12,7 +12,7 @@ Gender, ethnicity, veteran and disability questions are lists too (`#gender`, `#
 
 Education can repeat: "Add another" adds a row (`#school--0`, `#degree--0`, `#discipline--0`). Its months are lists (`#start-month--0`) and its years are number fields (`#start-year--0`).
 
-A field's error goes in an element with the id `<field>-error`, which the field names in aria-describedby.
+A field's error goes in an element with the id `<field>-error`, which the field names in `aria-describedby`: after a send that did not go through, read those elements and fix the fields they name. If a required list will not take an answer, call finish_form with status blocked and name the field.
 
 Pages at boards.greenhouse.io have the same fields and layout, with more questions.
 

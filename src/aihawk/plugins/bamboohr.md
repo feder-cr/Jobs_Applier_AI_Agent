@@ -14,6 +14,10 @@ Yes/no and multiple-choice questions are `role="radiogroup"` groups with `input[
 
 Leave `#nickname_hpcsaf` empty: it is a hidden trap labelled "Please leave this field blank".
 
-Resume: "Choose File" buttons: read the page to find the file input behind them. The send control is the `button[type=submit]` labelled "Submit Application".
+Resume: "Choose File" buttons: read the page to find the file input behind them.
+
+Fill every field before you look at the captcha. Then look just above the send button for a reCAPTCHA box, tick it once, and read the page: a green check means it passed, and a second tick would undo it. An image puzzle ends the form: call finish_form with status blocked and say the captcha became a puzzle. If no box is there, do not wait for one. Both endings are normal on this site, which is why the order matters: on five postings the click did not pass and a puzzle followed, and on a later run the send button was reached with no captcha shown at all.
+
+The send control is the `button[type=submit]` labelled "Submit Application".
 
 After sending: read the page: if the form is still there, the application was not received.
