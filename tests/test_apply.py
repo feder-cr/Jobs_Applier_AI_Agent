@@ -472,3 +472,14 @@ def test_what_goes_wrong_in_the_browser_comes_out_as_itself(tmp_path: Path, monk
 
     with pytest.raises(ValueError, match="the real cause"):
         asyncio.run(inside())
+
+
+def test_a_dry_run_fills_the_form_names_the_send_control_and_sends_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A trial of a site or a plugin with a test CV: the environment variable stops the application before the click.
+    monkeypatch.setenv(apply_module.DRY_RUN_ENV, "1")
+    browser = ScriptedBrowser({"#send": SUBMIT}, page={"url": "https://u/apply", "text": "the form"})
+    outcome = run(ScriptedModel(ready()), browser, tmp_path / "shot.png")
+    assert outcome.status == "blocked"
+    assert outcome.summary.startswith("Dry run (AIHAWK_DRY_RUN is set): filled, send control #send found, nothing sent.")
+    assert not browser.clicks()
+    assert outcome.proof.url == "https://u/apply"
