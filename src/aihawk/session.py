@@ -84,7 +84,7 @@ class Session:
             search, self.config.database, self.config.filters, self.config.max_age_days, index, lambda line: loop.call_soon_threadsafe(log, line)
         )
         new = sum(self.store.add(job) for job in jobs)
-        log(f"{len(jobs)} postings fit your search, of {manifest['rows_out']:,} in the job database built {built_at(manifest):%Y-%m-%d}; {new} new")
+        log(f"{len(jobs)} postings fit your search, of {manifest['rows_out']:,} in the job database built {built_at(manifest):%Y-%m-%d %H:%M} UTC; {new} new")
         return new
 
     async def funnel(self, log: Log, status: Log) -> int:
