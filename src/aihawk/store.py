@@ -43,6 +43,14 @@ CREATE TABLE IF NOT EXISTS jobs (
 )
 """
 
+ACCOUNTS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS accounts (
+    host TEXT PRIMARY KEY,
+    email TEXT NOT NULL,
+    made_at TEXT NOT NULL
+)
+"""
+
 ANSWERS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS answers (
     name TEXT PRIMARY KEY,
@@ -143,6 +151,7 @@ class Store:
         self._db.row_factory = sqlite3.Row
         self._db.execute(SCHEMA)
         self._db.execute(ANSWERS_SCHEMA)
+        self._db.execute(ACCOUNTS_SCHEMA)
         # A store from before the cost was kept gets the column; the rows keep their nulls.
         if "cost" not in {row[1] for row in self._db.execute("PRAGMA table_info(jobs)")}:
             self._db.execute("ALTER TABLE jobs ADD COLUMN cost REAL")
@@ -201,6 +210,22 @@ class Store:
         order = fuse([item.job.lexical for item in rest], [item.evidence or 0.0 for item in rest])
         rest = [item for _, item in sorted(zip(order, rest, strict=True), key=lambda pair: (-pair[0], pair[1].job.id))]
         return judged + rest
+
+    # The accounts the applications made, one per site: next time the model signs in instead of registering again.
+    def account(self, host: str) -> tuple[str, str] | None:
+        """The email an account was made with on this host, and when; None where there is none."""
+        row = self._db.execute("SELECT email, made_at FROM accounts WHERE host = ?", (host.lower(),)).fetchone()
+        return (row["email"], row["made_at"]) if row else None
+
+    def set_account(self, host: str, email: str) -> None:
+        self._db.execute(
+            "INSERT INTO accounts (host, email, made_at) VALUES (?, ?, ?) ON CONFLICT(host) DO UPDATE SET email = excluded.email",
+            (host.lower(), email, _now()),
+        )
+        self._db.commit()
+
+    def accounts(self) -> dict[str, str]:
+        return {row["host"]: row["email"] for row in self._db.execute("SELECT host, email FROM accounts ORDER BY host")}
 
     # The answers: what the person said about themselves, given to the model with the CV when a form is filled.
     def answers(self) -> dict[str, str]:

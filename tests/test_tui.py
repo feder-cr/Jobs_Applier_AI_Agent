@@ -558,54 +558,6 @@ async def wait_for_sign_in_to_close(pilot: Any, app: AIHawk) -> None:
     raise AssertionError("the sign-in browser never closed")
 
 
-def test_the_sign_in_key_opens_the_profile_until_the_person_is_done(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    server = ScriptedServer()
-    scripted_server(monkeypatch, server)
-
-    async def run() -> None:
-        app = scripted_app(home, resume)
-        async with app.run_test(size=(140, 40)) as pilot:
-            await settle(pilot, app)
-            await pilot.press("l")
-            await wait_for_screen(pilot, SignIn)
-            assert ("browser_open", {"profile": str(home / "browser-profile")}) in server.calls
-            assert server.calls[-1] == ("browser_navigate", {"url": "about:blank"})
-            await pilot.press("enter")
-            await wait_for_sign_in_to_close(pilot, app)
-
-    asyncio.run(run())
-    assert server.calls[-1] == ("browser_close", {})
-
-
-def test_the_sign_in_key_is_refused_while_an_application_runs(home: Path, resume: Path, restored_apply: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    server = ScriptedServer()
-    scripted_server(monkeypatch, server)
-    import aihawk.session as session_module
-
-    async def run() -> None:
-        release = asyncio.Event()
-
-        async def slow_apply(client: Any, model: str, job: Any, cv: str, answers: str, cv_file: Path, data_dir: Path, profile: Path, guidance: str = "", reaches: frozenset[str] = frozenset(), key_env: str = "") -> Outcome:
-            await release.wait()
-            return Outcome("blocked", "not sent")
-
-        app = scripted_app(home, resume)
-        session_module.apply_to_job = slow_apply  # type: ignore[assignment]
-        async with app.run_test(size=(140, 40)) as pilot:
-            await settle(pilot, app)
-            await pilot.press("a")
-            await wait_for_screen(pilot, SendBatch)
-            await pilot.press("enter")
-            await pilot.pause(0.2)
-            assert app.applying()
-            await pilot.press("l")
-            await pilot.pause(0.2)
-            assert not app.signing_in
-            assert not any(name == "browser_open" for name, _ in server.calls)
-            release.set()
-            await wait_for_apply(pilot, app)
-
-    asyncio.run(run())
 
 
 REQUEST = httpx.Request("POST", "https://api.orcarouter.ai/v1/chat/completions")

@@ -248,7 +248,7 @@ class SignIn(ModalScreen[None]):
 
     BINDINGS: ClassVar = [Binding("enter,escape", "done", "Done")]
 
-    def __init__(self, text: str = "The browser is open. Sign in there to the job site you need.", hint: str = "Enter here when you are done · the window closes") -> None:
+    def __init__(self, text: str, hint: str = "Enter here when you are done · the window closes") -> None:
         super().__init__()
         self.text = text
         self.hint = hint
@@ -287,7 +287,6 @@ class AIHawk(App[None]):
         Binding("m", "more", "More"),
         Binding("e", "settings", "Settings"),
         Binding("r", "new_resume", show=False),
-        Binding("l", "sign_in", show=False),
         Binding("q", "quit", "Quit"),
         # Textual's own Ctrl+C only says "press ctrl+q", and an input under it copies: at any prompt Ctrl+C now leaves.
         Binding("ctrl+c", "quit", show=False, priority=True),
@@ -540,7 +539,6 @@ class AIHawk(App[None]):
             ("answers", "Your answers", f"{len(self.session.store.answers())}, given with the CV to every form"),
             ("mail", "Your mail", self.mail_words()),
             ("key", "OrcaRouter key", f"from {KEY_ENV}" if config.key_from_environment() else "saved" if config.api_key() else "none yet"),
-            ("sign_in", "Sign in to a job site", "the browser opens, you sign in there"),
             ("model", "Forms model", config.model),
             ("judge_model", "Scoring model", config.judge_model),
             ("quick_model", "Search plan model", config.quick_model),
@@ -565,9 +563,6 @@ class AIHawk(App[None]):
         while (choice := await self.push_screen_wait(Settings(self.setting_rows()))) is not None:
             if choice == "resume":
                 self.new_resume()
-                return
-            if choice == "sign_in":
-                self.sign_in()
                 return
             if choice == "folder":
                 webbrowser.open(self.session.config.workspace.as_uri())
@@ -684,27 +679,6 @@ class AIHawk(App[None]):
     def applying(self) -> bool:
         """Whether an application holds the browser: one running, or one just started and not yet running."""
         return self.busy or any(worker.group == "apply" and not worker.is_finished for worker in self.workers)
-
-    def action_sign_in(self) -> None:
-        # One browser per profile: an application and the sign-in window never open it at the same time.
-        if self.signing_in or self.applying():
-            self.say("The browser is busy.")
-        else:
-            self.sign_in()
-
-    @work(group="sign_in")
-    async def sign_in(self) -> None:
-        self.signing_in = True
-
-        async def wait() -> None:
-            await self.push_screen_wait(SignIn())
-
-        try:
-            await self.session.sign_in(wait)
-        except Exception as error:  # noqa: BLE001  The screen stays up and says what went wrong, as in start.
-            self.say(f"The browser did not open: {error}")
-        finally:
-            self.signing_in = False
 
     @work(exclusive=True, group="apply")
     async def apply_selected(self) -> None:

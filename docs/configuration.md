@@ -12,6 +12,10 @@ With the environment variable `AIHAWK_DRY_RUN` set to anything, an application s
 
 AIHawk counts the tokens of every model call and prices them with the gateway's own list, read once per start. A sent application shows its cost in its details, and the log says what each application and each scoring cost. The shortlist model's calls are not counted: they go through another endpoint and cost under a cent per hundred postings.
 
+## The accounts it made
+
+A site that needs a candidate account, such as Workday, gets one made with your email and the `account_password` from your answers. Which sites have one is kept in the `accounts` table of `data/jobs.db`, by host, so the next form on that site signs in instead of registering again. Nothing asks you to sign in by hand.
+
 ## Your answers
 
 What the forms are told about you beyond the CV (email, phone, location, links, and anything you add) lives in the `answers` table of `data/jobs.db`, the SQLite file in the AIHawk folder. Press `e`, then "Your answers", to see, change or add them; an answer you gave is kept when a new resume is read. `email` and `mail_provider` (gmail or outlook) are the mailbox AIHawk opens for you to sign in to, asked once after the resume and again from "Your mail" in Settings; a site's code can only be read from a mailbox you are signed in to. AIHawk makes an `account_password` the first time it starts and keeps it there: the one password it uses on job sites that need an account, such as Workday, so you can sign in to those sites yourself. The `answers.yaml` of earlier versions is read once, brought into the table and renamed `answers.yaml.imported`.

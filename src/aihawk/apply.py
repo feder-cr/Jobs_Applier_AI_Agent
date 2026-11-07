@@ -14,7 +14,7 @@ import sys
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -59,7 +59,7 @@ FINISH_TOOL = {
         "parameters": {
             "type": "object",
             "additionalProperties": False,
-            "required": ["status", "summary", "submit_selector"],
+            "required": ["status", "summary", "submit_selector", "made_account"],
             "properties": {
                 "status": {
                     "type": "string",
@@ -69,6 +69,7 @@ FINISH_TOOL = {
                 },
                 "summary": {"type": "string", "description": "What you wrote in each field, or why you are blocked."},
                 "submit_selector": {"type": "string", "description": "CSS selector of the control that sends the form; empty unless ready."},
+                "made_account": {"type": "boolean", "description": "True only if you created a candidate account on this site just now."},
             },
         },
     },
@@ -152,6 +153,8 @@ class Outcome:
     status: str  # submitted | unconfirmed | refused | blocked | failed
     summary: str
     proof: Proof = field(default_factory=Proof)
+    # Whether the model made a candidate account on the site while filling this form, so the next form there signs in.
+    made_account: bool = False
 
 
 def instructions(guidance: str, page_rules: str = "") -> str:
@@ -321,10 +324,23 @@ def _secrets_in(answers: str) -> tuple[str, ...]:
     return tuple(line.split(":", 1)[1].strip() for line in answers.splitlines() if line.startswith("account_password:"))
 
 
-async def run_on_page(session: Browser, tools: list[dict[str, Any]], client: AsyncOpenAI, model: str, job: Job, cv_text: str, answers: str, cv_file: Path, shot: Path, guidance: str = "", page_rules: str = "") -> Outcome:
+async def run_on_page(
+    session: Browser,
+    tools: list[dict[str, Any]],
+    client: AsyncOpenAI,
+    model: str,
+    job: Job,
+    cv_text: str,
+    answers: str,
+    cv_file: Path,
+    shot: Path,
+    guidance: str = "",
+    page_rules: str = "",
+    account: str = "",
+) -> Outcome:
     brief = (
-        f"The form: {job.apply_url}\nThe job: {job.title} at {job.company}\nThe CV file to upload: {cv_file}\n\n"
-        f"The CV:\n{cv_text}\n\nThe answers:\n{answers}"
+        f"The form: {job.apply_url}\nThe job: {job.title} at {job.company}\nThe CV file to upload: {cv_file}\n"
+        f"{account}\n\nThe CV:\n{cv_text}\n\nThe answers:\n{answers}"
     )
     dry_run = bool(os.environ.get(DRY_RUN_ENV, "").strip())
     tracing = dry_run or bool(os.environ.get(TRACE_ENV, "").strip())
@@ -337,14 +353,16 @@ async def run_on_page(session: Browser, tools: list[dict[str, Any]], client: Asy
     summary = str(report.get("summary", ""))
     if tracing:
         traced._write(f"== finish_form: {json.dumps(report, ensure_ascii=False)[:500]}")
+    made = bool(report.get("made_account"))
     if report.get("status") != "ready" or not report.get("submit_selector"):
-        return Outcome("blocked", summary)
+        return Outcome("blocked", summary, made_account=made)
     if dry_run:
         # A trial of the flow: the form is filled and the send control named, and nothing leaves for the employer.
         url, screenshot = await _where(session, shot)
         proof = Proof("", url, "", "", "", screenshot)
-        return Outcome("blocked", f"Dry run ({DRY_RUN_ENV} is set): filled, send control {report['submit_selector']} found, nothing sent.\n{summary}", proof)
-    return await submit_and_verify(session, client, model, str(report["submit_selector"]), summary, guidance, shot)
+        return Outcome("blocked", f"Dry run ({DRY_RUN_ENV} is set): filled, send control {report['submit_selector']} found, nothing sent.\n{summary}", proof, made_account=made)
+    sent = await submit_and_verify(session, client, model, str(report["submit_selector"]), summary, guidance, shot)
+    return replace(sent, made_account=made)
 
 
 async def _open_browser(session: Browser, profile: Path) -> None:
@@ -396,7 +414,16 @@ async def _server(upload_dir: Path, home: Path) -> AsyncIterator[tuple[ClientSes
 
 
 async def apply_to_job(
-    client: AsyncOpenAI, model: str, job: Job, cv_text: str, answers: str, cv_file: Path, data_dir: Path, profile: Path, guidance: str = ""
+    client: AsyncOpenAI,
+    model: str,
+    job: Job,
+    cv_text: str,
+    answers: str,
+    cv_file: Path,
+    data_dir: Path,
+    profile: Path,
+    guidance: str = "",
+    account: str = "",
 ) -> Outcome:
     """Open the browser on the person's profile, fill the job's form and send it: the person's selection and Enter came before."""
     shot = data_dir / "proofs" / f"{safe_name(job.id)}.png"
@@ -412,7 +439,7 @@ async def apply_to_job(
             navigated = await session.call_tool("browser_navigate", {"url": job.apply_url})
             if navigated.isError:
                 return Outcome("blocked", f"the form did not load: {tool_text(navigated)}")
-            return await run_on_page(session, tools, client, model, job, cv_text, answers, cv_file, shot, guidance, page_rules)
+            return await run_on_page(session, tools, client, model, job, cv_text, answers, cv_file, shot, guidance, page_rules, account)
         finally:
             await session.call_tool("browser_close", {})
 
@@ -432,19 +459,16 @@ def signed_in(provider: str, url: str) -> bool:
     return (urlsplit(url).hostname or "").lower() == MAILBOXES[provider][1]
 
 
-async def sign_in(profile: Path, home: Path, wait: Callable[[], Awaitable[None]], url: str = "about:blank") -> str:
-    """Open the profile's browser on `url` so the person can sign in; once `wait` returns, the browser closes.
+async def sign_in(profile: Path, home: Path, wait: Callable[[], Awaitable[None]], url: str) -> str:
+    """Open the profile's browser on `url`, the person's mailbox, so they can sign in; once `wait` returns, it closes.
 
-    Nothing is typed for the person and no model is involved: the sign-ins are kept in the profile for the applications.
-    Returns where the page is once `url` is opened again after the wait, so a mailbox that sends the browser to its sign-in
-    page shows the person is not signed in; empty for the blank page.
+    Nothing is typed for them and no model is involved: the sign-in is kept in the profile, for the applications to use.
+    Returns where the page is once `url` is opened again after the wait, so a mailbox that sent the browser to its own
+    sign-in page shows that the person is not signed in.
     """
     async with _server(home, home) as (session, _):
         try:
             await _open_browser(session, profile)
-            if url == "about:blank":
-                await wait()
-                return ""
             await session.call_tool("browser_navigate", {"url": url})
             await wait()
             await session.call_tool("browser_navigate", {"url": url})
