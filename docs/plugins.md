@@ -49,6 +49,31 @@ No code reads this paragraph; the model does. Say what the confirmation looks li
 
 The model reports one of two results when it finishes a form: `ready` (every required field is filled) or `blocked` (the form cannot be filled, for example because of a captcha). Say in the plugin when `blocked` is the right answer.
 
+## When the model is stuck
+
+A plugin earns its keep in the moments the form does not behave. The model is told, for every site, never to repeat an action that left the page as it was; the plugin says what to do instead on this site. Write it as the failure the model will see, then the way out, and say where it was seen. What real forms have shown so far:
+
+- A click "not actionable" or "would have landed elsewhere": something covers the control, or the option is out of view. Name the cover and how to dismiss it (a cookie banner: the "Decline all" button inside `div[aria-label='Cookie Consent']` on Workable), or the way to reach the option (ArrowDown as many times as its position, then Enter, on Paylocity's listboxes).
+- browser_type refused with "not an input": the id sits on a wrapper. Name the control itself (`input#question_<uuid>` or `textarea#question_<uuid>` on SmartRecruiters).
+- An upload refused, "the click landed on an icon": name the input that took the file on a real form (`#description_input_<id>` on Workable).
+- A key that scrolls nothing: the form scrolls inside its own container. Say to reach a field with `scrollIntoView()` through browser_evaluate (SmartRecruiters), not with PageDown.
+- A page that redraws itself after every click without changing address (Workday): say to read the page again after each one.
+- A code or a link sent by email: say which sender domain to search for, and that the model has two looks at the mailbox before the form ends as blocked.
+
+Give the cost when you know it: "seen on a real form, 40 steps lost" tells the model how much the shortcut is worth.
+
+## Menus and dropdowns
+
+Most steps lost on real forms went into lists. Say, for each list on the site, which of these it is and what its options look like:
+
+- A native `<select>`: browser_select_option with the option's value or label; read the options first with browser_evaluate when the labels are not in the snapshot.
+- A listbox (`role="listbox"` with `role="option"` rows): click the box, read the rows (their ids or texts) with browser_evaluate, click the row by its id. Out of reach: ArrowDown to its position, Enter. Paylocity's `#<id>__listbox__option__N` is one.
+- A typeahead or combobox: type the value, wait for the suggestions, read them, click the matching row; a row that reads "Create <value>" still sets it. Check the field's value afterwards. SmartRecruiters' City and country lists, and Paylocity's `#<id>-select-row-N`, are such lists.
+- A list inside a shadow root: browser_snapshot does not list its rows. Read the row's centre with browser_evaluate (which only reads) and click that point with browser_click_at, as the SmartRecruiters plugin describes.
+- A radio or checkbox drawn as a div: click the box by what it holds, `div[role="radio"]:has(input[name="QA_1"][value="true"])` on Workable, then read the page to check.
+
+Always say how the model checks that the choice was taken: the field shows the value, or the page says so.
+
 ## A real example
 
 `src/aihawk/plugins/lever.md`, as it is in this version:
