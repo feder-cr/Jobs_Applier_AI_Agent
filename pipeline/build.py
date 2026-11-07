@@ -297,8 +297,14 @@ def merge(connection: duckdb.DuckDBPyConnection, work: Path) -> dict[str, int]:
     every_row = f"read_parquet({files!r}, filename = true, file_row_number = true)"
     connection.execute(f"""
         CREATE OR REPLACE TEMP TABLE best AS
-        SELECT key, count(*) AS copies, list(DISTINCT source) AS sources,
-            arg_max(struct_pack(filename := filename, row := file_row_number), length) AS winner
+        SELECT key, count(*) AS copies, list_sort(list(DISTINCT source)) AS sources,
+            -- The longest description wins. Copies that tie, most often two with none, are settled by the source's name
+            -- and then the row: left to DuckDB, a tie went a different way in each build, and a third of the postings
+            -- came out changed in a delta though nothing about them had.
+            arg_max(
+                struct_pack(filename := filename, row := file_row_number),
+                struct_pack(length := length, source := source, row := -file_row_number)
+            ) AS winner
         FROM (
             SELECT {KEY} AS key, regexp_extract(filename, '([^/\\\\]+)\\.parquet$', 1) AS source, filename, file_row_number,
                 length(coalesce(description, '')) AS length
