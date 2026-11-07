@@ -25,6 +25,9 @@ from aihawk.store import SUBMITTED, Sent, Stored, said, sent_word
 # Below this width there is no room for the location beside the company and the role.
 WIDE_ENOUGH = 100
 SEARCH_SETTINGS = {"titles", "places", "exclude", "max_age_days"}
+# Jobs kept scored and waiting while the person reads: the list stays ahead of the cursor, and scoring stops there
+# until applications use some up, so a long search does not score thousands nobody will read.
+READ_AHEAD = 50
 RESUME_QUESTION = "Where is your resume?"
 MAIL_QUESTION = "The email you apply with."
 MAIL_HINT = "Job sites send their codes there, and AIHawk reads only those · Enter · Esc for later"
@@ -427,21 +430,31 @@ class AIHawk(App[None]):
             self.show_heading()
 
     async def judge(self) -> None:
+        """Score what the search found, batch after batch, while the person reads what is already there.
+
+        Nothing is announced: the scores filling the list are the progress, and a batch is read ahead so that the next job
+        down the list is scored before the person reaches it. It stops once READ_AHEAD jobs are waiting to be read, and
+        starts again by itself when applications take some of them, or at once on `m`.
+        """
         session = self.session
         await session.priced()
         before = SPEND.total
-        if session.store.with_status("new"):
-            self.say("Reading the best postings; a minute or two.")
-        # The counters the session offers are not shown: the scores filling the list are the progress.
-        await session.funnel(self.say, lambda _: None)
-        self.refresh_jobs()
-        items = session.store.with_status("shortlisted")
-        if not items:
-            self.say("Every posting found so far has been read.")
-            return
-        self.say(f"Scoring {len(items)}.")
-        await session.score(items, self.refresh_jobs, self.say)
-        self.say(f"Done, {money(await session.settled() - before)}.")
+        first = True
+        while session.store.with_status("new"):
+            if first and not session.store.with_status("scored"):
+                self.say("Reading the best postings; a minute or two.")
+            first = False
+            await session.funnel(self.say, lambda _: None)
+            self.refresh_jobs()
+            items = session.store.with_status("shortlisted")
+            if not items:
+                break
+            await session.score(items, self.refresh_jobs, self.say)
+            if len(session.store.with_status("scored")) >= READ_AHEAD:
+                break
+        spent = await session.settled() - before
+        if spent:
+            self.say(f"{len(session.store.with_status('scored'))} to read, {money(spent)}.")
 
     # The keys.
 
@@ -479,6 +492,9 @@ class AIHawk(App[None]):
     @work(exclusive=True, group="flow")
     async def more_jobs(self) -> None:
         try:
+            if not self.session.store.with_status("new"):
+                self.say("Everything the search found has been read.")
+                return
             await self.judge()
         except Exception as error:  # noqa: BLE001  Said on the screen, as in start.
             self.failed(error)
@@ -700,6 +716,9 @@ class AIHawk(App[None]):
             self.refresh_jobs()
         if unread:
             await self.mail_then_retry(unread)
+        # The applications used some of the read-ahead: fill it again while the person looks at what is left.
+        if self.session.store.with_status("new") and len(self.session.store.with_status("scored")) < READ_AHEAD:
+            self.more_jobs()
 
     async def mail_then_retry(self, items: list[Stored]) -> None:
         """A site sent a code to the mail and the mailbox was not signed in: the sign-in now, then those applications again."""

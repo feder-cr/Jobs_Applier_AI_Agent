@@ -19,6 +19,7 @@ from openai import APIConnectionError, APITimeoutError, AuthenticationError, Int
 from pypdf import PdfWriter
 from textual.widgets import DataTable, Input, RichLog, Static
 
+import aihawk.tui as tui_module
 from aihawk import apply as apply_module
 from aihawk import session as session_module
 from aihawk.apply import Outcome
@@ -890,3 +891,27 @@ def test_the_mail_question_left_with_escape_is_not_asked_again_at_the_next_start
 
     asyncio.run(run())
     assert read_answers(load_config(home))["mail_provider"] == "later"
+
+
+def test_the_list_scores_ahead_in_batches_and_says_nothing_while_it_does(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Jev is fast, so the next job down the list is scored before the person reaches it: no counter, no "scoring 25".
+    import aihawk.session as session_module
+
+    monkeypatch.setattr(session_module, "WIDE", 2)
+    monkeypatch.setattr(session_module, "JUDGED", 1)
+    monkeypatch.setattr(tui_module, "READ_AHEAD", 3)
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
+            log = logged(app)
+            assert "Scoring" not in log and "scoring" not in log
+            # One judged per batch: a second batch ran with no key pressed, which the old single pass would not have done.
+            assert len(app.session.store.with_status("scored")) == 2
+            assert not app.session.store.with_status("new")
+            await pilot.press("m")
+            await settle(pilot, app)
+            assert "Everything the search found has been read." in logged(app)
+
+    asyncio.run(run())
