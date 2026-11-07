@@ -294,32 +294,6 @@ def test_a_sent_form_keeps_its_picture_under_data_proofs(tmp_path: Path, monkeyp
     assert (tmp_path / "proofs" / "g-a-1.png").read_bytes() == b"PNG"
 
 
-def test_sign_in_opens_the_profile_on_a_blank_page_and_closes_it_when_the_person_is_done(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    server = ScriptedServer()
-    scripted_server(monkeypatch, server)
-    profile = tmp_path / "browser-profile"
-    waited: list[tuple[str, ...]] = []
-
-    async def wait() -> None:
-        waited.append(tuple(name for name, _ in server.calls))
-
-    asyncio.run(sign_in(profile, tmp_path, wait))
-    assert waited == [("browser_open", "browser_navigate")]
-    assert server.calls == [("browser_open", {"profile": str(profile)}), ("browser_navigate", {"url": "about:blank"}), ("browser_close", {})]
-
-
-def test_sign_in_closes_the_browser_even_when_the_wait_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    server = ScriptedServer()
-    scripted_server(monkeypatch, server)
-
-    async def broken() -> None:
-        raise RuntimeError("the window was closed")
-
-    with pytest.raises(RuntimeError, match="window was closed"):
-        asyncio.run(sign_in(tmp_path / "browser-profile", tmp_path, broken))
-    assert server.calls[-1] == ("browser_close", {})
-
-
 FORM_PAGE = {"url": "https://u/apply", "text": "Apply here"}
 SELECT = [tool_call("browser_select_option", selector="#pick", value="a")]
 
@@ -553,3 +527,26 @@ def test_the_third_arrival_at_the_mailbox_ends_the_form_blocked(tmp_path: Path) 
     report = asyncio.run(fill_form(browser, [], model, "m", "the brief"))  # type: ignore[arg-type]
     assert report == {"status": "blocked", "summary": apply_module.NO_CODE, "submit_selector": ""}
     assert mailbox_pages(browser) == 2
+
+
+def test_the_account_a_form_made_is_reported_and_the_brief_says_whether_one_exists(tmp_path: Path) -> None:
+    # The site is told to the model once: an account here, or none, so it signs in or registers without being asked.
+    browser = ScriptedBrowser({"#send": SUBMIT}, page={"url": "https://u/apply", "text": "the form"})
+    model = ScriptedModel([tool_call("finish_form", status="ready", summary="made one", submit_selector="#send", made_account=True)], VERIFIED)
+    outcome = asyncio.run(
+        run_on_page(browser, [], model, "m", JOB, "cv", "answers", Path("cv.pdf"), tmp_path / "shot.png", account=None)  # type: ignore[arg-type]
+    )
+    assert outcome.made_account is True and outcome.status == "submitted"
+    assert "No account of yours is known on u: if the form needs one, make it." in model.requests[0]["messages"][1]["content"]
+    known = asyncio.run(run_on_page(ScriptedBrowser({"#send": SUBMIT}, page={"url": "https://u/apply", "text": "f"}), [], (m := ScriptedModel(
+        [tool_call("finish_form", status="blocked", summary="x", submit_selector="", made_account=False)])), "m", JOB, "cv", "a", Path("cv.pdf"),
+        tmp_path / "s.png", account=("ada@example.com", "2026-11-07T09:00:00")))  # type: ignore[arg-type]
+    assert known.status == "blocked"
+    assert "Your account on u: made on 2026-11-07 with ada@example.com" in m.requests[0]["messages"][1]["content"]
+
+
+def test_a_form_that_made_no_account_says_so(tmp_path: Path) -> None:
+    browser = ScriptedBrowser({"#send": SUBMIT}, page={"url": "https://u/apply", "text": "the form"})
+    model = ScriptedModel([tool_call("finish_form", status="blocked", summary="a puzzle", submit_selector="", made_account=False)])
+    outcome = asyncio.run(run_on_page(browser, [], model, "m", JOB, "cv", "answers", Path("cv.pdf"), tmp_path / "shot.png"))  # type: ignore[arg-type]
+    assert outcome.made_account is False and outcome.status == "blocked"

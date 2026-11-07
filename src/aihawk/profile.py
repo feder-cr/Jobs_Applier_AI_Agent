@@ -202,22 +202,13 @@ async def install_resume(client: AsyncOpenAI, config: Config, path: Path) -> dic
 
 
 def save_setting(config: Config, name: str, value: str) -> None:
-    """One setting as the Settings screen changes it. `titles`, `places` and `exclude` are lists written with commas; the others
-    are read as they stand, and an empty one goes back to its default."""
+    """One setting as the Settings screen changes it. `places` and `exclude` are lists written with commas; the others are read
+    as they stand, and an empty one goes back to its default. The titles are not among them: they come from the resume."""
     path = config.workspace / CONFIG_FILE
     settings = (yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}) if path.is_file() else {}
     filters = settings.setdefault("filters", {})
     words = list(dict.fromkeys(word.strip() for word in value.split(",") if word.strip()))
-    if name == "titles":
-        if not words:
-            raise ConfigError("the search needs at least one job title")
-        nodes = (filters.get("plan") or {}).get("nodes") or []
-        if nodes:
-            kept = {form["text"]: form["weight"] for form in nodes[0]["forms"]}
-            nodes[0]["forms"] = [{"text": word, "weight": kept.get(word, 1.0)} for word in words]
-        else:
-            filters["include"] = words
-    elif name == "places":
+    if name == "places":
         # Places the person names replace the ones read from the CV, whose country codes would rule the new ones out.
         filters.update({"locations": words, "cities": words, "countries": []})
     elif name == "exclude":

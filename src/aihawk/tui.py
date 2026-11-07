@@ -24,7 +24,11 @@ from aihawk.store import SUBMITTED, Sent, Stored, said, sent_word
 
 # Below this width there is no room for the location beside the company and the role.
 WIDE_ENOUGH = 100
-SEARCH_SETTINGS = {"titles", "places", "exclude", "max_age_days"}
+SEARCH_SETTINGS = {"places", "exclude", "max_age_days"}
+# Scored jobs kept below the cursor. The judge follows the person down the list and stops there, so a long search never
+# pays to score what nobody will reach. Scoring runs in small chunks, to stop as soon as the count is met.
+LOOKAHEAD = 50
+CHUNK = 10
 RESUME_QUESTION = "Where is your resume?"
 MAIL_QUESTION = "The email you apply with."
 MAIL_HINT = "Job sites send their codes there, and AIHawk reads only those · Enter · Esc for later"
@@ -244,7 +248,7 @@ class SignIn(ModalScreen[None]):
 
     BINDINGS: ClassVar = [Binding("enter,escape", "done", "Done")]
 
-    def __init__(self, text: str = "The browser is open. Sign in there to the job site you need.", hint: str = "Enter here when you are done · the window closes") -> None:
+    def __init__(self, text: str, hint: str = "Enter here when you are done · the window closes") -> None:
         super().__init__()
         self.text = text
         self.hint = hint
@@ -283,7 +287,6 @@ class AIHawk(App[None]):
         Binding("m", "more", "More"),
         Binding("e", "settings", "Settings"),
         Binding("r", "new_resume", show=False),
-        Binding("l", "sign_in", show=False),
         Binding("q", "quit", "Quit"),
         # Textual's own Ctrl+C only says "press ctrl+q", and an input under it copies: at any prompt Ctrl+C now leaves.
         Binding("ctrl+c", "quit", show=False, priority=True),
@@ -426,22 +429,41 @@ class AIHawk(App[None]):
         finally:
             self.show_heading()
 
+    def scored_ahead(self) -> int:
+        """Scored jobs from the cursor to the end of the list: what the person still has to read."""
+        items = self.session.store.all()
+        current = self.current_id()
+        start = next((index for index, item in enumerate(items) if item.job.id == current), 0)
+        return sum(1 for item in items[start:] if item.score is not None)
+
     async def judge(self) -> None:
+        """Score what the reader is short of, up to LOOKAHEAD scored jobs below the cursor, then stop.
+
+        Nothing is announced: the scores filling the list are the progress. Jev weighs a batch of titles and descriptions
+        for a fraction of a cent; the judge, which costs, scores a chunk at a time. Moving the cursor down calls this again,
+        so the list stays ahead of the person and no further.
+        """
         session = self.session
         await session.priced()
         before = SPEND.total
-        if session.store.with_status("new"):
+        if not session.store.all():
             self.say("Reading the best postings; a minute or two.")
-        # The counters the session offers are not shown: the scores filling the list are the progress.
-        await session.funnel(self.say, lambda _: None)
-        self.refresh_jobs()
-        items = session.store.with_status("shortlisted")
-        if not items:
-            self.say("Every posting found so far has been read.")
-            return
-        self.say(f"Scoring {len(items)}.")
-        await session.score(items, self.refresh_jobs, self.say)
-        self.say(f"Done, {money(await session.settled() - before)}.")
+        # What the reader is short of, counted once: a pass pays that and no more, wherever the scores land in the list.
+        need = LOOKAHEAD - self.scored_ahead()
+        while need > 0:
+            waiting = session.store.with_status("shortlisted")
+            if not waiting:
+                if not session.store.with_status("new"):
+                    break
+                await session.funnel(self.say, lambda _: None)
+                self.refresh_jobs()
+                continue
+            chunk = waiting[: min(CHUNK, need)]
+            await session.score(chunk, self.refresh_jobs, self.say)
+            need -= len(chunk)
+        spent = await session.settled() - before
+        if spent:
+            self.say(f"{self.scored_ahead()} to read, {money(spent)}.")
 
     # The keys.
 
@@ -474,11 +496,24 @@ class AIHawk(App[None]):
             webbrowser.open(item.job.url)
 
     def action_more(self) -> None:
-        self.more_jobs()
+        self.more_jobs(asked=True)
+
+    @on(DataTable.RowHighlighted)
+    def row_moved(self) -> None:
+        """The judge follows the cursor: fewer than LOOKAHEAD scored jobs below it, and the next ones are scored."""
+        if self.busy or any(worker.group == "flow" and worker.is_running for worker in self.workers):
+            return
+        store = self.session.store
+        if self.scored_ahead() < LOOKAHEAD and (store.with_status("shortlisted") or store.with_status("new")):
+            self.more_jobs()
 
     @work(exclusive=True, group="flow")
-    async def more_jobs(self) -> None:
+    async def more_jobs(self, asked: bool = False) -> None:
         try:
+            store = self.session.store
+            if asked and not (store.with_status("shortlisted") or store.with_status("new")):
+                self.say("Everything the search found has been read.")
+                return
             await self.judge()
         except Exception as error:  # noqa: BLE001  Said on the screen, as in start.
             self.failed(error)
@@ -493,10 +528,9 @@ class AIHawk(App[None]):
             self.say("Nothing sent yet.")
 
     def setting_rows(self) -> list[tuple[str, str, str]]:
+        # What to look for is not here: the titles and their graph come from the resume. A new resume changes them.
         config = self.session.config
-        titles = [form.text for form in config.filters.plan.nodes[0].forms] if config.filters.plan.nodes else list(config.filters.include)
         return [
-            ("titles", "Look for", ", ".join(titles)),
             ("places", "Where", ", ".join(config.filters.locations)),
             ("exclude", "Leave out", ", ".join(config.filters.exclude)),
             ("max_age_days", "Posted within (days)", str(config.max_age_days)),
@@ -504,12 +538,10 @@ class AIHawk(App[None]):
             ("answers", "Your answers", f"{len(self.session.store.answers())}, given with the CV to every form"),
             ("mail", "Your mail", self.mail_words()),
             ("key", "OrcaRouter key", f"from {KEY_ENV}" if config.key_from_environment() else "saved" if config.api_key() else "none yet"),
-            ("sign_in", "Sign in to a job site", "the browser opens, you sign in there"),
             ("model", "Forms model", config.model),
             ("judge_model", "Scoring model", config.judge_model),
             ("quick_model", "Search plan model", config.quick_model),
             ("decision_model", "Shortlist model", config.decision_model),
-            ("spent", "Spent since the start", money(SPEND.total) + (f", plus {SPEND.unpriced} calls the price list does not cover" if SPEND.unpriced else "")),
             ("folder", "Your files", str(config.workspace)),
         ]
 
@@ -531,11 +563,6 @@ class AIHawk(App[None]):
             if choice == "resume":
                 self.new_resume()
                 return
-            if choice == "sign_in":
-                self.sign_in()
-                return
-            if choice == "spent":
-                continue
             if choice == "folder":
                 webbrowser.open(self.session.config.workspace.as_uri())
             elif choice == "mail":
@@ -652,27 +679,6 @@ class AIHawk(App[None]):
         """Whether an application holds the browser: one running, or one just started and not yet running."""
         return self.busy or any(worker.group == "apply" and not worker.is_finished for worker in self.workers)
 
-    def action_sign_in(self) -> None:
-        # One browser per profile: an application and the sign-in window never open it at the same time.
-        if self.signing_in or self.applying():
-            self.say("The browser is busy.")
-        else:
-            self.sign_in()
-
-    @work(group="sign_in")
-    async def sign_in(self) -> None:
-        self.signing_in = True
-
-        async def wait() -> None:
-            await self.push_screen_wait(SignIn())
-
-        try:
-            await self.session.sign_in(wait)
-        except Exception as error:  # noqa: BLE001  The screen stays up and says what went wrong, as in start.
-            self.say(f"The browser did not open: {error}")
-        finally:
-            self.signing_in = False
-
     @work(exclusive=True, group="apply")
     async def apply_selected(self) -> None:
         store = self.session.store
@@ -700,6 +706,8 @@ class AIHawk(App[None]):
             self.refresh_jobs()
         if unread:
             await self.mail_then_retry(unread)
+        # The applications used some of what lay ahead: fill it again, as a cursor move would.
+        self.row_moved()
 
     async def mail_then_retry(self, items: list[Stored]) -> None:
         """A site sent a code to the mail and the mailbox was not signed in: the sign-in now, then those applications again."""

@@ -29,7 +29,7 @@ Give it your resume. The job search finds the postings that fit, you pick, and i
 |---|---|
 | **1. Reads your resume** | Turns it into a search: the titles, the skills and the places that fit you. |
 | **2. Searches** | 10 million postings from 24 public sources, rebuilt every five hours, searched on your computer. |
-| **3. Scores** | Reads the best 100 against your resume, then scores the top 25 from 1 to 5, with the gaps and the reasons. |
+| **3. Scores** | Reads 100 postings at a time against your resume, scores from 1 to 5 with the gaps and the reasons, and keeps 50 scored ahead of where you are reading. |
 | **4. You pick** | Select the jobs you want and say yes once. |
 | **5. Applies** | A real Firefox opens the company's form, fills every required field, attaches your CV and sends. |
 | **6. Keeps the answer** | What each page said, with a screenshot, for every application. |
