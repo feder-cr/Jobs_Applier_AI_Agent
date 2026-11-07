@@ -9,7 +9,7 @@ page: `applyManually`, `SignInWithEmailButton`, `email`, `password`, `signInSubm
 after the account are Workday's usual form, as the plugin describes them, and are not read from a real site.
 
 After "Create Account" the site asks for a six-digit code sent to the address: by SMTP when AIHAWK_TEST_SMTP is set,
-otherwise the code is only printed here. The posting is /en-US/Careers/job/US-Remote/Software-Engineer_JR1.
+otherwise the code is only printed here; AIHAWK_TEST_CODE fixes the code, for a message sent by hand beforehand. The posting is /en-US/Careers/job/US-Remote/Software-Engineer_JR1.
 What was submitted is listed at /applications as JSON, and /reset forgets every account and application.
 """
 
@@ -306,7 +306,8 @@ class Handler(BaseHTTPRequestHandler):
         return self.start_verification(email, "account creation")
 
     def start_verification(self, email: str, why: str) -> None:
-        code = f"{secrets.randbelow(900000) + 100000}"
+        # A fixed code for a trial where the message is sent by hand: AIHAWK_TEST_CODE=424242 and the mail with it beforehand.
+        code = os.environ.get("AIHAWK_TEST_CODE", "").strip() or f"{secrets.randbelow(900000) + 100000}"
         with STATE_LOCK:
             STATE["codes"][email] = code
         try:
