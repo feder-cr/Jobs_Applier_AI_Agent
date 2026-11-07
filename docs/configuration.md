@@ -4,6 +4,18 @@ Press `e` in AIHawk to change these on the screen. AIHawk reads `aihawk.yaml` in
 
 Loading a resume rewrites this file, and the rewrite drops the comments you put in it, so keep your notes elsewhere.
 
+## A trial that sends nothing
+
+With the environment variable `AIHAWK_DRY_RUN` set to anything, an application stops once the form is filled and the send control is found: the job is recorded as blocked, with a screenshot, and nothing reaches the employer. Every step the model took on the page is written to `data/trace.log`, with the account password hidden; `AIHAWK_TRACE` set alone writes that file for real applications too. For trying a site or a plugin with a test CV.
+
+## What it costs
+
+AIHawk counts the tokens of every model call and prices them with the gateway's own list, read once per start. A sent application shows its cost in its details, the log says what each application and each scoring cost, and Settings shows what the session has spent. The shortlist model's calls are not counted: they go through another endpoint and cost under a cent per hundred postings.
+
+## Your answers
+
+What the forms are told about you beyond the CV (email, phone, location, links, and anything you add) lives in the `answers` table of `data/jobs.db`, the SQLite file in the AIHawk folder. Press `e`, then "Your answers", to see, change or add them; an answer you gave is kept when a new resume is read. `email` and `mail_provider` (gmail or outlook) are the mailbox AIHawk opens for you to sign in to, asked once after the resume and again from "Your mail" in Settings; a site's code can only be read from a mailbox you are signed in to. AIHawk makes an `account_password` the first time it starts and keeps it there: the one password it uses on job sites that need an account, such as Workday, so you can sign in to those sites yourself. The `answers.yaml` of earlier versions is read once, brought into the table and renamed `answers.yaml.imported`.
+
 | Key | Default | What it does |
 |---|---|---|
 | `name` | empty | Your name for this search, shown at the top of the list. |

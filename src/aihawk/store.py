@@ -1,4 +1,4 @@
-"""What AIHawk knows about each job, in one SQLite file of the workspace."""
+"""What AIHawk knows about each job, and the person's answers, in one SQLite file of the workspace."""
 
 from __future__ import annotations
 
@@ -38,6 +38,16 @@ CREATE TABLE IF NOT EXISTS jobs (
     page_text TEXT,
     screenshot TEXT,
     first_seen TEXT NOT NULL,
+    updated TEXT NOT NULL,
+    cost REAL
+)
+"""
+
+ANSWERS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS answers (
+    name TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    source TEXT NOT NULL,
     updated TEXT NOT NULL
 )
 """
@@ -79,6 +89,7 @@ class Sent:
     note: str
     when: str
     proof: Proof
+    cost: float | None = None
 
 
 @dataclass(frozen=True)
@@ -131,6 +142,11 @@ class Store:
         self._db = sqlite3.connect(path)
         self._db.row_factory = sqlite3.Row
         self._db.execute(SCHEMA)
+        self._db.execute(ANSWERS_SCHEMA)
+        # A store from before the cost was kept gets the column; the rows keep their nulls.
+        if "cost" not in {row[1] for row in self._db.execute("PRAGMA table_info(jobs)")}:
+            self._db.execute("ALTER TABLE jobs ADD COLUMN cost REAL")
+            self._db.commit()
 
     def close(self) -> None:
         self._db.close()
@@ -159,7 +175,7 @@ class Store:
         """Every job tried, the newest first."""
         marks = ",".join("?" * len(SENT_WORDS))
         rows = self._db.execute(f"SELECT * FROM jobs WHERE status IN ({marks}) ORDER BY COALESCE(sent_at, updated) DESC", tuple(SENT_WORDS)).fetchall()
-        return [Sent(self._job(row), row["status"], row["note"] or "", row["sent_at"] or row["updated"], self._proof(row)) for row in rows]
+        return [Sent(self._job(row), row["status"], row["note"] or "", row["sent_at"] or row["updated"], self._proof(row), row["cost"]) for row in rows]
 
     @staticmethod
     def _proof(row: sqlite3.Row) -> Proof:
@@ -186,6 +202,32 @@ class Store:
         rest = [item for _, item in sorted(zip(order, rest, strict=True), key=lambda pair: (-pair[0], pair[1].job.id))]
         return judged + rest
 
+    # The answers: what the person said about themselves, given to the model with the CV when a form is filled.
+    def answers(self) -> dict[str, str]:
+        return {row["name"]: row["value"] for row in self._db.execute("SELECT name, value FROM answers ORDER BY rowid")}
+
+    def answers_text(self) -> str:
+        """The answers as the model reads them: one line each, name and value."""
+        return "\n".join(f"{name}: {value}" for name, value in self.answers().items())
+
+    def add_answers(self, answers: dict[str, str], source: str) -> None:
+        """Answers that are new. One already there is kept: what the person said wins over what is read again from a CV."""
+        rows = [(name, value.strip(), source, _now()) for name, value in answers.items() if value and value.strip()]
+        self._db.executemany("INSERT OR IGNORE INTO answers (name, value, source, updated) VALUES (?, ?, ?, ?)", rows)
+        self._db.commit()
+
+    def set_answer(self, name: str, value: str, source: str = "person") -> None:
+        """One answer as the person changes it; an empty value removes it."""
+        if value.strip():
+            self._db.execute(
+                "INSERT INTO answers (name, value, source, updated) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(name) DO UPDATE SET value = excluded.value, source = excluded.source, updated = excluded.updated",
+                (name, value.strip(), source, _now()),
+            )
+        else:
+            self._db.execute("DELETE FROM answers WHERE name = ?", (name,))
+        self._db.commit()
+
     def set_evidence(self, job_id: str, evidence: float) -> None:
         self._db.execute("UPDATE jobs SET evidence = ?, updated = ? WHERE id = ?", (evidence, _now(), job_id))
         self._db.commit()
@@ -207,6 +249,10 @@ class Store:
 
     def set_status(self, job_id: str, status: str, note: str = "") -> None:
         self._db.execute("UPDATE jobs SET status = ?, note = ?, updated = ? WHERE id = ?", (status, note, _now(), job_id))
+        self._db.commit()
+
+    def set_cost(self, job_id: str, cost: float) -> None:
+        self._db.execute("UPDATE jobs SET cost = ? WHERE id = ?", (cost, job_id))
         self._db.commit()
 
     def set_proof(self, job_id: str, proof: Proof) -> None:

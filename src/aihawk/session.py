@@ -9,15 +9,15 @@ from pathlib import Path
 
 from openai import AsyncOpenAI
 
-from aihawk.apply import Outcome, apply_to_job
+from aihawk.apply import MAILBOXES, Outcome, apply_to_job, signed_in
 from aihawk.apply import sign_in as sign_in_browser
 from aihawk.config import KEY_ENV, KEY_URL, Config, ConfigError, load_config
 from aihawk.database import built_at, search, stored_descriptions, with_description
 from aihawk.documents import score_job
 from aihawk.judge import evidence, fuse, questions
-from aihawk.llm import explain, make_client, refused
+from aihawk.llm import SPEND, explain, make_client, money, refused
 from aihawk.plugins import Plugin, always_plugins, load_plugins, plugin_for
-from aihawk.profile import install_resume, save_setting
+from aihawk.profile import ensure_account_password, import_answers_file, install_resume, save_setting
 from aihawk.store import SENT_WORDS, SUBMITTED, Store, Stored, write_applied
 
 # The funnel: the next WIDE postings by title are weighed by the decision model, and the best JUDGED of them are scored by the judge model.
@@ -33,7 +33,9 @@ class Session:
         self.workspace = workspace
         self.config = load_config(workspace)
         self.plugins: tuple[Plugin, ...] = load_plugins(workspace)
-        self.store = Store(self.config.data_dir / "jobs.db")
+        self.store = Store(self.config.store_file)
+        import_answers_file(self.config, self.store)
+        ensure_account_password(self.store)
         self._client: AsyncOpenAI | None = None
 
     def close(self) -> None:
@@ -74,6 +76,31 @@ class Session:
     async def sign_in(self, wait: Callable[[], Awaitable[None]]) -> None:
         """Open the browser for the person to sign in, until `wait` returns: the same profile the applications use."""
         await sign_in_browser(self.config.browser_profile, self.config.data_dir / "browser", wait)
+
+    def mail(self) -> tuple[str, str]:
+        """The address the person applies with, and its mailbox: gmail, outlook, later (left for later) or empty (never asked)."""
+        answers = self.store.answers()
+        return answers.get("email", ""), answers.get("mail_provider", "")
+
+    def set_mail(self, email: str, provider: str) -> None:
+        if email:
+            self.store.set_answer("email", email)
+        self.store.set_answer("mail_provider", provider)
+
+    async def sign_in_mail(self, provider: str, wait: Callable[[], Awaitable[None]]) -> bool:
+        """The mailbox open in the browser for the person to sign in, until `wait` returns; whether the inbox was reached."""
+        url, _ = MAILBOXES[provider]
+        where = await sign_in_browser(self.config.browser_profile, self.config.data_dir / "browser", wait, url)
+        return signed_in(provider, where)
+
+    async def priced(self) -> None:
+        """The gateway's price list, read once, so each call's cost can be counted."""
+        await SPEND.load_prices(self.client)
+
+    async def settled(self) -> float:
+        """The money spent so far, with every call the gateway has a record for at what it charged."""
+        await SPEND.settle(self.client)
+        return SPEND.total
 
     async def find(self, log: Log) -> int:
         """Bring the postings for this search from the job database into the store; how many are new."""
@@ -161,12 +188,16 @@ class Session:
             raise ConfigError("your CV file is not kept: load your resume again")
         return kept[0]
 
-    async def send(self, items: list[Stored], log: Log, done: Callable[[], None]) -> None:
-        """Send each application once."""
+    async def send(self, items: list[Stored], log: Log, done: Callable[[], None]) -> list[tuple[Stored, Outcome]]:
+        """Send each application once; each with what came of it."""
+        results = []
         for item in items:
+            before = SPEND.total
             outcome = await self.apply(item, log)
+            results.append((item, outcome))
             done()
-            log(f"{item.job.company}: {SENT_WORDS.get(outcome.status, outcome.status)}. {outcome.proof.evidence}".strip())
+            log(f"{item.job.company}: {SENT_WORDS.get(outcome.status, outcome.status)}. {outcome.proof.evidence} ({money(SPEND.total - before)})".replace("  (", " ("))
+        return results
 
     async def apply(self, item: Stored, log: Log) -> Outcome:
         """Fill and send one application, once. What the page said is kept with it, and applied.csv is written."""
@@ -176,9 +207,11 @@ class Session:
         plugin = plugin_for(item.job.url, self.plugins)
         cv = self.config.cv.read_text(encoding="utf-8-sig")
         job = replace(item.job, apply_url=plugin.form_url(item.job.url) if plugin else item.job.url)
-        answers = self.config.answers.read_text(encoding="utf-8-sig") if self.config.answers.is_file() else ""
+        answers = self.store.answers_text()
         extras = always_plugins(self.plugins)
         guidance = "\n\n".join([*([plugin.instructions] if plugin else []), *(extra.instructions for extra in extras)])
+        await self.priced()
+        before = SPEND.total
         try:
             cv_file = self._own_cv()
             log(f"{item.job.company}: filling the form")
@@ -191,6 +224,8 @@ class Session:
             outcome = Outcome("failed", explain(error))
         self.store.set_status(item.job.id, outcome.status, outcome.summary)
         self.store.set_proof(item.job.id, outcome.proof)
+        await SPEND.settle(self.client)
+        self.store.set_cost(item.job.id, SPEND.total - before)
         # The file for the person outside the app. One that another program holds open must not stop the next send.
         try:
             write_applied(self.config.workspace / "applied.csv", self.store.sent())

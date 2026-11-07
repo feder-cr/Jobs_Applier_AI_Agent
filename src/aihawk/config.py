@@ -99,8 +99,13 @@ class Config:
         return self.workspace / "cv.md"
 
     @property
-    def answers(self) -> Path:
+    def answers_file(self) -> Path:
+        """Where the answers were kept before they moved into the store: read once, to import them."""
         return self.workspace / "answers.yaml"
+
+    @property
+    def store_file(self) -> Path:
+        return self.data_dir / "jobs.db"
 
     @property
     def data_dir(self) -> Path:
