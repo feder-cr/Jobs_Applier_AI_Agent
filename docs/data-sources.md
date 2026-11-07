@@ -1,6 +1,6 @@
 # Data sources
 
-AIHawk's job database merges 24 public sources. `pipeline/build.py` reads each one every day, and the release keeps the postings that survive the merge. Each posting names the sources that carried it.
+AIHawk's job database merges 24 public sources. `pipeline/build.py` reads each one every five hours, and the release keeps the postings that survive the merge. Each posting names the sources that carried it.
 
 The licence column says what the source's own page or dataset card states. "Not stated" means no licence was found on that page or in the repository's files. Nothing here is a legal opinion. Postings belong to their employers, and the link in each row goes to the page this table relies on. AIHawk's MIT licence covers its code, not this data.
 
@@ -44,4 +44,4 @@ A source's owner can ask for it to be removed. There are two ways.
 - **In public:** open an issue with the [data source template](../.github/ISSUE_TEMPLATE/data_source.md). Say which source it is, who you are, and what to remove.
 - **In private:** if you would rather not write in public, use the private report in [SECURITY.md](../SECURITY.md).
 
-What happens next: the source is removed from `SOURCES` in `pipeline/build.py` and from this table. The next daily build in [`.github/workflows/jobs-database.yml`](../.github/workflows/jobs-database.yml) does not read it. Releases already published keep their postings until the publish step drops them. It keeps the last three dated releases.
+What happens next: the source is removed from `SOURCES` in `pipeline/build.py` and from this table. The next build, within five hours, in [`.github/workflows/jobs-database.yml`](../.github/workflows/jobs-database.yml) does not read it. Releases already published keep their postings until the publish step drops them. It keeps the last six dated releases, about thirty hours.

@@ -1,10 +1,12 @@
 name: job database
 
-# Every day: read the public job databases, merge them and publish the result as a release, which AIHawk reads when it searches.
+# Every five hours: read the public job databases, merge them and publish the result as a release, which AIHawk reads when it searches.
+# Five hours because the biggest source, jobhive, publishes around 15:00 UTC and the small new-grad lists every hour; a daily build read them up to a day late.
+# Minute 23 because GitHub delays schedules at the top of the hour.
 # Users never scrape anything.
 on:
   schedule:
-    - cron: "23 4 * * *"
+    - cron: "23 */5 * * *"
   workflow_dispatch:
 
 permissions:
@@ -17,7 +19,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 200  # shorter than the five hours to the next run, so a hung build does not take its slot
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

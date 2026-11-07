@@ -1,4 +1,4 @@
-"""Publishes work/out as today's release, and points the release `jobs-latest` at it.
+"""Publishes work/out as this run's release, and points the release `jobs-latest` at it.
 
 A database much smaller than the one before it is refused: losing a big source must not silently empty everyone's search.
 The dated releases keep the files; `jobs-latest` holds only the manifest that names them, so a reader never sees a
@@ -17,7 +17,7 @@ import urllib.request
 from pathlib import Path
 
 LATEST = "jobs-latest"
-KEEP = 3
+KEEP = 6  # five-hourly builds: about 30 hours of releases, so a reader mid-search does not lose its files
 MIN_SHARE_OF_PREVIOUS = 0.7
 
 
@@ -67,14 +67,14 @@ def check(rows: int, previous: int | None) -> None:
     if rows == 0:
         sys.exit("the database is empty: nothing published")
     if previous and rows < previous * MIN_SHARE_OF_PREVIOUS:
-        sys.exit(f"{rows} postings against {previous} yesterday: nothing published. See the manifest's failed sources.")
+        sys.exit(f"{rows} postings against {previous} in the previous build: nothing published. See the manifest's failed sources.")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--repo", required=True)
-    parser.add_argument("--allow-shrink", action="store_true", help="Publish a database much smaller than yesterday's on purpose.")
+    parser.add_argument("--allow-shrink", action="store_true", help="Publish a database much smaller than the previous build's on purpose.")
     arguments = parser.parse_args()
 
     manifest_path: Path = arguments.out / "manifest.json"

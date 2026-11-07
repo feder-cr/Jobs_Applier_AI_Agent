@@ -150,7 +150,7 @@ def test_a_scan_that_logs_from_its_thread_says_it_on_the_loop(tmp_path: Path, mo
     loop_thread = threading.get_ident()
     asyncio.run(session.find(lambda line: seen.append((line, threading.get_ident()))))
     assert seen[0] == ("from the thread", loop_thread)
-    assert seen[1][0] == "0 postings fit your search, of 0 in the job database built 2026-11-04; 0 new" and seen[1][1] == loop_thread
+    assert seen[1][0] == "0 postings fit your search, of 0 in the job database built 2026-11-04 00:00 UTC; 0 new" and seen[1][1] == loop_thread
 
 
 def test_with_no_postings_left_the_funnel_does_nothing(tmp_path: Path) -> None:

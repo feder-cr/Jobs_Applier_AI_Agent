@@ -3,8 +3,8 @@
     python pipeline/build.py --out work                 # everything
     python pipeline/build.py --out work --only riley    # only these sources
 
-Scheduled daily in .github/workflows/jobs-database.yml, which publishes work/out as a release. Each source is read into
-work/sources/<name>.parquet in the columns of COMMON. A source that fails is left out of the day's database and named in
+Scheduled every five hours in .github/workflows/jobs-database.yml, which publishes work/out as a release. Each source is read into
+work/sources/<name>.parquet in the columns of COMMON. A source that fails is left out of that build's database and named in
 the manifest; publish.py refuses a database that lost too much of itself. Postings are the same posting when their links
 are the same after `KEY`, and of those the row with the longest description is kept, the other rows adding their source's
 name. The output is cut in files under GitHub's limit of 2 GiB per release file, with index.parquet beside them: every posting without its
