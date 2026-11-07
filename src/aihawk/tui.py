@@ -25,9 +25,10 @@ from aihawk.store import SUBMITTED, Sent, Stored, said, sent_word
 # Below this width there is no room for the location beside the company and the role.
 WIDE_ENOUGH = 100
 SEARCH_SETTINGS = {"titles", "places", "exclude", "max_age_days"}
-# Jobs kept scored and waiting while the person reads: the list stays ahead of the cursor, and scoring stops there
-# until applications use some up, so a long search does not score thousands nobody will read.
-READ_AHEAD = 50
+# Scored jobs kept below the cursor. The judge follows the person down the list and stops there, so a long search never
+# pays to score what nobody will reach. Scoring runs in small chunks, to stop as soon as the count is met.
+LOOKAHEAD = 50
+CHUNK = 10
 RESUME_QUESTION = "Where is your resume?"
 MAIL_QUESTION = "The email you apply with."
 MAIL_HINT = "Job sites send their codes there, and AIHawk reads only those · Enter · Esc for later"
@@ -429,32 +430,42 @@ class AIHawk(App[None]):
         finally:
             self.show_heading()
 
-    async def judge(self) -> None:
-        """Score what the search found, batch after batch, while the person reads what is already there.
+    def scored_ahead(self) -> int:
+        """Scored jobs from the cursor to the end of the list: what the person still has to read."""
+        items = self.session.store.all()
+        current = self.current_id()
+        start = next((index for index, item in enumerate(items) if item.job.id == current), 0)
+        return sum(1 for item in items[start:] if item.score is not None)
 
-        Nothing is announced: the scores filling the list are the progress, and a batch is read ahead so that the next job
-        down the list is scored before the person reaches it. It stops once READ_AHEAD jobs are waiting to be read, and
-        starts again by itself when applications take some of them, or at once on `m`.
+    async def judge(self) -> None:
+        """Score until LOOKAHEAD jobs lie scored below the cursor, then stop.
+
+        Nothing is announced: the scores filling the list are the progress. Jev weighs a batch of titles and descriptions
+        for a fraction of a cent, and the judge, which costs, scores a chunk at a time and stops the moment the count is
+        met. Moving the cursor down calls this again, so the list stays ahead of the person and no further.
         """
         session = self.session
         await session.priced()
         before = SPEND.total
-        first = True
-        while session.store.with_status("new"):
-            if first and not session.store.with_status("scored"):
-                self.say("Reading the best postings; a minute or two.")
-            first = False
-            await session.funnel(self.say, lambda _: None)
-            self.refresh_jobs()
-            items = session.store.with_status("shortlisted")
-            if not items:
-                break
-            await session.score(items, self.refresh_jobs, self.say)
-            if len(session.store.with_status("scored")) >= READ_AHEAD:
-                break
+        if not session.store.all():
+            self.say("Reading the best postings; a minute or two.")
+        # Two ways to stop: the count ahead is met, or this pass has scored a lookahead's worth. The second matters when
+        # the cursor sits at the end of the list, where nothing new can land ahead of it and the first would never be met.
+        scored_now = 0
+        while self.scored_ahead() < LOOKAHEAD and scored_now < LOOKAHEAD:
+            waiting = session.store.with_status("shortlisted")
+            if not waiting:
+                if not session.store.with_status("new"):
+                    break
+                await session.funnel(self.say, lambda _: None)
+                self.refresh_jobs()
+                continue
+            chunk = waiting[: min(CHUNK, LOOKAHEAD - scored_now)]
+            await session.score(chunk, self.refresh_jobs, self.say)
+            scored_now += len(chunk)
         spent = await session.settled() - before
         if spent:
-            self.say(f"{len(session.store.with_status('scored'))} to read, {money(spent)}.")
+            self.say(f"{self.scored_ahead()} to read, {money(spent)}.")
 
     # The keys.
 
@@ -487,12 +498,22 @@ class AIHawk(App[None]):
             webbrowser.open(item.job.url)
 
     def action_more(self) -> None:
-        self.more_jobs()
+        self.more_jobs(asked=True)
+
+    @on(DataTable.RowHighlighted)
+    def row_moved(self) -> None:
+        """The judge follows the cursor: fewer than LOOKAHEAD scored jobs below it, and the next ones are scored."""
+        if self.busy or any(worker.group == "flow" and worker.is_running for worker in self.workers):
+            return
+        store = self.session.store
+        if self.scored_ahead() < LOOKAHEAD and (store.with_status("shortlisted") or store.with_status("new")):
+            self.more_jobs()
 
     @work(exclusive=True, group="flow")
-    async def more_jobs(self) -> None:
+    async def more_jobs(self, asked: bool = False) -> None:
         try:
-            if not self.session.store.with_status("new"):
+            store = self.session.store
+            if asked and not (store.with_status("shortlisted") or store.with_status("new")):
                 self.say("Everything the search found has been read.")
                 return
             await self.judge()
@@ -716,9 +737,8 @@ class AIHawk(App[None]):
             self.refresh_jobs()
         if unread:
             await self.mail_then_retry(unread)
-        # The applications used some of the read-ahead: fill it again while the person looks at what is left.
-        if self.session.store.with_status("new") and len(self.session.store.with_status("scored")) < READ_AHEAD:
-            self.more_jobs()
+        # The applications used some of what lay ahead: fill it again, as a cursor move would.
+        self.row_moved()
 
     async def mail_then_retry(self, items: list[Stored]) -> None:
         """A site sent a code to the mail and the mailbox was not signed in: the sign-in now, then those applications again."""

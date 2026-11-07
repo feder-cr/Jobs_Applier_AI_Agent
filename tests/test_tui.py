@@ -893,13 +893,13 @@ def test_the_mail_question_left_with_escape_is_not_asked_again_at_the_next_start
     assert read_answers(load_config(home))["mail_provider"] == "later"
 
 
-def test_the_list_scores_ahead_in_batches_and_says_nothing_while_it_does(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Jev is fast, so the next job down the list is scored before the person reaches it: no counter, no "scoring 25".
+def test_the_judge_follows_the_cursor_and_stops_at_the_lookahead(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The judge scores what lies ahead of the person and no further, and says nothing while it does.
     import aihawk.session as session_module
 
     monkeypatch.setattr(session_module, "WIDE", 2)
     monkeypatch.setattr(session_module, "JUDGED", 1)
-    monkeypatch.setattr(tui_module, "READ_AHEAD", 3)
+    monkeypatch.setattr(tui_module, "LOOKAHEAD", 1)
 
     async def run() -> None:
         app = scripted_app(home, resume)
@@ -907,9 +907,24 @@ def test_the_list_scores_ahead_in_batches_and_says_nothing_while_it_does(home: P
             await settle(pilot, app)
             log = logged(app)
             assert "Scoring" not in log and "scoring" not in log
-            # One judged per batch: a second batch ran with no key pressed, which the old single pass would not have done.
+            table = app.query_one(DataTable)
+            table.move_cursor(row=0)
+            # The lookahead is filled from where the person is.
+            assert app.scored_ahead() >= 1
+            # The cursor moving asks for the next ones, with no key but an arrow.
+            await pilot.press("down")
+            await settle(pilot, app)
             assert len(app.session.store.with_status("scored")) == 2
-            assert not app.session.store.with_status("new")
+            assert not app.session.store.with_status("new") and len(app.session.store.with_status("passed_over")) == 1
+
+    asyncio.run(run())
+
+
+def test_m_says_so_when_there_is_nothing_left_to_read(home: Path, resume: Path) -> None:
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
             await pilot.press("m")
             await settle(pilot, app)
             assert "Everything the search found has been read." in logged(app)
