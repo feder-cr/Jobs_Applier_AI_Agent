@@ -135,12 +135,13 @@ async def settle(pilot: Any, app: AIHawk) -> None:
     raise AssertionError("the flow never settled")
 
 
-def test_a_judged_posting_with_no_text_says_so_in_its_status_and_keeps_its_score(home: Path) -> None:
+def test_a_judged_posting_with_no_text_keeps_its_score_and_the_row_carries_no_status(home: Path) -> None:
     app = AIHawk(home)
     judged = Stored(Job("x", "Co", "Engineer", "Milan", "u", "u", ""), "scored", 3.0, None, None, None)
     read = Stored(Job("y", "Co", "Engineer", "Milan", "u", "u", "A posting."), "scored", 3.0, None, None, None)
-    assert app.row(judged)[1] == "3.0" and app.row(judged)[-1] == "title only"
-    assert app.row(read)[-1] == ""
+    # The row says the score and nothing else; that the text was missing is said in the details, on Enter.
+    assert app.row(judged)[1] == "3.0" and len(app.row(judged)) == len(app.row(read)) == 5
+    assert str(app.row(judged)[0]) == "" and str(app.row(read)[0]) == ""
 
 
 def companies(app: AIHawk) -> list[str]:
@@ -257,7 +258,7 @@ def test_space_space_a_then_enter_sends_each_selected_job_once_and_asks_no_quest
             await pilot.pause(0.1)
             assert not isinstance(app.screen, TextPrompt)
             table = app.query_one(DataTable)
-            assert [table.get_row_at(index)[5] for index in range(2)] == ["sent", "sent"]
+            assert [str(table.get_row_at(index)[0]) for index in range(2)] == ["✓", "✓"]
             assert app.selected == set()
 
     asyncio.run(run())
@@ -280,7 +281,7 @@ def test_escape_on_the_batch_sends_none_and_the_selection_stays(home: Path, resu
             await pilot.press("escape")
             await wait_for_apply(pilot, app)
             assert app.selected == {"high"}
-            assert app.query_one(DataTable).get_row_at(0)[5] == ""
+            assert str(app.query_one(DataTable).get_row_at(0)[0]) == "●"
 
     asyncio.run(run())
     assert calls == []
@@ -373,7 +374,7 @@ def test_s_with_nothing_tried_says_how_to_send(home: Path, resume: Path) -> None
             await pilot.press("s")
             await pilot.pause(0.1)
             assert not isinstance(app.screen, SentList)
-            assert "Nothing has been sent yet" in logged(app)
+            assert "Nothing sent yet" in logged(app)
 
     asyncio.run(run())
 
@@ -392,25 +393,24 @@ def test_each_send_says_how_it_went_and_where_to_read_more(home: Path, resume: P
             await wait_for_apply(pilot, app)
             log = logged(app)
             assert "Bestco: sent and confirmed. The page says thank you." in log
-            assert "Press s for every application" in log
 
     asyncio.run(run())
 
 
-def test_at_80_columns_the_status_shows_and_at_100_the_location_too(home: Path, resume: Path) -> None:
+def test_at_80_columns_the_role_is_the_last_column_and_at_100_the_location_is(home: Path, resume: Path) -> None:
     async def run() -> None:
-        for width, labels in ((80, 5), (100, 6)):
+        for width, labels in ((80, 5), (100, 6)):  # the columns before the status column was dropped; one fewer now
             app = scripted_app(home, resume)
             async with app.run_test(size=(width, 24)) as pilot:
                 await settle(pilot, app)
                 table = app.query_one(DataTable)
-                assert len(table.ordered_columns) == labels and str(table.ordered_columns[-1].label) == "Status"
+                assert len(table.ordered_columns) == labels - 1 and str(table.ordered_columns[-1].label) == ("Location" if width >= 100 else "Role")
                 assert sum(column.width + 2 for column in table.ordered_columns) <= width - 2
 
     asyncio.run(run())
 
 
-def test_a_jobs_details_can_select_it_and_the_heading_counts_the_selection(home: Path, resume: Path) -> None:
+def test_a_jobs_details_can_select_it_and_the_row_shows_the_mark(home: Path, resume: Path) -> None:
     async def run() -> None:
         app = scripted_app(home, resume)
         async with app.run_test(size=(140, 40)) as pilot:
@@ -420,7 +420,7 @@ def test_a_jobs_details_can_select_it_and_the_heading_counts_the_selection(home:
             await pilot.press("space")
             await pilot.pause(0.1)
             assert not isinstance(app.screen, JobDetails) and len(app.selected) == 1
-            assert "1 selected" in str(app.query_one("#heading", Static).render())
+            assert str(app.query_one(DataTable).get_row_at(0)[0]) == "●"
 
     asyncio.run(run())
 
@@ -674,7 +674,7 @@ def test_a_failed_model_call_says_in_plain_words_what_happened_and_keeps_the_det
     assert text.endswith(f"({error})")
 
 
-def test_ctrl_c_at_the_key_prompt_leaves_and_the_prompt_says_how(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ctrl_c_at_the_key_prompt_leaves(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ORCAROUTER_API_KEY")
 
     async def run() -> None:
@@ -682,7 +682,7 @@ def test_ctrl_c_at_the_key_prompt_leaves_and_the_prompt_says_how(home: Path, mon
         async with app.run_test(size=(80, 24)) as pilot:
             await settle(pilot, app)
             assert isinstance(app.screen, TextPrompt)
-            assert "Ctrl+C quits" in str(app.screen.query_one(".hint", Static).content)
+            assert "Enter saves it" in str(app.screen.query_one(".hint", Static).content)
             await pilot.press("ctrl+c")
             await pilot.pause(0.1)
             assert not app.is_running
@@ -886,7 +886,7 @@ def test_the_mail_question_left_with_escape_is_not_asked_again_at_the_next_start
             await pilot.press("escape")
             await settle(pilot, app)
             assert companies(app) == ["Bestco", "Lowly", "Noplugin"]
-            assert ("mail", "Your mail", "not set up: a code a site sends you cannot be read") in app.setting_rows()
+            assert ("mail", "Your mail", "not set up") in app.setting_rows()
 
     asyncio.run(run())
     assert read_answers(load_config(home))["mail_provider"] == "later"
