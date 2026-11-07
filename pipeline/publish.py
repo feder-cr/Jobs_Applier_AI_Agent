@@ -3,12 +3,17 @@
 A database much smaller than the one before it is refused: losing a big source must not silently empty everyone's search.
 The dated releases keep the files; `jobs-latest` holds only the manifest that names them, so a reader never sees a
 half-replaced database. The last KEEP dated releases stay, so a reader mid-search does not lose its files.
+
+Each build also publishes the delta of the index against the build before it: the postings added, the ones whose fields
+changed, and the keys gone. A reader that has the index applies them in order and never downloads the whole of it again.
+They are kept for ever, a month to a release, because a reader may come back after any time.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -16,7 +21,12 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import duckdb
+
 LATEST = "jobs-latest"
+DATED = re.compile(r"^jobs-\d{8}-\d{6}$")
+# The columns a delta carries: the index's own, without the file and row that point into one build's files.
+INDEX_COLUMNS = ("url", "title", "company", "ats", "location", "country", "remote", "salary_min", "salary_max", "salary_currency", "posted_at")
 KEEP = 6  # five-hourly builds: about 30 hours of releases, so a reader mid-search does not lose its files
 MIN_SHARE_OF_PREVIOUS = 0.7
 
@@ -52,15 +62,71 @@ def publish_files(repo: str, tag: str, folder: Path, names: list[str], notes: st
     gh("release", "edit", tag, "--draft=false", "--latest=false", "--repo", repo)
 
 
-def previous_rows(repo: str) -> int | None:
+def previous_manifest(repo: str) -> dict | None:
+    """The manifest of the build now published, which this one follows; None for the first build of all."""
     url = f"https://github.com/{repo}/releases/download/{LATEST}/manifest.json"
     try:
         with urllib.request.urlopen(url, timeout=60) as response:
-            return json.load(response)["rows_out"]
+            return json.load(response)
     except urllib.error.HTTPError as error:
         if error.code == 404:
             return None
         raise
+
+
+def build_of(manifest: dict) -> str:
+    """A build's tag: written in the manifest since schema 2, the end of its release's address before."""
+    return manifest.get("build") or manifest["base_url"].rstrip("/").rsplit("/", 1)[-1]
+
+
+def deltas_release(tag: str) -> str:
+    """The release that keeps the deltas of the month a build belongs to: jobs-20261107-103405 is in jobs-deltas-202611."""
+    return f"jobs-deltas-{tag[5:11]}"
+
+
+def write_delta(previous_index: str, index: Path, out: Path) -> tuple[int, int]:
+    """The delta from the previous index to this one: an `add` row for each posting new or changed, a `drop` row for each key
+    gone. A changed posting is an add: a reader replaces whatever row it holds under that key. How many adds and drops."""
+    columns = ", ".join(INDEX_COLUMNS)
+    connection = duckdb.connect()
+    try:
+        connection.execute("INSTALL httpfs; LOAD httpfs;")
+        connection.execute(f"CREATE TABLE before AS SELECT key, hash({columns}) AS h FROM read_parquet(?)", [previous_index])
+        connection.execute(f"CREATE TABLE after AS SELECT key, hash({columns}) AS h FROM read_parquet(?)", [index.as_posix()])
+        connection.execute("""
+            CREATE TABLE changed AS
+            SELECT coalesce(a.key, b.key) AS key, a.key IS NULL AS gone
+            FROM after AS a FULL OUTER JOIN before AS b ON a.key = b.key
+            WHERE a.key IS NULL OR b.key IS NULL OR a.h <> b.h
+        """)
+        connection.execute(f"""
+            COPY (
+                SELECT 'add' AS op, i.key, {", ".join(f"i.{column}" for column in INDEX_COLUMNS)}
+                FROM read_parquet(?) AS i SEMI JOIN changed AS c ON i.key = c.key AND NOT c.gone
+                UNION ALL
+                SELECT 'drop' AS op, c.key, {", ".join(f"NULL AS {column}" for column in INDEX_COLUMNS)}
+                FROM changed AS c WHERE c.gone
+            ) TO '{out.as_posix()}' (FORMAT parquet, COMPRESSION zstd)
+        """, [index.as_posix()])
+        adds, drops = connection.execute(
+            "SELECT count(*) FILTER (WHERE NOT gone), count(*) FILTER (WHERE gone) FROM changed"
+        ).fetchone()
+        return int(adds), int(drops)
+    finally:
+        connection.close()
+
+
+def publish_delta(repo: str, tag: str, path: Path) -> str:
+    """The delta into its month's release, made the first time a month needs it; where a reader downloads it."""
+    release = deltas_release(tag)
+    try:
+        gh("release", "view", release, "--repo", repo)
+        gh("release", "upload", release, str(path), "--clobber", "--repo", repo)
+    except GhError:
+        gh("release", "create", release, str(path), "--repo", repo, "--title", f"Job index deltas {tag[5:9]}-{tag[9:11]}",
+           "--notes", "The changes to the job index, one file per build. Kept for ever: an AIHawk applies the ones it has not seen.",
+           "--latest=false")
+    return f"https://github.com/{repo}/releases/download/{release}/{path.name}"
 
 
 def check(rows: int, previous: int | None) -> None:
@@ -79,9 +145,18 @@ def main() -> None:
 
     manifest_path: Path = arguments.out / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    check(manifest["rows_out"], None if arguments.allow_shrink else previous_rows(arguments.repo))
+    previous = previous_manifest(arguments.repo)
+    check(manifest["rows_out"], None if arguments.allow_shrink or previous is None else previous["rows_out"])
 
     tag = "jobs-" + manifest["built_at"][:19].replace(":", "").replace("-", "").replace("T", "-")
+    manifest["build"] = tag
+    manifest["deltas"] = []
+    if previous is not None:
+        delta = arguments.out / f"delta-{tag}.parquet"
+        adds, drops = write_delta(f"{previous['base_url']}/{previous['index']['name']}", arguments.out / manifest["index"]["name"], delta)
+        url = publish_delta(arguments.repo, tag, delta)
+        manifest["deltas"] = [*previous.get("deltas", []), {"build": tag, "after": build_of(previous), "url": url, "adds": adds, "drops": drops}]
+        print(f"delta against {build_of(previous)}: {adds} added or changed, {drops} gone")
     names = [manifest["index"]["name"], *(item["name"] for item in manifest["files"])]
     notes = f"{manifest['rows_out']} job postings. See {LATEST} for the current database. Sources and licences: https://github.com/{arguments.repo}/blob/main/docs/data-sources.md"
     publish_files(arguments.repo, tag, arguments.out, names, notes)
@@ -97,7 +172,8 @@ def main() -> None:
             gh("release", "create", LATEST, str(latest), "--repo", arguments.repo, "--title", "Job database: current", "--notes", "The manifest of the current job database.", "--latest=false")
 
     tags = gh("release", "list", "--repo", arguments.repo, "--limit", "200", "--json", "tagName", "--jq", ".[].tagName").split()
-    dated = sorted(name for name in tags if name.startswith("jobs-") and name != LATEST)
+    # The deltas' monthly releases are kept for ever: only the dated builds are cleared.
+    dated = sorted(name for name in tags if DATED.match(name))
     for old in dated[:-KEEP]:
         gh("release", "delete", old, "--repo", arguments.repo, "--yes", "--cleanup-tag")
     print(f"published {tag}: {manifest['rows_out']} postings in {len(names)} files")
