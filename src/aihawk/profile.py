@@ -18,10 +18,8 @@ from pypdf.errors import PyPdfError
 
 from aihawk.config import CONFIG_FILE, Config, ConfigError, load_config
 from aihawk.llm import structured
-from aihawk.store import Store
+from aihawk.store import ACCOUNT_PASSWORD, Store
 
-# The one password for the job sites that need an account, made once and kept with the answers: the person can sign in again.
-ACCOUNT_PASSWORD = "account_password"
 PASSWORD_LENGTH = 20
 PASSWORD_SYMBOLS = "!@#$%&*-_=+?"
 
