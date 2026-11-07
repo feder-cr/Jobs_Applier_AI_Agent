@@ -18,6 +18,6 @@ Dropdowns are `div[role="combobox"]` showing "--" until a choice is made, such a
 
 "Add Work History" and "Add Education" add rows, with the same fields numbered `.0`, `.1`. "Select Cover Letter" is a file: leave it empty unless required.
 
-Demographic questions on the last steps are voluntary: choose the option that declines to answer.
+Demographic questions on the last steps are voluntary: choose the option that declines to answer, and spend as few steps on them as the form allows; on a real form they took most of 148 steps. They come in two kinds. The boxes `#acknowledgements\.eeoGender`, `#acknowledgements\.racialOrEthnicGroup`, `#acknowledgements\.disability`, `#acknowledgements\.militaryService` and `#expandedIdentityQuestions\.identifyAsLegalGender\.0` are listboxes: click the box, read the options as the children of `#<id>__listbox` with browser_evaluate, then click `#<id>__listbox__option__N` for the declining one; when that option is out of reach (the click says the event would land elsewhere), press ArrowDown as many times as its position and then Enter. `#ethnicityOptions` and `#pronounOptions` are typeahead lists: type `Prefer not to say`, then click the first row of `#<id>-dropdown-list-container` (`div.ListItemEven`), which may read "Create Prefer not to say" and still sets the value; read the field afterwards to check.
 
 After sending: read the page: if the form is still there, the application was not received.
