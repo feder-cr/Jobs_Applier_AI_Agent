@@ -24,7 +24,7 @@ from aihawk.store import SUBMITTED, Sent, Stored, said, sent_word
 
 # Below this width there is no room for the location beside the company and the role.
 WIDE_ENOUGH = 100
-SEARCH_SETTINGS = {"titles", "places", "exclude", "max_age_days"}
+SEARCH_SETTINGS = {"places", "exclude", "max_age_days"}
 # Scored jobs kept below the cursor. The judge follows the person down the list and stops there, so a long search never
 # pays to score what nobody will reach. Scoring runs in small chunks, to stop as soon as the count is met.
 LOOKAHEAD = 50
@@ -530,10 +530,9 @@ class AIHawk(App[None]):
             self.say("Nothing sent yet.")
 
     def setting_rows(self) -> list[tuple[str, str, str]]:
+        # What to look for is not here: the titles and their graph come from the resume. A new resume changes them.
         config = self.session.config
-        titles = [form.text for form in config.filters.plan.nodes[0].forms] if config.filters.plan.nodes else list(config.filters.include)
         return [
-            ("titles", "Look for", ", ".join(titles)),
             ("places", "Where", ", ".join(config.filters.locations)),
             ("exclude", "Leave out", ", ".join(config.filters.exclude)),
             ("max_age_days", "Posted within (days)", str(config.max_age_days)),

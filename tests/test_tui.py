@@ -785,8 +785,6 @@ def test_a_setting_that_would_not_load_is_refused_and_the_file_stays_as_it_was(h
     with pytest.raises(ConfigError, match="max_age_days"):
         session.change_setting("max_age_days", "soon")
     assert (home / "aihawk.yaml").read_text(encoding="utf-8") == before
-    with pytest.raises(ConfigError, match="at least one job title"):
-        session.change_setting("titles", " , ")
     session.close()
 
 
