@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import re
+import secrets
 import shutil
+import string
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -16,6 +18,12 @@ from pypdf.errors import PyPdfError
 
 from aihawk.config import CONFIG_FILE, Config, ConfigError, load_config
 from aihawk.llm import structured
+from aihawk.store import Store
+
+# The one password for the job sites that need an account, made once and kept with the answers: the person can sign in again.
+ACCOUNT_PASSWORD = "account_password"
+PASSWORD_LENGTH = 20
+PASSWORD_SYMBOLS = "!@#$%&*-_=+?"
 
 _WORD_TEXT = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
@@ -189,8 +197,7 @@ async def install_resume(client: AsyncOpenAI, config: Config, path: Path) -> dic
     settings.update({"name": profile["name"], "goals": profile["goals"], "filters": filters})
     settings_path.write_text(yaml.safe_dump(settings, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
-    stated = {key: value for key, value in profile["answers"].items() if value.strip()}
-    add_answers(config, stated)
+    add_answers(config, {key: value for key, value in profile["answers"].items() if value.strip()}, source="cv")
     return profile
 
 
@@ -233,15 +240,50 @@ def save_setting(config: Config, name: str, value: str) -> None:
         raise
 
 
+def import_answers_file(config: Config, store: Store) -> int:
+    """The answers.yaml of earlier versions, brought into the store once; the file is then renamed, not deleted. How many came in."""
+    path = config.answers_file
+    if not path.is_file():
+        return 0
+    data = yaml.safe_load(path.read_text(encoding="utf-8-sig"))
+    answers = {str(name): str(value) for name, value in data.items() if value is not None} if isinstance(data, dict) else {}
+    store.add_answers(answers, source="answers.yaml")
+    path.replace(path.with_suffix(".yaml.imported"))
+    return len(answers)
+
+
+def new_password() -> str:
+    """A password the sites accept: upper and lower case, a digit and a symbol, in a random order."""
+    classes = (string.ascii_uppercase, string.ascii_lowercase, string.digits, PASSWORD_SYMBOLS)
+    chars = [secrets.choice(group) for group in classes]
+    chars += [secrets.choice("".join(classes)) for _ in range(PASSWORD_LENGTH - len(chars))]
+    secrets.SystemRandom().shuffle(chars)
+    return "".join(chars)
+
+
+def ensure_account_password(store: Store) -> bool:
+    """The account password, made the first time it is missing. Whether it was made now."""
+    if ACCOUNT_PASSWORD in store.answers():
+        return False
+    store.set_answer(ACCOUNT_PASSWORD, new_password(), source="generated")
+    return True
+
+
 def read_answers(config: Config) -> dict[str, str]:
-    if not config.answers.is_file():
-        return {}
-    data = yaml.safe_load(config.answers.read_text(encoding="utf-8-sig"))
-    return data if isinstance(data, dict) else {}
+    """The answers in the store, after the old file, if any, has been brought in."""
+    store = Store(config.store_file)
+    try:
+        import_answers_file(config, store)
+        return store.answers()
+    finally:
+        store.close()
 
 
-def add_answers(config: Config, answers: dict[str, str]) -> None:
+def add_answers(config: Config, answers: dict[str, str], source: str = "person") -> None:
     """Remember what the person said. An answer they gave wins over one read again from a CV."""
-    config.workspace.mkdir(parents=True, exist_ok=True)
-    merged = {**answers, **read_answers(config)}
-    config.answers.write_text(yaml.safe_dump(merged, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    store = Store(config.store_file)
+    try:
+        import_answers_file(config, store)
+        store.add_answers(answers, source)
+    finally:
+        store.close()

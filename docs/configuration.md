@@ -4,6 +4,10 @@ Press `e` in AIHawk to change these on the screen. AIHawk reads `aihawk.yaml` in
 
 Loading a resume rewrites this file, and the rewrite drops the comments you put in it, so keep your notes elsewhere.
 
+## Your answers
+
+What the forms are told about you beyond the CV (email, phone, location, links, and anything you add) lives in the `answers` table of `data/jobs.db`, the SQLite file in the AIHawk folder. Press `e`, then "Your answers", to see, change or add them; an answer you gave is kept when a new resume is read. AIHawk makes an `account_password` the first time it starts and keeps it there: the one password it uses on job sites that need an account, such as Workday, so you can sign in to those sites yourself. The `answers.yaml` of earlier versions is read once, brought into the table and renamed `answers.yaml.imported`.
+
 | Key | Default | What it does |
 |---|---|---|
 | `name` | empty | Your name for this search, shown at the top of the list. |

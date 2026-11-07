@@ -17,7 +17,7 @@ from aihawk.documents import score_job
 from aihawk.judge import evidence, fuse, questions
 from aihawk.llm import explain, make_client, refused
 from aihawk.plugins import Plugin, always_plugins, load_plugins, plugin_for
-from aihawk.profile import install_resume, save_setting
+from aihawk.profile import ensure_account_password, import_answers_file, install_resume, save_setting
 from aihawk.store import SENT_WORDS, SUBMITTED, Store, Stored, write_applied
 
 # The funnel: the next WIDE postings by title are weighed by the decision model, and the best JUDGED of them are scored by the judge model.
@@ -33,7 +33,9 @@ class Session:
         self.workspace = workspace
         self.config = load_config(workspace)
         self.plugins: tuple[Plugin, ...] = load_plugins(workspace)
-        self.store = Store(self.config.data_dir / "jobs.db")
+        self.store = Store(self.config.store_file)
+        import_answers_file(self.config, self.store)
+        ensure_account_password(self.store)
         self._client: AsyncOpenAI | None = None
 
     def close(self) -> None:
@@ -176,7 +178,7 @@ class Session:
         plugin = plugin_for(item.job.url, self.plugins)
         cv = self.config.cv.read_text(encoding="utf-8-sig")
         job = replace(item.job, apply_url=plugin.form_url(item.job.url) if plugin else item.job.url)
-        answers = self.config.answers.read_text(encoding="utf-8-sig") if self.config.answers.is_file() else ""
+        answers = self.store.answers_text()
         extras = always_plugins(self.plugins)
         guidance = "\n\n".join([*([plugin.instructions] if plugin else []), *(extra.instructions for extra in extras)])
         try:

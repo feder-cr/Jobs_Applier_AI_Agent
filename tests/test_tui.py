@@ -160,7 +160,10 @@ def test_a_resume_is_all_it_takes_to_get_the_best_jobs_first(home: Path, resume:
     assert config.filters.locations == ("Milan", "Milano", "Italy")
     assert config.filters.cities == ("Milan", "Milano")
     assert config.cv.read_text(encoding="utf-8").startswith("# Ada Rossi")
-    assert read_answers(config) == {"email": "ada@example.com", "location": "Milan"}
+    answers = read_answers(config)
+    assert {name: answers[name] for name in ("email", "location")} == {"email": "ada@example.com", "location": "Milan"}
+    # The one password for the sites that need an account, made at the first start and kept with the answers.
+    assert len(answers["account_password"]) == 20
 
 
 def test_no_resume_asks_for_one_and_a_wrong_path_asks_again(home: Path, resume: Path) -> None:

@@ -1,4 +1,4 @@
-"""What AIHawk knows about each job, in one SQLite file of the workspace."""
+"""What AIHawk knows about each job, and the person's answers, in one SQLite file of the workspace."""
 
 from __future__ import annotations
 
@@ -38,6 +38,15 @@ CREATE TABLE IF NOT EXISTS jobs (
     page_text TEXT,
     screenshot TEXT,
     first_seen TEXT NOT NULL,
+    updated TEXT NOT NULL
+)
+"""
+
+ANSWERS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS answers (
+    name TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    source TEXT NOT NULL,
     updated TEXT NOT NULL
 )
 """
@@ -131,6 +140,7 @@ class Store:
         self._db = sqlite3.connect(path)
         self._db.row_factory = sqlite3.Row
         self._db.execute(SCHEMA)
+        self._db.execute(ANSWERS_SCHEMA)
 
     def close(self) -> None:
         self._db.close()
@@ -185,6 +195,32 @@ class Store:
         order = fuse([item.job.lexical for item in rest], [item.evidence or 0.0 for item in rest])
         rest = [item for _, item in sorted(zip(order, rest, strict=True), key=lambda pair: (-pair[0], pair[1].job.id))]
         return judged + rest
+
+    # The answers: what the person said about themselves, given to the model with the CV when a form is filled.
+    def answers(self) -> dict[str, str]:
+        return {row["name"]: row["value"] for row in self._db.execute("SELECT name, value FROM answers ORDER BY rowid")}
+
+    def answers_text(self) -> str:
+        """The answers as the model reads them: one line each, name and value."""
+        return "\n".join(f"{name}: {value}" for name, value in self.answers().items())
+
+    def add_answers(self, answers: dict[str, str], source: str) -> None:
+        """Answers that are new. One already there is kept: what the person said wins over what is read again from a CV."""
+        rows = [(name, value.strip(), source, _now()) for name, value in answers.items() if value and value.strip()]
+        self._db.executemany("INSERT OR IGNORE INTO answers (name, value, source, updated) VALUES (?, ?, ?, ?)", rows)
+        self._db.commit()
+
+    def set_answer(self, name: str, value: str, source: str = "person") -> None:
+        """One answer as the person changes it; an empty value removes it."""
+        if value.strip():
+            self._db.execute(
+                "INSERT INTO answers (name, value, source, updated) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(name) DO UPDATE SET value = excluded.value, source = excluded.source, updated = excluded.updated",
+                (name, value.strip(), source, _now()),
+            )
+        else:
+            self._db.execute("DELETE FROM answers WHERE name = ?", (name,))
+        self._db.commit()
 
     def set_evidence(self, job_id: str, evidence: float) -> None:
         self._db.execute("UPDATE jobs SET evidence = ?, updated = ? WHERE id = ?", (evidence, _now(), job_id))

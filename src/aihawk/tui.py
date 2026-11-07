@@ -210,13 +210,14 @@ class Settings(ModalScreen[str | None]):
 
     BINDINGS: ClassVar = [Binding("escape,q,e", "close", "Back")]
 
-    def __init__(self, rows: list[tuple[str, str, str]]) -> None:
+    def __init__(self, rows: list[tuple[str, str, str]], title: str = "Settings") -> None:
         super().__init__()
         self.rows = rows
+        self.title_text = title
 
     def compose(self) -> ComposeResult:
         with Vertical(id="wide"):
-            yield Static("Settings", id="question", markup=False)
+            yield Static(self.title_text, id="question", markup=False)
             yield DataTable(id="settings", cursor_type="row", show_header=False)
             yield Static("Enter changes it Â· Esc goes back", classes="hint")
             yield Footer()
@@ -512,8 +513,14 @@ class AIHawk(App[None]):
             ("judge_model", "Scoring model", config.judge_model),
             ("quick_model", "Search plan model", config.quick_model),
             ("decision_model", "Shortlist model", config.decision_model),
+            ("answers", "Your answers", f"{len(self.session.store.answers())} saved, given with the CV to every form"),
             ("folder", "Your files", str(config.workspace)),
         ]
+
+    def answer_rows(self) -> list[tuple[str, str, str]]:
+        """What the forms are told about the person: the answers in the store, and a row to add one."""
+        rows = [(f"answer:{name}", name.replace("_", " "), value) for name, value in self.session.store.answers().items()]
+        return [*rows, ("answer:", "Add an answer", "name: value")]
 
     def action_settings(self) -> None:
         if self.applying() or self.signing_in:
@@ -533,6 +540,8 @@ class AIHawk(App[None]):
                 return
             if choice == "folder":
                 webbrowser.open(self.session.config.workspace.as_uri())
+            elif choice == "answers":
+                await self.change_answers()
             elif choice == "key":
                 await self.change_key()
             else:
@@ -548,6 +557,23 @@ class AIHawk(App[None]):
         if search_again:
             self.say("Searching again with the new settings.")
             self.start()
+
+    async def change_answers(self) -> None:
+        """One answer per row. Enter edits it, an empty value removes it; the last row adds one as `name: value`."""
+        store = self.session.store
+        while (choice := await self.push_screen_wait(Settings(self.answer_rows(), title="Your answers"))) is not None:
+            name = choice.removeprefix("answer:")
+            if name:
+                value = await self.push_screen_wait(TextPrompt(name.replace("_", " "), value=store.answers().get(name, ""), hint="Enter saves it · empty removes it · Esc leaves it"))
+                if value is not None:
+                    store.set_answer(name, value)
+            else:
+                line = await self.push_screen_wait(TextPrompt("A new answer, as name: value", placeholder="notice period: one month", hint="Enter saves it · Esc goes back"))
+                if line and ":" in line:
+                    new_name, new_value = line.split(":", 1)
+                    store.set_answer(new_name.strip().lower().replace(" ", "_"), new_value)
+                elif line:
+                    self.say("Write it as name: value.")
 
     async def change_key(self) -> None:
         config = self.session.config
