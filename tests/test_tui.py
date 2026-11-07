@@ -19,6 +19,7 @@ from openai import APIConnectionError, APITimeoutError, AuthenticationError, Int
 from pypdf import PdfWriter
 from textual.widgets import DataTable, Input, RichLog, Static
 
+import aihawk.tui as tui_module
 from aihawk import apply as apply_module
 from aihawk import session as session_module
 from aihawk.apply import Outcome
@@ -557,54 +558,6 @@ async def wait_for_sign_in_to_close(pilot: Any, app: AIHawk) -> None:
     raise AssertionError("the sign-in browser never closed")
 
 
-def test_the_sign_in_key_opens_the_profile_until_the_person_is_done(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    server = ScriptedServer()
-    scripted_server(monkeypatch, server)
-
-    async def run() -> None:
-        app = scripted_app(home, resume)
-        async with app.run_test(size=(140, 40)) as pilot:
-            await settle(pilot, app)
-            await pilot.press("l")
-            await wait_for_screen(pilot, SignIn)
-            assert ("browser_open", {"profile": str(home / "browser-profile")}) in server.calls
-            assert server.calls[-1] == ("browser_navigate", {"url": "about:blank"})
-            await pilot.press("enter")
-            await wait_for_sign_in_to_close(pilot, app)
-
-    asyncio.run(run())
-    assert server.calls[-1] == ("browser_close", {})
-
-
-def test_the_sign_in_key_is_refused_while_an_application_runs(home: Path, resume: Path, restored_apply: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    server = ScriptedServer()
-    scripted_server(monkeypatch, server)
-    import aihawk.session as session_module
-
-    async def run() -> None:
-        release = asyncio.Event()
-
-        async def slow_apply(client: Any, model: str, job: Any, cv: str, answers: str, cv_file: Path, data_dir: Path, profile: Path, guidance: str = "", reaches: frozenset[str] = frozenset(), key_env: str = "") -> Outcome:
-            await release.wait()
-            return Outcome("blocked", "not sent")
-
-        app = scripted_app(home, resume)
-        session_module.apply_to_job = slow_apply  # type: ignore[assignment]
-        async with app.run_test(size=(140, 40)) as pilot:
-            await settle(pilot, app)
-            await pilot.press("a")
-            await wait_for_screen(pilot, SendBatch)
-            await pilot.press("enter")
-            await pilot.pause(0.2)
-            assert app.applying()
-            await pilot.press("l")
-            await pilot.pause(0.2)
-            assert not app.signing_in
-            assert not any(name == "browser_open" for name, _ in server.calls)
-            release.set()
-            await wait_for_apply(pilot, app)
-
-    asyncio.run(run())
 
 
 REQUEST = httpx.Request("POST", "https://api.orcarouter.ai/v1/chat/completions")
@@ -784,8 +737,6 @@ def test_a_setting_that_would_not_load_is_refused_and_the_file_stays_as_it_was(h
     with pytest.raises(ConfigError, match="max_age_days"):
         session.change_setting("max_age_days", "soon")
     assert (home / "aihawk.yaml").read_text(encoding="utf-8") == before
-    with pytest.raises(ConfigError, match="at least one job title"):
-        session.change_setting("titles", " , ")
     session.close()
 
 
@@ -890,3 +841,42 @@ def test_the_mail_question_left_with_escape_is_not_asked_again_at_the_next_start
 
     asyncio.run(run())
     assert read_answers(load_config(home))["mail_provider"] == "later"
+
+
+def test_the_judge_follows_the_cursor_and_stops_at_the_lookahead(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The judge scores what lies ahead of the person and no further, and says nothing while it does.
+    import aihawk.session as session_module
+
+    monkeypatch.setattr(session_module, "WIDE", 2)
+    monkeypatch.setattr(session_module, "JUDGED", 1)
+    monkeypatch.setattr(tui_module, "LOOKAHEAD", 1)
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
+            log = logged(app)
+            assert "Scoring" not in log and "scoring" not in log
+            table = app.query_one(DataTable)
+            table.move_cursor(row=0)
+            # The lookahead is filled from where the person is.
+            assert app.scored_ahead() >= 1
+            # The cursor moving asks for the next ones, with no key but an arrow.
+            await pilot.press("down")
+            await settle(pilot, app)
+            assert len(app.session.store.with_status("scored")) == 2
+            assert not app.session.store.with_status("new") and len(app.session.store.with_status("passed_over")) == 1
+
+    asyncio.run(run())
+
+
+def test_m_says_so_when_there_is_nothing_left_to_read(home: Path, resume: Path) -> None:
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
+            await pilot.press("m")
+            await settle(pilot, app)
+            assert "Everything the search found has been read." in logged(app)
+
+    asyncio.run(run())

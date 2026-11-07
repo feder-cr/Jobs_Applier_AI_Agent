@@ -78,3 +78,15 @@ def test_settling_replaces_each_estimate_with_what_the_gateway_charged_and_keeps
 
     asyncio.run(spend.settle(Gateway()))  # type: ignore[arg-type]
     assert round(spend.total, 6) == round(0.003 + 0.0015 + 0.002, 6) and spend.unpriced == 0 and spend.pending == []
+
+
+def test_an_account_is_kept_per_host_and_read_back(tmp_path: Path) -> None:
+    # What the applications made, so the next form on that site signs in instead of registering again.
+    store = Store(tmp_path / "jobs.db")
+    assert store.account("nvidia.wd5.myworkdayjobs.com") is None
+    store.set_account("NVIDIA.wd5.MyWorkdayJobs.com", "ada@example.com")
+    known = store.account("nvidia.wd5.myworkdayjobs.com")
+    assert known is not None and known[0] == "ada@example.com" and known[1].startswith("20")
+    store.set_account("nvidia.wd5.myworkdayjobs.com", "other@example.com")
+    assert store.accounts() == {"nvidia.wd5.myworkdayjobs.com": "other@example.com"}
+    store.close()

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from openai import AsyncOpenAI
 
-from aihawk.apply import MAILBOXES, Outcome, apply_to_job, signed_in
+from aihawk.apply import MAILBOXES, Outcome, apply_to_job, signed_in, site_of
 from aihawk.apply import sign_in as sign_in_browser
 from aihawk.config import KEY_ENV, KEY_URL, Config, ConfigError, load_config
 from aihawk.database import built_at, search, stored_descriptions, with_description
@@ -72,10 +72,6 @@ class Session:
     def change_setting(self, name: str, value: str) -> None:
         save_setting(self.config, name, value)
         self.config = load_config(self.workspace)
-
-    async def sign_in(self, wait: Callable[[], Awaitable[None]]) -> None:
-        """Open the browser for the person to sign in, until `wait` returns: the same profile the applications use."""
-        await sign_in_browser(self.config.browser_profile, self.config.data_dir / "browser", wait)
 
     def mail(self) -> tuple[str, str]:
         """The address the person applies with, and its mailbox: gmail, outlook, later (left for later) or empty (never asked)."""
@@ -208,20 +204,29 @@ class Session:
         cv = self.config.cv.read_text(encoding="utf-8-sig")
         job = replace(item.job, apply_url=plugin.form_url(item.job.url) if plugin else item.job.url)
         answers = self.store.answers_text()
+        host = site_of(job.apply_url)
+        account = self.store.account(host)
         extras = always_plugins(self.plugins)
-        guidance = "\n\n".join([*([plugin.instructions] if plugin else []), *(extra.instructions for extra in extras)])
+        # The site's own plugin first, then the ones that hold on every site, under a line that says which is which.
+        everywhere = "\n\n".join(extra.instructions for extra in extras)
+        guidance = "\n\n".join(
+            [*([plugin.instructions] if plugin else []), *([f"On every site, not only this one:\n\n{everywhere}"] if everywhere else [])]
+        )
         await self.priced()
         before = SPEND.total
         try:
             cv_file = self._own_cv()
             log(f"{item.job.company}: filling the form")
             outcome = await apply_to_job(
-                self.client, self.config.model, job, cv, answers, cv_file, self.config.data_dir, self.config.browser_profile, guidance)
+                self.client, self.config.model, job, cv, answers, cv_file, self.config.data_dir, self.config.browser_profile, guidance, account)
         except Exception as error:
             # One job's failure is reported and recorded; the next job still runs.
             if refused(error):
                 raise
             outcome = Outcome("failed", explain(error))
+        if outcome.made_account and (email := self.store.answers().get("email")):
+            # Written whatever the form did: the account exists on that site either way, and the next form there signs in.
+            self.store.set_account(host, email)
         self.store.set_status(item.job.id, outcome.status, outcome.summary)
         self.store.set_proof(item.job.id, outcome.proof)
         await SPEND.settle(self.client)

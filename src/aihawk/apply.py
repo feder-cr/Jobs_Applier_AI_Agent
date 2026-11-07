@@ -14,7 +14,7 @@ import sys
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -59,7 +59,7 @@ FINISH_TOOL = {
         "parameters": {
             "type": "object",
             "additionalProperties": False,
-            "required": ["status", "summary", "submit_selector"],
+            "required": ["status", "summary", "submit_selector", "made_account"],
             "properties": {
                 "status": {
                     "type": "string",
@@ -69,6 +69,7 @@ FINISH_TOOL = {
                 },
                 "summary": {"type": "string", "description": "What you wrote in each field, or why you are blocked."},
                 "submit_selector": {"type": "string", "description": "CSS selector of the control that sends the form; empty unless ready."},
+                "made_account": {"type": "boolean", "description": "True only if you created a candidate account on this site just now."},
             },
         },
     },
@@ -84,7 +85,7 @@ You fill in one job application form in a browser, for the candidate, from the C
 - A required field they give you nothing for: a written one says "Please see my attached CV", in the form's language; a
   list or a yes or no takes the closest option; a number takes the most plausible one. Leave optional fields they do not
   answer empty.
-- Never write a fact about the candidate that neither text gives: a reference's name, a licence or certificate number, a
+- That fallback never invents a fact about the candidate: a reference's name, a licence or certificate number, a
   qualification they do not claim. A required field that asks for one ends the form: call finish_form with status blocked
   and name that field. This is the one case where a required field is left for the person.
 - Tick the boxes the form requires.
@@ -152,6 +153,8 @@ class Outcome:
     status: str  # submitted | unconfirmed | refused | blocked | failed
     summary: str
     proof: Proof = field(default_factory=Proof)
+    # Whether the model made a candidate account on the site while filling this form, so the next form there signs in.
+    made_account: bool = False
 
 
 def instructions(guidance: str, page_rules: str = "") -> str:
@@ -304,15 +307,15 @@ class _Traced:
             text = text.replace(secret, "(hidden)")
         return text
 
-    def _write(self, line: str) -> None:
+    def note(self, line: str) -> None:
         with self.path.open("a", encoding="utf-8") as out:
             out.write(f"[{time.monotonic() - self.started:6.0f}s] {self._hide(line)}\n")
 
     async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
-        self._write(f"-> {name} {json.dumps(arguments or {}, ensure_ascii=False)[:300]}")
+        self.note(f"-> {name} {json.dumps(arguments or {}, ensure_ascii=False)[:300]}")
         result = await self.session.call_tool(name, arguments)
         text = " ".join(tool_text(result).split())[:300]
-        self._write(f"<- {'ERROR ' if result.isError else ''}{text}")
+        self.note(f"<- {'ERROR ' if result.isError else ''}{text}")
         return result
 
 
@@ -321,30 +324,45 @@ def _secrets_in(answers: str) -> tuple[str, ...]:
     return tuple(line.split(":", 1)[1].strip() for line in answers.splitlines() if line.startswith("account_password:"))
 
 
-async def run_on_page(session: Browser, tools: list[dict[str, Any]], client: AsyncOpenAI, model: str, job: Job, cv_text: str, answers: str, cv_file: Path, shot: Path, guidance: str = "", page_rules: str = "") -> Outcome:
+async def run_on_page(
+    session: Browser,
+    tools: list[dict[str, Any]],
+    client: AsyncOpenAI,
+    model: str,
+    job: Job,
+    cv_text: str,
+    answers: str,
+    cv_file: Path,
+    shot: Path,
+    guidance: str = "",
+    page_rules: str = "",
+    account: tuple[str, str] | None = None,
+) -> Outcome:
     brief = (
-        f"The form: {job.apply_url}\nThe job: {job.title} at {job.company}\nThe CV file to upload: {cv_file}\n\n"
-        f"The CV:\n{cv_text}\n\nThe answers:\n{answers}"
+        f"The form: {job.apply_url}\nThe job: {job.title} at {job.company}\nThe CV file to upload: {cv_file}\n"
+        f"{_account_line(job, account)}\n\nThe CV:\n{cv_text}\n\nThe answers:\n{answers}"
     )
     dry_run = bool(os.environ.get(DRY_RUN_ENV, "").strip())
     tracing = dry_run or bool(os.environ.get(TRACE_ENV, "").strip())
     if tracing:
         # A trial is for looking: every step goes to a file beside the proofs, and the password never does.
         traced = _Traced(session, shot.parent.parent / "trace.log", _secrets_in(answers))
-        traced._write(f"== {job.company}: {job.title} at {job.apply_url}{' (dry run)' if dry_run else ''}")
+        traced.note(f"== {job.company}: {job.title} at {job.apply_url}{' (dry run)' if dry_run else ''}")
         session = traced
     report = await fill_form(session, tools, client, model, brief, guidance, page_rules)
     summary = str(report.get("summary", ""))
     if tracing:
-        traced._write(f"== finish_form: {json.dumps(report, ensure_ascii=False)[:500]}")
+        traced.note(f"== finish_form: {json.dumps(report, ensure_ascii=False)[:500]}")
+    made = bool(report.get("made_account"))
     if report.get("status") != "ready" or not report.get("submit_selector"):
-        return Outcome("blocked", summary)
+        return Outcome("blocked", summary, made_account=made)
     if dry_run:
         # A trial of the flow: the form is filled and the send control named, and nothing leaves for the employer.
         url, screenshot = await _where(session, shot)
         proof = Proof("", url, "", "", "", screenshot)
-        return Outcome("blocked", f"Dry run ({DRY_RUN_ENV} is set): filled, send control {report['submit_selector']} found, nothing sent.\n{summary}", proof)
-    return await submit_and_verify(session, client, model, str(report["submit_selector"]), summary, guidance, shot)
+        return Outcome("blocked", f"Dry run ({DRY_RUN_ENV} is set): filled, send control {report['submit_selector']} found, nothing sent.\n{summary}", proof, made_account=made)
+    sent = await submit_and_verify(session, client, model, str(report["submit_selector"]), summary, guidance, shot)
+    return replace(sent, made_account=made)
 
 
 async def _open_browser(session: Browser, profile: Path) -> None:
@@ -396,7 +414,16 @@ async def _server(upload_dir: Path, home: Path) -> AsyncIterator[tuple[ClientSes
 
 
 async def apply_to_job(
-    client: AsyncOpenAI, model: str, job: Job, cv_text: str, answers: str, cv_file: Path, data_dir: Path, profile: Path, guidance: str = ""
+    client: AsyncOpenAI,
+    model: str,
+    job: Job,
+    cv_text: str,
+    answers: str,
+    cv_file: Path,
+    data_dir: Path,
+    profile: Path,
+    guidance: str = "",
+    account: tuple[str, str] | None = None,
 ) -> Outcome:
     """Open the browser on the person's profile, fill the job's form and send it: the person's selection and Enter came before."""
     shot = data_dir / "proofs" / f"{safe_name(job.id)}.png"
@@ -412,9 +439,23 @@ async def apply_to_job(
             navigated = await session.call_tool("browser_navigate", {"url": job.apply_url})
             if navigated.isError:
                 return Outcome("blocked", f"the form did not load: {tool_text(navigated)}")
-            return await run_on_page(session, tools, client, model, job, cv_text, answers, cv_file, shot, guidance, page_rules)
+            return await run_on_page(session, tools, client, model, job, cv_text, answers, cv_file, shot, guidance, page_rules, account)
         finally:
             await session.call_tool("browser_close", {})
+
+
+def site_of(url: str) -> str:
+    """The host a form lives on, as the accounts are kept: one company's Workday is not another's."""
+    return (urlsplit(url).hostname or "").lower()
+
+
+def _account_line(job: Job, account: tuple[str, str] | None) -> str:
+    """What the model is told about an account on this site: the one it made and when, or that there is none yet."""
+    site = site_of(job.apply_url)
+    if account is None:
+        return f"No account of yours is known on {site}: if the form needs one, make it."
+    email, made_at = account
+    return f"Your account on {site}: made on {made_at[:10]} with {email}, and the account_password from the answers."
 
 
 def _is_mailbox(url: str) -> bool:
@@ -432,19 +473,16 @@ def signed_in(provider: str, url: str) -> bool:
     return (urlsplit(url).hostname or "").lower() == MAILBOXES[provider][1]
 
 
-async def sign_in(profile: Path, home: Path, wait: Callable[[], Awaitable[None]], url: str = "about:blank") -> str:
-    """Open the profile's browser on `url` so the person can sign in; once `wait` returns, the browser closes.
+async def sign_in(profile: Path, home: Path, wait: Callable[[], Awaitable[None]], url: str) -> str:
+    """Open the profile's browser on `url`, the person's mailbox, so they can sign in; once `wait` returns, it closes.
 
-    Nothing is typed for the person and no model is involved: the sign-ins are kept in the profile for the applications.
-    Returns where the page is once `url` is opened again after the wait, so a mailbox that sends the browser to its sign-in
-    page shows the person is not signed in; empty for the blank page.
+    Nothing is typed for them and no model is involved: the sign-in is kept in the profile, for the applications to use.
+    Returns where the page is once `url` is opened again after the wait, so a mailbox that sent the browser to its own
+    sign-in page shows that the person is not signed in.
     """
     async with _server(home, home) as (session, _):
         try:
             await _open_browser(session, profile)
-            if url == "about:blank":
-                await wait()
-                return ""
             await session.call_tool("browser_navigate", {"url": url})
             await wait()
             await session.call_tool("browser_navigate", {"url": url})
