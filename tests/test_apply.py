@@ -516,3 +516,12 @@ def test_sign_in_on_a_mailbox_opens_it_and_says_where_the_page_is_after_the_pers
     assert where == url  # the second opening of the address, as the fake records it
     assert [name for name, _ in server.calls] == ["browser_open", "browser_navigate", "browser_navigate", "browser_navigate", "browser_evaluate", "browser_close"]
     assert server.calls[2] == ("browser_navigate", {"url": url}) and server.calls[3] == ("browser_navigate", {"url": url})
+
+
+def test_the_mailbox_may_be_opened_twice_and_the_third_look_ends_the_form_blocked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The plugins say twice; the code holds the model to it, whatever it reasons, so a code that never comes costs few steps.
+    looks = [[tool_call("browser_navigate", url="https://mail.google.com/mail/u/0/#search/from%3Aexample.com")]] * 3
+    browser = ScriptedBrowser({"#send": SUBMIT}, page={"url": "https://u/apply", "text": "the form"})
+    outcome = run(ScriptedModel(*looks, ready()), browser, tmp_path / "shot.png")
+    assert outcome.status == "blocked" and outcome.summary == apply_module.NO_CODE
+    assert sum(1 for name, arguments in browser.calls if name == "browser_navigate" and "mail.google.com" in arguments["url"]) == 2

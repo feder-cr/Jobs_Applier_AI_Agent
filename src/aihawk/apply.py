@@ -26,11 +26,14 @@ from openai import AsyncOpenAI
 
 from aihawk.config import KEY_ENV
 from aihawk.database import Job
-from aihawk.llm import SPEND, structured
+from aihawk.llm import SPEND, chat, structured
 from aihawk.store import Proof, safe_name
 
 OPEN_DEADLINE_S = 900.0
 OPEN_RETRY_S = 10.0
+# The mailbox may be opened this many times in one form: a code that is not there by then is not coming, and looking on costs steps.
+MAILBOX_LOOKS = 2
+NO_CODE = "No code arrived in the mailbox."
 # Set in the environment, the form is filled and the send control named, and nothing is sent: a trial of a site or a plugin.
 DRY_RUN_ENV = "AIHAWK_DRY_RUN"
 # Set in the environment, every step the model takes on a page is written to data/trace.log; a dry run always is.
@@ -181,9 +184,10 @@ def _keep_latest_picture(messages: list[Any]) -> None:
 async def fill_form(session: Browser, tools: list[dict[str, Any]], client: AsyncOpenAI, model: str, brief: str, guidance: str = "", page_rules: str = "") -> dict[str, Any]:
     """The model works on the open page until it calls finish_form; returns what it reported."""
     messages: list[Any] = [{"role": "system", "content": instructions(guidance, page_rules)}, {"role": "user", "content": brief}]
+    mailbox_looks = 0
     for _ in range(MAX_STEPS):
-        response = await client.chat.completions.create(model=model, messages=messages, tools=[*tools, FINISH_TOOL])
-        SPEND.note(model, getattr(response, "usage", None))
+        response, request_id = await chat(client, model=model, messages=messages, tools=[*tools, FINISH_TOOL])
+        SPEND.note(model, getattr(response, "usage", None), request_id)
         message = response.choices[0].message
         messages.append(message.model_dump(exclude_none=True))
         if not message.tool_calls:
@@ -198,6 +202,11 @@ async def fill_form(session: Browser, tools: list[dict[str, Any]], client: Async
                 continue
             if call.function.name == "finish_form":
                 return arguments
+            if call.function.name == "browser_navigate" and _is_mailbox(str(arguments.get("url", ""))):
+                # The plugins say twice; the code holds the model to it, whatever it reasons.
+                mailbox_looks += 1
+                if mailbox_looks > MAILBOX_LOOKS:
+                    return {"status": "blocked", "summary": NO_CODE, "submit_selector": ""}
             result = await session.call_tool(call.function.name, arguments)
             seen += _images(result)
             messages.append({"role": "tool", "tool_call_id": call.id, "content": tool_text(result) or "Done: what it shows comes next."})
@@ -392,6 +401,11 @@ async def apply_to_job(
             return await run_on_page(session, tools, client, model, job, cv_text, answers, cv_file, shot, guidance, page_rules)
         finally:
             await session.call_tool("browser_close", {})
+
+
+def _is_mailbox(url: str) -> bool:
+    host = (urlsplit(url).hostname or "").lower()
+    return any(host == known for _, known in MAILBOXES.values())
 
 
 def mail_provider(email: str) -> str:

@@ -56,3 +56,25 @@ def test_a_store_from_before_costs_were_kept_gets_the_column_and_an_application_
     store.set_cost("a", 0.0312)
     assert store.sent()[0].cost == 0.0312
     store.close()
+
+
+def test_settling_replaces_each_estimate_with_what_the_gateway_charged_and_keeps_the_estimate_it_cannot_find() -> None:
+    import asyncio
+
+    spend = Spend()
+    spend.prices["m"] = (0.15 / 1_000_000, 0.60 / 1_000_000, 0.003 / 1_000_000)
+    spend.note("m", usage(10_000, 0), request_id="known")
+    spend.note("m", usage(10_000, 0), request_id="lost")
+    spend.note("other", usage(10_000, 0), request_id="priced-only-by-the-gateway")
+    assert round(spend.total, 6) == 0.003 and spend.unpriced == 1
+
+    class Gateway:
+        async def get(self, path: str, cast_to: type) -> dict:
+            if "id=known" in path:
+                return {"data": {"total_cost": 0.003}}
+            if "id=priced-only" in path:
+                return {"data": {"total_cost": 0.002}}
+            raise RuntimeError("no generation found")
+
+    asyncio.run(spend.settle(Gateway()))  # type: ignore[arg-type]
+    assert round(spend.total, 6) == round(0.003 + 0.0015 + 0.002, 6) and spend.unpriced == 0 and spend.pending == []

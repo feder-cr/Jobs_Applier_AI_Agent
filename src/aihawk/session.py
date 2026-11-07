@@ -97,6 +97,11 @@ class Session:
         """The gateway's price list, read once, so each call's cost can be counted."""
         await SPEND.load_prices(self.client)
 
+    async def settled(self) -> float:
+        """The money spent so far, with every call the gateway has a record for at what it charged."""
+        await SPEND.settle(self.client)
+        return SPEND.total
+
     async def find(self, log: Log) -> int:
         """Bring the postings for this search from the job database into the store; how many are new."""
         loop = asyncio.get_running_loop()
@@ -219,6 +224,7 @@ class Session:
             outcome = Outcome("failed", explain(error))
         self.store.set_status(item.job.id, outcome.status, outcome.summary)
         self.store.set_proof(item.job.id, outcome.proof)
+        await SPEND.settle(self.client)
         self.store.set_cost(item.job.id, SPEND.total - before)
         # The file for the person outside the app. One that another program holds open must not stop the next send.
         try:

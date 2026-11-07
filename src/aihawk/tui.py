@@ -441,7 +441,7 @@ class AIHawk(App[None]):
             return
         self.say(f"Scoring {len(items)}.")
         await session.score(items, self.refresh_jobs, self.say)
-        self.say(f"Done, {money(SPEND.total - before)}.")
+        self.say(f"Done, {money(await session.settled() - before)}.")
 
     # The keys.
 
