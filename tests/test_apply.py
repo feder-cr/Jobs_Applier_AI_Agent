@@ -219,21 +219,12 @@ def test_a_model_that_only_talks_is_stopped() -> None:
     assert report["status"] == "blocked" and "without using the tools" in report["summary"]
 
 
-MAILBOX = "https://mail.google.com/mail/u/0/"
-
-
-def test_waiting_in_the_mailbox_for_a_code_is_not_a_loop() -> None:
-    steps = [[tool_call("browser_navigate", url=MAILBOX)], *[[tool_call("browser_read_text", selector="body")] for _ in range(2 * LOOP_STOP)]]
-    model = ScriptedModel(*steps, [tool_call("finish_form", status="blocked", summary="code read", submit_selector="")])
+def test_waiting_for_a_code_that_never_comes_ends_at_the_fifth_look_with_nothing_new() -> None:
+    wait = "new Promise(done => setTimeout(done, 20000))"
+    look = [tool_call("browser_evaluate", expression=wait), tool_call("browser_read_text", selector="body")]
+    model = ScriptedModel(*[look for _ in range(LOOP_STOP)])
     report = asyncio.run(fill_form(ScriptedBrowser(), [], model, "m", "brief"))  # type: ignore[arg-type]
-    assert report["summary"] == "code read"
-
-
-def test_a_visit_to_the_mailbox_that_waits_too_long_ends_with_no_code(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(apply_module, "MAILBOX_WAIT_S", -1)
-    model = ScriptedModel([tool_call("browser_navigate", url=MAILBOX)], [tool_call("browser_read_text", selector="body")])
-    report = asyncio.run(fill_form(ScriptedBrowser(), [], model, "m", "brief"))  # type: ignore[arg-type]
-    assert report == {"status": "blocked", "summary": apply_module.NO_CODE, "submit_selector": ""}
+    assert report["status"] == "blocked" and "browser_evaluate, browser_read_text" in report["summary"]
 
 
 @pytest.mark.parametrize(("confidence", "stopped"), [(0.95, True), (0.5, False)])
