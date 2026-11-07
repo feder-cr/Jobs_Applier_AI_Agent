@@ -9,7 +9,7 @@ from pathlib import Path
 
 from openai import AsyncOpenAI
 
-from aihawk.apply import Outcome, apply_to_job
+from aihawk.apply import MAILBOXES, Outcome, apply_to_job, signed_in
 from aihawk.apply import sign_in as sign_in_browser
 from aihawk.config import KEY_ENV, KEY_URL, Config, ConfigError, load_config
 from aihawk.database import built_at, search, stored_descriptions, with_description
@@ -76,6 +76,22 @@ class Session:
     async def sign_in(self, wait: Callable[[], Awaitable[None]]) -> None:
         """Open the browser for the person to sign in, until `wait` returns: the same profile the applications use."""
         await sign_in_browser(self.config.browser_profile, self.config.data_dir / "browser", wait)
+
+    def mail(self) -> tuple[str, str]:
+        """The address the person applies with, and its mailbox: gmail, outlook, later (left for later) or empty (never asked)."""
+        answers = self.store.answers()
+        return answers.get("email", ""), answers.get("mail_provider", "")
+
+    def set_mail(self, email: str, provider: str) -> None:
+        if email:
+            self.store.set_answer("email", email)
+        self.store.set_answer("mail_provider", provider)
+
+    async def sign_in_mail(self, provider: str, wait: Callable[[], Awaitable[None]]) -> bool:
+        """The mailbox open in the browser for the person to sign in, until `wait` returns; whether the inbox was reached."""
+        url, _ = MAILBOXES[provider]
+        where = await sign_in_browser(self.config.browser_profile, self.config.data_dir / "browser", wait, url)
+        return signed_in(provider, where)
 
     async def find(self, log: Log) -> int:
         """Bring the postings for this search from the job database into the store; how many are new."""
@@ -163,12 +179,15 @@ class Session:
             raise ConfigError("your CV file is not kept: load your resume again")
         return kept[0]
 
-    async def send(self, items: list[Stored], log: Log, done: Callable[[], None]) -> None:
-        """Send each application once."""
+    async def send(self, items: list[Stored], log: Log, done: Callable[[], None]) -> list[tuple[Stored, Outcome]]:
+        """Send each application once; each with what came of it."""
+        results = []
         for item in items:
             outcome = await self.apply(item, log)
+            results.append((item, outcome))
             done()
             log(f"{item.job.company}: {SENT_WORDS.get(outcome.status, outcome.status)}. {outcome.proof.evidence}".strip())
+        return results
 
     async def apply(self, item: Stored, log: Log) -> Outcome:
         """Fill and send one application, once. What the page said is kept with it, and applied.csv is written."""

@@ -483,3 +483,33 @@ def test_a_dry_run_fills_the_form_names_the_send_control_and_sends_nothing(tmp_p
     assert outcome.summary.startswith("Dry run (AIHAWK_DRY_RUN is set): filled, send control #send found, nothing sent.")
     assert not browser.clicks()
     assert outcome.proof.url == "https://u/apply"
+
+
+@pytest.mark.parametrize(
+    ("email", "provider"),
+    [("ada@gmail.com", "gmail"), ("Ada@GoogleMail.com", "gmail"), ("ada@hotmail.it", "outlook"), ("ada@outlook.com", "outlook"), ("ada@example.org", "")],
+)
+def test_the_mailbox_is_read_from_the_address_when_the_domain_says_it(email: str, provider: str) -> None:
+    assert apply_module.mail_provider(email) == provider
+
+
+def test_a_mailbox_still_at_its_own_address_is_signed_in_and_one_sent_to_a_sign_in_page_is_not() -> None:
+    assert apply_module.signed_in("gmail", "https://mail.google.com/mail/u/0/#inbox")
+    assert not apply_module.signed_in("gmail", "https://accounts.google.com/v3/signin/identifier?continue=https://mail.google.com")
+    assert apply_module.signed_in("outlook", "https://outlook.live.com/mail/0/")
+    assert not apply_module.signed_in("outlook", "https://login.live.com/login.srf")
+
+
+def test_sign_in_on_a_mailbox_opens_it_and_says_where_the_page_is_after_the_person_is_done(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    server = ScriptedServer(page={"url": "", "text": ""})
+    scripted_server(monkeypatch, server)
+    url = "https://mail.google.com/mail/u/0/"
+
+    async def wait() -> None:
+        # The person signs in: the mailbox then stays at its own address when opened again.
+        server.page = {"url": url + "#inbox", "text": "Inbox"}
+
+    where = asyncio.run(sign_in(tmp_path / "browser-profile", tmp_path, wait, url))
+    assert where == url  # the second opening of the address, as the fake records it
+    assert [name for name, _ in server.calls] == ["browser_open", "browser_navigate", "browser_navigate", "browser_navigate", "browser_evaluate", "browser_close"]
+    assert server.calls[2] == ("browser_navigate", {"url": url}) and server.calls[3] == ("browser_navigate", {"url": url})

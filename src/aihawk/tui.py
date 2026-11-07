@@ -14,6 +14,7 @@ from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Input, RichLog, Static
 
+from aihawk.apply import MAILBOXES, mail_provider
 from aihawk.config import KEY_ENV, KEY_URL, ConfigError
 from aihawk.database import DatabaseError
 from aihawk.documents import QUESTIONS
@@ -25,6 +26,10 @@ from aihawk.store import SUBMITTED, Sent, Stored, said, sent_word
 WIDE_ENOUGH = 100
 SEARCH_SETTINGS = {"titles", "places", "exclude", "max_age_days"}
 RESUME_QUESTION = "Where is your resume? PDF, .docx or text."
+MAIL_QUESTION = "The email you apply with. Job sites send their codes there, and AIHawk reads only those."
+# What the mail plugins make the model say when the mailbox shows its sign-in page: the application is then run again after a sign-in.
+MAIL_NOT_SIGNED_IN = "The mailbox is not signed in."
+MAIL_NAMES = {"gmail": "Gmail", "outlook": "Outlook"}
 RESUME_HINT = "Enter reads it Â· Esc for later Â· Ctrl+C quits"
 STATUS_TEXT = {
     "new": "",
@@ -245,9 +250,13 @@ class SignIn(ModalScreen[None]):
 
     BINDINGS: ClassVar = [Binding("enter,escape", "done", "Done")]
 
+    def __init__(self, text: str = "The browser window is open. Sign in there to the job site you need, then come back.") -> None:
+        super().__init__()
+        self.text = text
+
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
-            yield Static("The browser window is open. Sign in there to your email, and to any site you apply on.", id="question", markup=False)
+            yield Static(self.text, id="question", markup=False)
             yield Static("Press Enter here when you are done. The window closes then. Ctrl+C quits.", classes="hint")
 
     def action_done(self) -> None:
@@ -419,6 +428,8 @@ class AIHawk(App[None]):
                 self.show_heading()
                 self.say(f"Looking for: {session.config.filters.titles()}")
                 self.say(f"In: {', '.join(session.config.filters.locations)}")
+            if not session.mail()[1]:
+                await self.set_up_mail()
             self.show_heading("searching")
             await session.find(self.say)
             self.refresh_jobs()
@@ -503,7 +514,8 @@ class AIHawk(App[None]):
         titles = [form.text for form in config.filters.plan.nodes[0].forms] if config.filters.plan.nodes else list(config.filters.include)
         return [
             ("resume", "Resume", "loaded" if config.cv.is_file() else "none yet"),
-            ("sign_in", "Sign in", "your mail and job sites, in the browser"),
+            ("mail", "Your mail", self.mail_words()),
+            ("sign_in", "Sign in to a job site", "the browser opens, you sign in there, Enter here"),
             ("key", "OrcaRouter key", f"from {KEY_ENV}" if config.key_from_environment() else "saved" if config.api_key() else "none yet"),
             ("titles", "Look for", ", ".join(titles)),
             ("places", "Where", ", ".join(config.filters.locations)),
@@ -540,6 +552,8 @@ class AIHawk(App[None]):
                 return
             if choice == "folder":
                 webbrowser.open(self.session.config.workspace.as_uri())
+            elif choice == "mail":
+                await self.set_up_mail()
             elif choice == "answers":
                 await self.change_answers()
             elif choice == "key":
@@ -557,6 +571,54 @@ class AIHawk(App[None]):
         if search_again:
             self.say("Searching again with the new settings.")
             self.start()
+
+    def mail_words(self) -> str:
+        email, provider = self.session.mail()
+        if provider in MAILBOXES:
+            return f"{MAIL_NAMES[provider]}, {email}"
+        return "not set up: a code a site sends you cannot be read"
+
+    async def set_up_mail(self) -> bool:
+        """The mailbox the job sites write to: its address, then the browser open on it for the person to sign in once, and the
+        inbox checked. Esc at any point leaves it for later. Whether the inbox was reached."""
+        session = self.session
+        email, provider = session.mail()
+        answer = await self.push_screen_wait(TextPrompt(MAIL_QUESTION, value=email, placeholder="you@gmail.com", hint="Enter · Esc leaves it for later"))
+        if not answer or "@" not in answer:
+            session.set_mail(email, "later")
+            self.say("Mail left for later: press e, then Your mail. A code a site sends you cannot be read until then.")
+            return False
+        email = answer.strip()
+        provider = mail_provider(email) or (provider if provider in MAILBOXES else "")
+        while provider not in MAILBOXES:
+            choice = await self.push_screen_wait(TextPrompt(f"Where is {email}? Type gmail or outlook.", placeholder="gmail", hint="Enter · Esc leaves it for later"))
+            if choice is None:
+                session.set_mail(email, "later")
+                self.say("Mail left for later: press e, then Your mail.")
+                return False
+            provider = choice.strip().lower()
+        session.set_mail(email, provider)
+        name = MAIL_NAMES[provider]
+        while True:
+            self.signing_in = True
+            try:
+
+                async def wait() -> None:
+                    await self.push_screen_wait(SignIn(f"{name} is open in the browser window. Sign in once with {email}: AIHawk only reads the codes that job sites send you. Press Enter here when you see your inbox."))
+
+                reached = await session.sign_in_mail(provider, wait)
+            except Exception as error:  # noqa: BLE001  Said on the screen, as for the other browser openings.
+                self.say(f"The browser did not open: {error}")
+                return False
+            finally:
+                self.signing_in = False
+            if reached:
+                self.say(f"Signed in to {name}. It stays signed in for every application.")
+                return True
+            again = await self.push_screen_wait(TextPrompt(f"{name} still shows its sign-in page. Enter opens it again, Esc leaves it for later.", hint="Enter · Esc"))
+            if again is None:
+                self.say("Mail left for later: press e, then Your mail.")
+                return False
 
     async def change_answers(self) -> None:
         """One answer per row. Enter edits it, an empty value removes it; the last row adds one as `name: value`."""
@@ -646,10 +708,12 @@ class AIHawk(App[None]):
         if not await self.push_screen_wait(SendBatch(ready)):
             self.say("Nothing was sent.")
             return
+        unread: list[Stored] = []
         self.busy = True
         self.show_heading("applying")
         try:
-            await self.session.send(ready, self.say, self.refresh_jobs)
+            results = await self.session.send(ready, self.say, self.refresh_jobs)
+            unread = [item for item, outcome in results if MAIL_NOT_SIGNED_IN in outcome.summary]
         except Exception as error:  # noqa: BLE001  Said on the screen, as in start; the batch stops where it failed.
             self.failed(error)
         finally:
@@ -658,6 +722,25 @@ class AIHawk(App[None]):
             self.refresh_jobs()
             self.show_heading()
             self.say("Press s for every application and what each page said.")
+        if unread:
+            await self.mail_then_retry(unread)
+
+    async def mail_then_retry(self, items: list[Stored]) -> None:
+        """A site sent a code to the mail and the mailbox was not signed in: the sign-in now, then those applications again."""
+        names = ", ".join(item.job.company for item in items)
+        self.say(f"{names}: a code was sent to your mail, and the mailbox is not signed in.")
+        if not await self.set_up_mail():
+            return
+        self.busy = True
+        self.show_heading("applying again")
+        try:
+            await self.session.send(items, self.say, self.refresh_jobs)
+        except Exception as error:  # noqa: BLE001
+            self.failed(error)
+        finally:
+            self.busy = False
+            self.refresh_jobs()
+            self.show_heading()
 
     def can_send(self, item: Stored) -> bool:
         """Whether the job goes in the batch: all of them, but one already sent."""

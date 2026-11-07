@@ -28,7 +28,7 @@ from aihawk.database import Job
 from aihawk.llm import explain
 from aihawk.profile import install_resume, read_answers, read_resume
 from aihawk.session import Session
-from aihawk.store import Proof, Stored
+from aihawk.store import Proof, Store, Stored
 from aihawk.tui import AIHawk, JobDetails, SendBatch, SentDetails, SentList, Settings, SignIn, TextPrompt
 from fakes import ScriptedBrowser
 
@@ -80,6 +80,10 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     folder = tmp_path / "home"
     folder.mkdir()
     (folder / "aihawk.yaml").write_text(f"database: {published(tmp_path)}\n", encoding="utf-8")
+    # A home where the mail was already left for later: the first-run question about it has its own tests.
+    store = Store(folder / "data" / "jobs.db")
+    store.set_answer("mail_provider", "later")
+    store.close()
     return folder
 
 
@@ -465,7 +469,7 @@ def test_a_resume_and_the_files_beside_it_saved_with_a_byte_order_mark_are_read(
     monkeypatch.delenv("ORCAROUTER_API_KEY")
     (home / "key").write_bytes(bom + b"sk-orca-typed\n")
     config = load_config(home)
-    assert read_answers(config) == {"email": "ada@example.com"}
+    assert read_answers(config)["email"] == "ada@example.com"
     assert config.api_key() == "sk-orca-typed"
 
 
@@ -837,3 +841,52 @@ def test_a_site_with_no_plugin_is_tried_like_any_other(home: Path, resume: Path,
     outcome = asyncio.run(session.apply(session.store.get("any"), lambda _: None))  # type: ignore[arg-type]
     assert asked == [url] and outcome.status == "blocked"
     session.close()
+
+
+def test_after_the_resume_the_mail_is_asked_once_and_gmail_is_opened_until_the_inbox_shows(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The question comes right after the resume, in the same voice as the key: the address, then the mailbox open in the browser.
+    store = Store(home / "data" / "jobs.db")
+    store.set_answer("mail_provider", "")
+    store.close()
+    server = ScriptedServer(page={"url": "https://mail.google.com/mail/u/0/#inbox", "text": "Inbox"})
+    scripted_server(monkeypatch, server)
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
+            assert isinstance(app.screen, TextPrompt) and "email you apply with" in app.screen.question
+            assert app.screen.query_one(Input).value == "ada@example.com"
+            app.screen.query_one(Input).value = "ada@gmail.com"
+            await pilot.press("enter")
+            await wait_for_screen(pilot, SignIn)
+            assert "Gmail is open" in app.screen.text and "ada@gmail.com" in app.screen.text
+            assert ("browser_navigate", {"url": "https://mail.google.com/mail/u/0/"}) in server.calls
+            await pilot.press("enter")
+            await wait_for_sign_in_to_close(pilot, app)
+            await settle(pilot, app)
+            assert companies(app) == ["Bestco", "Lowly", "Noplugin"]
+
+    asyncio.run(run())
+    assert server.calls[-1] == ("browser_close", {})
+    answers = read_answers(load_config(home))
+    assert answers["email"] == "ada@gmail.com" and answers["mail_provider"] == "gmail"
+
+
+def test_the_mail_question_left_with_escape_is_not_asked_again_at_the_next_start(home: Path, resume: Path) -> None:
+    store = Store(home / "data" / "jobs.db")
+    store.set_answer("mail_provider", "")
+    store.close()
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
+            assert isinstance(app.screen, TextPrompt) and "email you apply with" in app.screen.question
+            await pilot.press("escape")
+            await settle(pilot, app)
+            assert companies(app) == ["Bestco", "Lowly", "Noplugin"]
+            assert ("mail", "Your mail", "not set up: a code a site sends you cannot be read") in app.setting_rows()
+
+    asyncio.run(run())
+    assert read_answers(load_config(home))["mail_provider"] == "later"

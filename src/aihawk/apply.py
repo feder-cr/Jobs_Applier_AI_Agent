@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -32,6 +33,12 @@ OPEN_DEADLINE_S = 900.0
 OPEN_RETRY_S = 10.0
 # Set in the environment, the form is filled and the send control named, and nothing is sent: a trial of a site or a plugin.
 DRY_RUN_ENV = "AIHAWK_DRY_RUN"
+# The mailboxes a code can be read from: where each opens, and the host a signed-in one stays on (its sign-in page is elsewhere).
+MAILBOXES = {"gmail": ("https://mail.google.com/mail/u/0/", "mail.google.com"), "outlook": ("https://outlook.live.com/mail/", "outlook.live.com")}
+MAIL_DOMAINS = {
+    "gmail.com": "gmail", "googlemail.com": "gmail",
+    "outlook.com": "outlook", "outlook.it": "outlook", "hotmail.com": "outlook", "hotmail.it": "outlook", "live.com": "outlook", "live.it": "outlook", "msn.com": "outlook",
+}  # fmt: skip
 MAX_STEPS = 150
 # The server's tools that are ours to call, to open and close the browser around the model's work. The model gets the rest,
 # so a tool the server adds tomorrow just works.
@@ -346,14 +353,32 @@ async def apply_to_job(
             await session.call_tool("browser_close", {})
 
 
-async def sign_in(profile: Path, home: Path, wait: Callable[[], Awaitable[None]]) -> None:
-    """Open the profile's browser on a blank page so the person can sign in; once `wait` returns, the browser closes.
+def mail_provider(email: str) -> str:
+    """gmail or outlook when the address says so; empty for any other domain, which may be either."""
+    return MAIL_DOMAINS.get(email.rsplit("@", 1)[-1].strip().lower(), "")
+
+
+def signed_in(provider: str, url: str) -> bool:
+    """A mailbox opened at its address and still there is signed in; one that sent the browser to a sign-in page is not."""
+    return (urlsplit(url).hostname or "").lower() == MAILBOXES[provider][1]
+
+
+async def sign_in(profile: Path, home: Path, wait: Callable[[], Awaitable[None]], url: str = "about:blank") -> str:
+    """Open the profile's browser on `url` so the person can sign in; once `wait` returns, the browser closes.
 
     Nothing is typed for the person and no model is involved: the sign-ins are kept in the profile for the applications.
+    Returns where the page is once `url` is opened again after the wait, so a mailbox that sends the browser to its sign-in
+    page shows the person is not signed in; empty for the blank page.
     """
     async with _server(home, home) as (session, _):
         try:
             await _open_browser(session, profile)
+            if url == "about:blank":
+                await wait()
+                return ""
+            await session.call_tool("browser_navigate", {"url": url})
             await wait()
+            await session.call_tool("browser_navigate", {"url": url})
+            return str((await _page(session) or {}).get("url", ""))
         finally:
             await session.call_tool("browser_close", {})
