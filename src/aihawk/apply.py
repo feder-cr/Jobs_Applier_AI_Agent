@@ -33,6 +33,8 @@ OPEN_DEADLINE_S = 900.0
 OPEN_RETRY_S = 10.0
 # Set in the environment, the form is filled and the send control named, and nothing is sent: a trial of a site or a plugin.
 DRY_RUN_ENV = "AIHAWK_DRY_RUN"
+# Set in the environment, every step the model takes on a page is written to data/trace.log; a dry run always is.
+TRACE_ENV = "AIHAWK_TRACE"
 # The mailboxes a code can be read from: where each opens, and the host a signed-in one stays on (its sign-in page is elsewhere).
 MAILBOXES = {"gmail": ("https://mail.google.com/mail/u/0/", "mail.google.com"), "outlook": ("https://outlook.live.com/mail/", "outlook.live.com")}
 MAIL_DOMAINS = {
@@ -301,14 +303,15 @@ async def run_on_page(session: Browser, tools: list[dict[str, Any]], client: Asy
         f"The CV:\n{cv_text}\n\nThe answers:\n{answers}"
     )
     dry_run = bool(os.environ.get(DRY_RUN_ENV, "").strip())
-    if dry_run:
+    tracing = dry_run or bool(os.environ.get(TRACE_ENV, "").strip())
+    if tracing:
         # A trial is for looking: every step goes to a file beside the proofs, and the password never does.
-        traced = _Traced(session, shot.parent.parent / "dry-run.log", _secrets_in(answers))
-        traced._write(f"== {job.company}: {job.title} at {job.apply_url}")
+        traced = _Traced(session, shot.parent.parent / "trace.log", _secrets_in(answers))
+        traced._write(f"== {job.company}: {job.title} at {job.apply_url}{' (dry run)' if dry_run else ''}")
         session = traced
     report = await fill_form(session, tools, client, model, brief, guidance, page_rules)
     summary = str(report.get("summary", ""))
-    if dry_run:
+    if tracing:
         traced._write(f"== finish_form: {json.dumps(report, ensure_ascii=False)[:500]}")
     if report.get("status") != "ready" or not report.get("submit_selector"):
         return Outcome("blocked", summary)

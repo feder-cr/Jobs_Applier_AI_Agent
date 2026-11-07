@@ -484,7 +484,7 @@ def test_a_dry_run_fills_the_form_names_the_send_control_and_sends_nothing(tmp_p
     assert not browser.clicks()
     assert outcome.proof.url == "https://u/apply"
     # Every step is written beside the proofs, and the password never is.
-    trace = (tmp_path / "dry-run.log").read_text(encoding="utf-8")
+    trace = (tmp_path / "trace.log").read_text(encoding="utf-8")
     assert "== Acme: Engineer at https://u/apply" in trace and "== finish_form:" in trace and "Secret!9x" not in trace
 
 
