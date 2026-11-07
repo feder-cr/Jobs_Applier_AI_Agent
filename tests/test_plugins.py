@@ -76,10 +76,10 @@ def test_the_bundled_plugins_load_and_each_names_a_site() -> None:
     assert len(hosts) == len(set(hosts))
 
 
-def test_the_mail_plugins_apply_to_every_form_and_name_no_site() -> None:
+def test_the_mail_and_menu_plugins_apply_to_every_form_and_name_no_site() -> None:
     plugins = load_plugins()
     always = {plugin.name: plugin for plugin in always_plugins(plugins)}
-    assert set(always) == {"gmail", "outlook"}
+    assert set(always) == {"gmail", "outlook", "menus"}
     assert all(plugin.hosts == () and plugin.instructions for plugin in always.values())
     assert plugin_for("https://mail.google.com/mail/u/0/", plugins) is None
     assert plugin_for("https://outlook.live.com/mail/", plugins) is None
@@ -100,7 +100,7 @@ def test_your_own_mail_plugin_wins_over_the_bundled_one(tmp_path: Path) -> None:
     (tmp_path / "plugins" / "gmail.md").write_text("---\nwhen: always\n---\nMine.", encoding="utf-8")
     always = {plugin.name: plugin.instructions for plugin in always_plugins(load_plugins(tmp_path))}
     assert always["gmail"] == "Mine."
-    assert set(always) == {"gmail", "outlook"}
+    assert set(always) == {"gmail", "outlook", "menus"}
 
 
 def test_a_plugin_saved_with_a_byte_order_mark_is_read(tmp_path: Path) -> None:
