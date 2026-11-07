@@ -6,11 +6,10 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from openai import AsyncOpenAI
 
-from aihawk.apply import MAILBOXES, Outcome, apply_to_job, signed_in
+from aihawk.apply import MAILBOXES, Outcome, apply_to_job, signed_in, site_of
 from aihawk.apply import sign_in as sign_in_browser
 from aihawk.config import KEY_ENV, KEY_URL, Config, ConfigError, load_config
 from aihawk.database import built_at, search, stored_descriptions, with_description
@@ -205,13 +204,8 @@ class Session:
         cv = self.config.cv.read_text(encoding="utf-8-sig")
         job = replace(item.job, apply_url=plugin.form_url(item.job.url) if plugin else item.job.url)
         answers = self.store.answers_text()
-        host = (urlsplit(job.apply_url).hostname or "").lower()
-        known = self.store.account(host)
-        account = (
-            f"Your account on {host}: made on {known[1][:10]} with {known[0]}, and the account_password from the answers."
-            if known
-            else f"No account of yours is known on {host}: if the form needs one, make it."
-        )
+        host = site_of(job.apply_url)
+        account = self.store.account(host)
         extras = always_plugins(self.plugins)
         # The site's own plugin first, then the ones that hold on every site, under a line that says which is which.
         everywhere = "\n\n".join(extra.instructions for extra in extras)

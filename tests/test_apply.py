@@ -534,10 +534,15 @@ def test_the_account_a_form_made_is_reported_and_the_brief_says_whether_one_exis
     browser = ScriptedBrowser({"#send": SUBMIT}, page={"url": "https://u/apply", "text": "the form"})
     model = ScriptedModel([tool_call("finish_form", status="ready", summary="made one", submit_selector="#send", made_account=True)], VERIFIED)
     outcome = asyncio.run(
-        run_on_page(browser, [], model, "m", JOB, "cv", "answers", Path("cv.pdf"), tmp_path / "shot.png", account="No account of yours is known on u.")  # type: ignore[arg-type]
+        run_on_page(browser, [], model, "m", JOB, "cv", "answers", Path("cv.pdf"), tmp_path / "shot.png", account=None)  # type: ignore[arg-type]
     )
     assert outcome.made_account is True and outcome.status == "submitted"
-    assert "No account of yours is known on u." in model.requests[0]["messages"][1]["content"]
+    assert "No account of yours is known on u: if the form needs one, make it." in model.requests[0]["messages"][1]["content"]
+    known = asyncio.run(run_on_page(ScriptedBrowser({"#send": SUBMIT}, page={"url": "https://u/apply", "text": "f"}), [], (m := ScriptedModel(
+        [tool_call("finish_form", status="blocked", summary="x", submit_selector="", made_account=False)])), "m", JOB, "cv", "a", Path("cv.pdf"),
+        tmp_path / "s.png", account=("ada@example.com", "2026-11-07T09:00:00")))  # type: ignore[arg-type]
+    assert known.status == "blocked"
+    assert "Your account on u: made on 2026-11-07 with ada@example.com" in m.requests[0]["messages"][1]["content"]
 
 
 def test_a_form_that_made_no_account_says_so(tmp_path: Path) -> None:

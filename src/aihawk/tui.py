@@ -437,21 +437,20 @@ class AIHawk(App[None]):
         return sum(1 for item in items[start:] if item.score is not None)
 
     async def judge(self) -> None:
-        """Score until LOOKAHEAD jobs lie scored below the cursor, then stop.
+        """Score what the reader is short of, up to LOOKAHEAD scored jobs below the cursor, then stop.
 
         Nothing is announced: the scores filling the list are the progress. Jev weighs a batch of titles and descriptions
-        for a fraction of a cent, and the judge, which costs, scores a chunk at a time and stops the moment the count is
-        met. Moving the cursor down calls this again, so the list stays ahead of the person and no further.
+        for a fraction of a cent; the judge, which costs, scores a chunk at a time. Moving the cursor down calls this again,
+        so the list stays ahead of the person and no further.
         """
         session = self.session
         await session.priced()
         before = SPEND.total
         if not session.store.all():
             self.say("Reading the best postings; a minute or two.")
-        # Two ways to stop: the count ahead is met, or this pass has scored a lookahead's worth. The second matters when
-        # the cursor sits at the end of the list, where nothing new can land ahead of it and the first would never be met.
-        scored_now = 0
-        while self.scored_ahead() < LOOKAHEAD and scored_now < LOOKAHEAD:
+        # What the reader is short of, counted once: a pass pays that and no more, wherever the scores land in the list.
+        need = LOOKAHEAD - self.scored_ahead()
+        while need > 0:
             waiting = session.store.with_status("shortlisted")
             if not waiting:
                 if not session.store.with_status("new"):
@@ -459,9 +458,9 @@ class AIHawk(App[None]):
                 await session.funnel(self.say, lambda _: None)
                 self.refresh_jobs()
                 continue
-            chunk = waiting[: min(CHUNK, LOOKAHEAD - scored_now)]
+            chunk = waiting[: min(CHUNK, need)]
             await session.score(chunk, self.refresh_jobs, self.say)
-            scored_now += len(chunk)
+            need -= len(chunk)
         spent = await session.settled() - before
         if spent:
             self.say(f"{self.scored_ahead()} to read, {money(spent)}.")

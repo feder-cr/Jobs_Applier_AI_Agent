@@ -307,15 +307,15 @@ class _Traced:
             text = text.replace(secret, "(hidden)")
         return text
 
-    def _write(self, line: str) -> None:
+    def note(self, line: str) -> None:
         with self.path.open("a", encoding="utf-8") as out:
             out.write(f"[{time.monotonic() - self.started:6.0f}s] {self._hide(line)}\n")
 
     async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
-        self._write(f"-> {name} {json.dumps(arguments or {}, ensure_ascii=False)[:300]}")
+        self.note(f"-> {name} {json.dumps(arguments or {}, ensure_ascii=False)[:300]}")
         result = await self.session.call_tool(name, arguments)
         text = " ".join(tool_text(result).split())[:300]
-        self._write(f"<- {'ERROR ' if result.isError else ''}{text}")
+        self.note(f"<- {'ERROR ' if result.isError else ''}{text}")
         return result
 
 
@@ -336,23 +336,23 @@ async def run_on_page(
     shot: Path,
     guidance: str = "",
     page_rules: str = "",
-    account: str = "",
+    account: tuple[str, str] | None = None,
 ) -> Outcome:
     brief = (
         f"The form: {job.apply_url}\nThe job: {job.title} at {job.company}\nThe CV file to upload: {cv_file}\n"
-        f"{account}\n\nThe CV:\n{cv_text}\n\nThe answers:\n{answers}"
+        f"{_account_line(job, account)}\n\nThe CV:\n{cv_text}\n\nThe answers:\n{answers}"
     )
     dry_run = bool(os.environ.get(DRY_RUN_ENV, "").strip())
     tracing = dry_run or bool(os.environ.get(TRACE_ENV, "").strip())
     if tracing:
         # A trial is for looking: every step goes to a file beside the proofs, and the password never does.
         traced = _Traced(session, shot.parent.parent / "trace.log", _secrets_in(answers))
-        traced._write(f"== {job.company}: {job.title} at {job.apply_url}{' (dry run)' if dry_run else ''}")
+        traced.note(f"== {job.company}: {job.title} at {job.apply_url}{' (dry run)' if dry_run else ''}")
         session = traced
     report = await fill_form(session, tools, client, model, brief, guidance, page_rules)
     summary = str(report.get("summary", ""))
     if tracing:
-        traced._write(f"== finish_form: {json.dumps(report, ensure_ascii=False)[:500]}")
+        traced.note(f"== finish_form: {json.dumps(report, ensure_ascii=False)[:500]}")
     made = bool(report.get("made_account"))
     if report.get("status") != "ready" or not report.get("submit_selector"):
         return Outcome("blocked", summary, made_account=made)
@@ -423,7 +423,7 @@ async def apply_to_job(
     data_dir: Path,
     profile: Path,
     guidance: str = "",
-    account: str = "",
+    account: tuple[str, str] | None = None,
 ) -> Outcome:
     """Open the browser on the person's profile, fill the job's form and send it: the person's selection and Enter came before."""
     shot = data_dir / "proofs" / f"{safe_name(job.id)}.png"
@@ -442,6 +442,20 @@ async def apply_to_job(
             return await run_on_page(session, tools, client, model, job, cv_text, answers, cv_file, shot, guidance, page_rules, account)
         finally:
             await session.call_tool("browser_close", {})
+
+
+def site_of(url: str) -> str:
+    """The host a form lives on, as the accounts are kept: one company's Workday is not another's."""
+    return (urlsplit(url).hostname or "").lower()
+
+
+def _account_line(job: Job, account: tuple[str, str] | None) -> str:
+    """What the model is told about an account on this site: the one it made and when, or that there is none yet."""
+    site = site_of(job.apply_url)
+    if account is None:
+        return f"No account of yours is known on {site}: if the form needs one, make it."
+    email, made_at = account
+    return f"Your account on {site}: made on {made_at[:10]} with {email}, and the account_password from the answers."
 
 
 def _is_mailbox(url: str) -> bool:
