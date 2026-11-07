@@ -4,9 +4,9 @@ What AIHawk can do on each site, from the real forms it has been run on. Posting
 
 | Site | Postings in the index | Status | What stops it |
 |---|---|---|---|
-| Greenhouse (boards and job-boards hosts, EU too) | ~200k | sent and confirmed on a real form | One real send (one send only). Others stopped at required questions the CV and answers do not cover. |
-| Ashby (jobs.ashbyhq.com) | ~76k | sent and confirmed on a real form | One real send (one send only). Others stopped at required questions, or found a closed posting, or a Submit button that stayed disabled. |
-| Lever (jobs.lever.co, jobs.eu.lever.co) | ~101k | sent and confirmed on a real form | One real send through the app as it is now: the page said "Application submitted!" at an address ending in `/thanks`. |
+| Greenhouse (boards and job-boards hosts, EU too) | ~200k | sent and confirmed on a real form | One real send (one send only). Others stopped at required questions the CV and answers do not cover. A dry run on 2026-11-07 met a closed posting and said so in 33 seconds: the board sends a closed job to `/<company>?error=true`, which the plugin now names. |
+| Ashby (jobs.ashbyhq.com) | ~76k | sent and confirmed on a real form | One real send (one send only). Others stopped at required questions, or found a closed posting, or a Submit button that stayed disabled. A dry run on 2026-11-07 with a test CV filled the form in 40 steps and found the send control, which no id names. |
+| Lever (jobs.lever.co, jobs.eu.lever.co) | ~101k | sent and confirmed on a real form | One real send through the app as it is now: the page said "Application submitted!" at an address ending in `/thanks`. A dry run on 2026-11-07 with a test CV filled the form in 22 steps, the cheapest of any site, with no captcha shown. |
 | JazzHR (applytojob.com) | ~154k | stops at a captcha most of the time | reCAPTCHA did not pass with a click on 5 postings; it often turned into an image puzzle. A later run, with no limit on clicks: the whole form filled in about 2 minutes, then the same image puzzle. |
 | BambooHR (bamboohr.com) | ~87k | stops at a captcha most of the time | reCAPTCHA did not pass with a click on 5 postings; it often turned into an image puzzle. A later run reached the send button in about 5 minutes with no captcha shown; whether one shows on sending is not known. No send has gone. |
 | Personio (jobs.personio.de, jobs.personio.com) | ~64k | stops at a captcha about half the time | Turnstile passed on 2 of 4 postings. A real form ended blocked. |
