@@ -545,7 +545,6 @@ class AIHawk(App[None]):
             ("judge_model", "Scoring model", config.judge_model),
             ("quick_model", "Search plan model", config.quick_model),
             ("decision_model", "Shortlist model", config.decision_model),
-            ("spent", "Spent since the start", money(SPEND.total) + (f", plus {SPEND.unpriced} calls the price list does not cover" if SPEND.unpriced else "")),
             ("folder", "Your files", str(config.workspace)),
         ]
 
@@ -570,8 +569,6 @@ class AIHawk(App[None]):
             if choice == "sign_in":
                 self.sign_in()
                 return
-            if choice == "spent":
-                continue
             if choice == "folder":
                 webbrowser.open(self.session.config.workspace.as_uri())
             elif choice == "mail":
