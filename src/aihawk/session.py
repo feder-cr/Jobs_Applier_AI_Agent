@@ -12,7 +12,7 @@ from openai import AsyncOpenAI
 from aihawk.apply import MAILBOXES, Outcome, apply_to_job, signed_in, site_of
 from aihawk.apply import sign_in as sign_in_browser
 from aihawk.config import KEY_ENV, KEY_URL, Config, ConfigError, load_config
-from aihawk.database import built_at, search, stored_descriptions, with_description
+from aihawk.database import built_at, description_files, search, stored_descriptions, with_description
 from aihawk.documents import score_job
 from aihawk.judge import evidence, fuse, questions
 from aihawk.llm import SPEND, explain, make_client, money, refused
@@ -37,6 +37,8 @@ class Session:
         import_answers_file(self.config, self.store)
         ensure_account_password(self.store)
         self._client: AsyncOpenAI | None = None
+        # Where descriptions are found by key, from the database the last search read; empty before schema 2.
+        self.description_files: tuple[tuple[str, str, str], ...] = ()
 
     def close(self) -> None:
         self.store.close()
@@ -106,6 +108,7 @@ class Session:
         manifest, jobs = await asyncio.to_thread(
             search, self.config.database, self.config.filters, self.config.max_age_days, index, lambda line: loop.call_soon_threadsafe(log, line)
         )
+        self.description_files = description_files(manifest, self.config.database)
         new = sum(self.store.add(job) for job in jobs)
         log(f"{len(jobs)} postings fit your search, of {manifest['rows_out']:,} in the job database built {built_at(manifest):%Y-%m-%d %H:%M} UTC; {new} new")
         return new
@@ -116,7 +119,9 @@ class Session:
         batch = self.store.with_status("new")[:WIDE]
         if not batch:
             return 0
-        texts = await _read_descriptions([item.job.ref for item in batch], status, log)
+        # By key where the database says where keys are: that reaches jobs found in any earlier build too.
+        refs = [item.job.id if self.description_files else item.job.ref for item in batch]
+        texts = await _read_descriptions(refs, self.description_files, status, log)
         for item, text in zip(batch, texts, strict=True):
             self.store.set_description(item.job.id, text)
         jobs = [replace(item.job, description=text) for item, text in zip(batch, texts, strict=True)]
@@ -160,7 +165,7 @@ class Session:
                     job = item.job
                     if not job.description.strip():
                         # Many sources publish no text, and a score from the title alone says little: the posting's own page often has it.
-                        job = await asyncio.to_thread(with_description, job)
+                        job = await asyncio.to_thread(with_description, job, 30.0, self.description_files)
                         self.store.set_description(job.id, job.description)
                     report = await score_job(self.client, self.config.judge_model, job, cv, self.config.goals)
                 except Exception as error:
@@ -239,7 +244,7 @@ class Session:
         return outcome
 
 
-async def _read_descriptions(refs: list[str], status: Log, log: Log) -> list[str]:
+async def _read_descriptions(refs: list[str], files: tuple[tuple[str, str, str], ...], status: Log, log: Log) -> list[str]:
     """The descriptions the database holds; the count of those read is said as each file is read, and a failure is logged."""
     loop = asyncio.get_running_loop()
 
@@ -250,7 +255,7 @@ async def _read_descriptions(refs: list[str], status: Log, log: Log) -> list[str
     def problem(text: str) -> None:
         loop.call_soon_threadsafe(log, text)
 
-    return await asyncio.to_thread(stored_descriptions, refs, shown, problem)
+    return await asyncio.to_thread(stored_descriptions, refs, files, shown, problem)
 
 
 def _places(config: Config) -> str:
