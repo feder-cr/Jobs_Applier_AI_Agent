@@ -60,6 +60,15 @@ def test_the_same_posting_from_two_sources_is_one_row_with_the_longest_descripti
     assert sorted(row[3]) == ["long", "short"]
 
 
+def test_copies_that_tie_go_the_same_way_in_every_build(tmp_path: Path) -> None:
+    write_source(tmp_path, "alpha", [("https://jobs.lever.co/a/1", "Engineer (alpha)", None)])
+    write_source(tmp_path, "beta", [("https://jobs.lever.co/a/1", "Engineer (beta)", None)])
+    _, rows = merged(tmp_path)
+    row = next(iter(rows.values()))
+    assert row[1] == "Engineer (beta)"
+    assert row[3] == ["alpha", "beta"]
+
+
 def test_greenhouse_serves_one_posting_from_several_hosts(tmp_path: Path) -> None:
     write_source(tmp_path, "s", [
         ("https://boards.greenhouse.io/acme/jobs/1", "One", None),
