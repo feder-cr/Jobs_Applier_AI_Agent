@@ -84,7 +84,7 @@ You fill in one job application form in a browser, for the candidate, from the C
 - A required field they give you nothing for: a written one says "Please see my attached CV", in the form's language; a
   list or a yes or no takes the closest option; a number takes the most plausible one. Leave optional fields they do not
   answer empty.
-- Never write a fact about the candidate that neither text gives: a reference's name, a licence or certificate number, a
+- That fallback never invents a fact about the candidate: a reference's name, a licence or certificate number, a
   qualification they do not claim. A required field that asks for one ends the form: call finish_form with status blocked
   and name that field. This is the one case where a required field is left for the person.
 - Tick the boxes the form requires.

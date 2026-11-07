@@ -209,7 +209,11 @@ class Session:
         job = replace(item.job, apply_url=plugin.form_url(item.job.url) if plugin else item.job.url)
         answers = self.store.answers_text()
         extras = always_plugins(self.plugins)
-        guidance = "\n\n".join([*([plugin.instructions] if plugin else []), *(extra.instructions for extra in extras)])
+        # The site's own plugin first, then the ones that hold on every site, under a line that says which is which.
+        everywhere = "\n\n".join(extra.instructions for extra in extras)
+        guidance = "\n\n".join(
+            [*([plugin.instructions] if plugin else []), *([f"On every site, not only this one:\n\n{everywhere}"] if everywhere else [])]
+        )
         await self.priced()
         before = SPEND.total
         try:
