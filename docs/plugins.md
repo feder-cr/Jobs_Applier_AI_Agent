@@ -18,7 +18,7 @@ AIHawk reads the plugins when it starts, so restart it after you change one.
 | `name` | The name AIHawk shows while it fills the form. Default: the file name without `.md`. |
 | `hosts` | The sites the plugin is for, as a list, such as `[jobs.lever.co]`. A posting matches when its host is one of these or ends with `.` and one of them, so `eu.jobs.lever.co` matches too. Required unless `when` is `always`. |
 | `apply_path` | Added to the posting's path to reach the form, once: `/apply` turns `https://jobs.lever.co/acme/1` into `https://jobs.lever.co/acme/1/apply`. A link that already ends with it is left as it is. The query string is kept. Without it, the posting's own link is the form's link. |
-| `when` | Only `always`. The body is then added to every form's instructions, beside the site's own plugin. Such a plugin has no `hosts` and does not make a site count as one AIHawk can apply to. |
+| `when` | Only `always`. The body is then added to every form's instructions, beside the site's own plugin. Such a plugin has no `hosts` and does not make a site count as one AIHawk can apply to. Three are bundled: `gmail.md` and `outlook.md` for a code a site sends by email, and `menus.md`, which tells the model how each kind of list is worked on any site. Say in a site's plugin only what differs from those. |
 
 A file that does not parse (no front matter, `hosts` missing, a `when` other than `always`, empty instructions) stops AIHawk at start with a message that names the plugin. Save the file as UTF-8. A byte-order mark at its start, as some Windows editors write, is fine: AIHawk skips it.
 

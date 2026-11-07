@@ -6,7 +6,7 @@ file to src/aihawk/plugins/, or to a plugins/ folder beside your aihawk.yaml, wh
 name. A plugin helps the model on its site; every posting is tried, with one or without.
 
 A plugin with `when: always` in its front matter has no hosts: its body is added to every form's instructions, beside the
-site's own plugin, The mail plugins are of that kind.
+site's own plugin. The mail plugins are of that kind, and so is menus.md, which says how any site's lists are worked.
 
 """
 
