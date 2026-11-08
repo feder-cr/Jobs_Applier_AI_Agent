@@ -1,4 +1,4 @@
-"""The job database AIHawk reads, as published in a release: read in place, so a search downloads only what it needs."""
+"""The job database AIHawk reads, as published on Hugging Face: read in place, so a search downloads only what it needs."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import re
 import urllib.request
 from bisect import bisect_right
 from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from itertools import pairwise
@@ -22,6 +23,8 @@ from aihawk.config import Arc, Filters, Form, Node, Plan
 
 # How many postings a search brings back to be judged. Past these, a title fits the search too little to be worth a look.
 RECALL = 600
+# Description files read at once: each read waits on the network, not on this computer.
+FILES_AT_ONCE = 8
 # What being in the person's own city is worth, against a node of the plan: about as much as a named skill.
 CITY_WEIGHT = 1.5
 # What a posting with no description keeps of its score: judged on its title alone, it needs a title twice as fitting to
@@ -71,10 +74,11 @@ def stored_descriptions(
     problem: Callable[[str], None] = lambda _: None,
 ) -> list[str]:
     """The descriptions the database holds for these postings, by their keys, in order; empty where its sources published
-    none. One connection, and one query per file: a file's footer is fetched once for the search, and a key read in a
-    file in key order reads only the row group that can hold it.
-    `done` is told how many have been read, as each file is. A read that fails is told once to `problem`, and the
-    descriptions read before it are kept: the search goes on with what it has.
+    none. One query per file, FILES_AT_ONCE files at a time, each on its own connection: a key read in a file in key order
+    reads only the row group that can hold it, and every read waits on the network. On Hugging Face's servers one file
+    took 3 to 4 seconds, and 25 of them one after the other 249.
+    `done` is told how many have been read, as each file is. A file that cannot be read is told once to `problem`, and
+    the others are still read: the search goes on with what it has.
     """
     texts = [""] * len(keys)
     by_file: dict[str, list[tuple[int, str]]] = {}
@@ -85,22 +89,31 @@ def stored_descriptions(
         else:
             count += 1
             done(count)
-    if by_file:
+
+    def read(file: str, held: list[tuple[int, str]]) -> dict[str, str] | None:
         connection = duckdb.connect()
         try:
             connection.execute("INSTALL httpfs; LOAD httpfs;")
-            for file, held in by_file.items():
-                # Constants, not a subquery: that is what lets the reader skip every row group whose range cannot hold them.
-                marks = ", ".join("?" for _ in held)
-                found = dict(connection.execute(f"SELECT key, description FROM read_parquet(?) WHERE key IN ({marks})", [file, *(key for _, key in held)]).fetchall())
-                for position, key in held:
-                    texts[position] = found.get(key) or ""
-                count += len(held)
-                done(count)
+            # Constants, not a subquery: that is what lets the reader skip every row group whose range cannot hold them.
+            marks = ", ".join("?" for _ in held)
+            return dict(connection.execute(f"SELECT key, description FROM read_parquet(?) WHERE key IN ({marks})", [file, *(key for _, key in held)]).fetchall())
         except duckdb.Error:
-            problem("Some job descriptions could not be read from the job database, so those postings are judged without them.")
+            return None
         finally:
             connection.close()
+
+    failed = False
+    with ThreadPoolExecutor(FILES_AT_ONCE) as pool:
+        reads = {pool.submit(read, file, held): held for file, held in by_file.items()}
+        for finished in as_completed(reads):
+            found, held = finished.result(), reads[finished]
+            failed = failed or found is None
+            for position, key in held:
+                texts[position] = (found or {}).get(key) or ""
+            count += len(held)
+            done(count)
+    if failed:
+        problem("Some job descriptions could not be read from the job database, so those postings are judged without them.")
     return texts
 
 
