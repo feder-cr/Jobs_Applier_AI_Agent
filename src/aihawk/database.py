@@ -7,6 +7,8 @@ import html
 import json
 import math
 import re
+import time
+import urllib.error
 import urllib.request
 from bisect import bisect_right
 from collections.abc import Callable, Iterable
@@ -36,6 +38,50 @@ NO_PLACE = ("", "remote", "anywhere", "worldwide", "global")
 
 class DatabaseError(Exception):
     """The database cannot be read."""
+
+
+RELEASE_FILE = re.compile(r"^https://github\.com/([^/]+/[^/]+)/releases/download/([^/]+)/([^/?#]+)$")
+API = "https://api.github.com/repos"
+# How long a link the API gives to a release file is used: GitHub signs it for an hour.
+LINK_S = 50 * 60
+
+
+class _Releases:
+    """Where the release files are read. github.com serves them; on 2026-11-08 its pages and downloads answered 504 for
+    hours while its API served the same files, so once github.com fails a search reads them through the API: the
+    release's file list, then the signed link each file has. Sixty calls an hour are allowed with no account."""
+
+    def __init__(self) -> None:
+        self.via_api = False
+        self.files: dict[tuple[str, str], dict[str, str]] = {}  # (repository, tag) -> the API's address of each file
+        self.links: dict[str, tuple[str, float]] = {}  # a file's own address -> its signed link, and when it was had
+
+    def where(self, url: str) -> str:
+        """The address to read a release file at: its own, or the link the API gives once github.com has failed."""
+        found = RELEASE_FILE.match(url)
+        if not self.via_api or not found:
+            return url
+        link, had = self.links.get(url, ("", 0.0))
+        if link and time.monotonic() - had < LINK_S:
+            return link
+        repository, tag, name = found.groups()
+        if (repository, tag) not in self.files:
+            with urllib.request.urlopen(f"{API}/{repository}/releases/tags/{tag}", timeout=60) as response:
+                self.files[(repository, tag)] = {asset["name"]: asset["url"] for asset in json.load(response)["assets"]}
+        request = urllib.request.Request(self.files[(repository, tag)][name], headers={"Accept": "application/octet-stream"})
+        with urllib.request.urlopen(request, timeout=60) as response:
+            link = response.url
+        self.links[url] = (link, time.monotonic())
+        return link
+
+
+RELEASES = _Releases()
+
+
+def _server_failed(error: BaseException) -> bool:
+    """A failure of the server, not of the request: an HTTP 5xx, or no answer at all."""
+    code = getattr(error, "code", None)
+    return isinstance(error, (urllib.error.URLError, TimeoutError)) and (code is None or code >= 500)
 
 
 @dataclass(frozen=True)
@@ -92,12 +138,12 @@ def stored_descriptions(
             for file, held in by_file.items():
                 # Constants, not a subquery: that is what lets the reader skip every row group whose range cannot hold them.
                 marks = ", ".join("?" for _ in held)
-                found = dict(connection.execute(f"SELECT key, description FROM read_parquet(?) WHERE key IN ({marks})", [file, *(key for _, key in held)]).fetchall())
+                found = dict(connection.execute(f"SELECT key, description FROM read_parquet(?) WHERE key IN ({marks})", [RELEASES.where(file), *(key for _, key in held)]).fetchall())
                 for position, key in held:
                     texts[position] = found.get(key) or ""
                 count += len(held)
                 done(count)
-        except duckdb.Error:
+        except (duckdb.Error, OSError, KeyError, ValueError):
             problem("Some job descriptions could not be read from the job database, so those postings are judged without them.")
         finally:
             connection.close()
@@ -112,8 +158,16 @@ def unreachable(error: BaseException) -> str:
 def load_manifest(location: str) -> dict[str, Any]:
     try:
         if location.startswith(("http://", "https://")):
-            with urllib.request.urlopen(location, timeout=60) as response:
-                return json.load(response)
+            try:
+                with urllib.request.urlopen(RELEASES.where(location), timeout=60) as response:
+                    return json.load(response)
+            except OSError as error:
+                if RELEASES.via_api or not RELEASE_FILE.match(location) or not _server_failed(error):
+                    raise
+                # github.com does not answer: this search reads every release file through the API.
+                RELEASES.via_api = True
+                with urllib.request.urlopen(RELEASES.where(location), timeout=60) as response:
+                    return json.load(response)
         return json.loads(Path(location).read_text(encoding="utf-8-sig"))
     except (OSError, ValueError) as error:
         if isinstance(error, OSError) and location.startswith(("http://", "https://")):
@@ -181,13 +235,17 @@ def _apply(path: Path, chain: list[dict[str, Any]]) -> None:
         # A column added since this index was kept is NULL in it, until a delta brings the posting with it.
         held = {row[0] for row in connection.execute("DESCRIBE SELECT * FROM read_parquet(?)", [path.as_posix()]).fetchall()}
         kept = ", ".join(column if column in held else f"NULL AS {column}" for column in INDEX_COLUMNS)
+        # The newest delta is the last of the chain, whatever its file is called: a link the API gives has no build in it.
+        links = [RELEASES.where(delta["url"]) for delta in chain]
+        connection.execute("CREATE TABLE chain (link VARCHAR, place INTEGER)")
+        connection.executemany("INSERT INTO chain VALUES (?, ?)", [(link, place) for place, link in enumerate(links)])
         connection.execute(
             """CREATE TABLE changes AS
-               SELECT * EXCLUDE (filename, newest) FROM (
-                   SELECT *, row_number() OVER (PARTITION BY key ORDER BY filename DESC) AS newest
-                   FROM read_parquet(?, filename = true, union_by_name = true)
+               SELECT * EXCLUDE (filename, link, place, newest) FROM (
+                   SELECT *, row_number() OVER (PARTITION BY key ORDER BY chain.place DESC) AS newest
+                   FROM read_parquet(?, filename = true, union_by_name = true) AS delta JOIN chain ON delta.filename = chain.link
                ) WHERE newest = 1""",
-            [[delta["url"] for delta in chain]],
+            [links],
         )
         connection.execute(f"""
             COPY (
@@ -196,7 +254,7 @@ def _apply(path: Path, chain: list[dict[str, Any]]) -> None:
                 SELECT {columns} FROM changes WHERE op = 'add'
             ) TO '{partial.as_posix()}' (FORMAT parquet, COMPRESSION zstd)
         """, [path.as_posix()])
-    except duckdb.Error as error:
+    except (duckdb.Error, OSError, KeyError) as error:
         partial.unlink(missing_ok=True)
         raise DatabaseError(f"the job index could not be brought up to date: {error}") from error
     finally:
@@ -209,7 +267,7 @@ def _download(manifest: dict[str, Any], source: str, path: Path, log: Callable[[
     log(f"downloading the job index built {built_at(manifest):%Y-%m-%d} ({manifest['index']['bytes'] // 1_000_000} MB), once")
     partial = path.with_suffix(".part")
     try:
-        with urllib.request.urlopen(source, timeout=120) as response, partial.open("wb") as out:
+        with urllib.request.urlopen(RELEASES.where(source), timeout=120) as response, partial.open("wb") as out:
             copied = told = 0
             while chunk := response.read(1 << 20):
                 out.write(chunk)
@@ -218,9 +276,9 @@ def _download(manifest: dict[str, Any], source: str, path: Path, log: Callable[[
                 if copied * 4 // manifest["index"]["bytes"] > told and copied < manifest["index"]["bytes"]:
                     told = copied * 4 // manifest["index"]["bytes"]
                     log(f"  {told * 25}%")
-    except OSError as error:
+    except (OSError, KeyError) as error:
         partial.unlink(missing_ok=True)
-        if error.errno == errno.ENOSPC:
+        if getattr(error, "errno", None) == errno.ENOSPC:
             raise DatabaseError(f"The disk is full: the job index needs {manifest['index']['bytes'] // 1_000_000} MB free in {path.parent}. Free some space, then start AIHawk again.") from error
         raise DatabaseError(unreachable(error)) from error
     partial.replace(path)

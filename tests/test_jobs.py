@@ -10,6 +10,7 @@ import socket
 import textwrap
 import urllib.error
 from pathlib import Path
+from typing import Any
 
 import duckdb
 import pytest
@@ -23,6 +24,7 @@ from aihawk.database import (
     _apply,
     _chain,
     description_files,
+    load_manifest,
     local_index,
     rarity,
     search,
@@ -523,6 +525,53 @@ def test_an_index_kept_from_before_a_column_was_added_takes_the_delta_that_bring
     rows = connection.execute(f"SELECT key FROM read_parquet('{path.as_posix()}') ORDER BY key").fetchall()
     assert rows == [("a",), ("b",), ("c",)]
     assert "described" in {row[0] for row in connection.execute(f"DESCRIBE SELECT * FROM read_parquet('{path.as_posix()}')").fetchall()}
+
+
+class _Answer(io.BytesIO):
+    def __init__(self, body: bytes, url: str = "") -> None:
+        super().__init__(body)
+        self.url = url
+
+
+def test_when_github_com_does_not_serve_the_release_its_files_come_through_the_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    import aihawk.database as database_module
+
+    monkeypatch.setattr(database_module, "RELEASES", database_module._Releases())
+    latest = "https://github.com/o/r/releases/download/jobs-latest/manifest.json"
+    asked: list[str] = []
+
+    def served(request: Any, *_: Any, **__: Any) -> _Answer:
+        url = request if isinstance(request, str) else request.full_url
+        asked.append(url)
+        if url.startswith("https://github.com/"):
+            raise urllib.error.HTTPError(url, 504, "Gateway Time-out", {}, None)  # type: ignore[arg-type]
+        if url == "https://api.github.com/repos/o/r/releases/tags/jobs-latest":
+            return _Answer(json.dumps({"assets": [{"name": "manifest.json", "url": "https://api.github.com/repos/o/r/releases/assets/1"}]}).encode())
+        if url == "https://api.github.com/repos/o/r/releases/assets/1":
+            assert request.headers["Accept"] == "application/octet-stream"
+            return _Answer(b"", url="https://release-assets.example/signed-1")
+        if url == "https://release-assets.example/signed-1":
+            return _Answer(b'{"build": "b1"}')
+        raise AssertionError(url)
+
+    monkeypatch.setattr("urllib.request.urlopen", served)
+    assert load_manifest(latest) == {"build": "b1"}
+    assert database_module.RELEASES.where(latest) == "https://release-assets.example/signed-1"
+    assert asked.count("https://api.github.com/repos/o/r/releases/tags/jobs-latest") == 1
+
+
+def test_a_file_github_com_does_not_have_is_not_taken_for_its_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    import aihawk.database as database_module
+
+    monkeypatch.setattr(database_module, "RELEASES", database_module._Releases())
+
+    def missing(url: str, *_: Any, **__: Any) -> None:
+        raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("urllib.request.urlopen", missing)
+    with pytest.raises(DatabaseError):
+        load_manifest("https://github.com/o/r/releases/download/jobs-latest/manifest.json")
+    assert not database_module.RELEASES.via_api
 
 
 def test_a_description_is_found_by_its_key_in_the_file_whose_range_holds_it(tmp_path: Path) -> None:
