@@ -173,7 +173,7 @@ def local_index(manifest: dict[str, Any], location: str, cache: Path, log: Calla
         return path
     chain = _chain(manifest.get("deltas", []), have) if have else None
     if chain is not None:
-        log(f"updating the job index: {sum(delta['adds'] for delta in chain):,} postings new or changed, {sum(delta['drops'] for delta in chain):,} gone")
+        log("Getting the latest jobs.")
         _apply(path, chain)
     else:
         # The first time, or a gap no delta covers: the whole index, once.
@@ -232,7 +232,7 @@ def _apply(path: Path, chain: list[dict[str, Any]]) -> None:
 
 def _download(manifest: dict[str, Any], source: str, path: Path, log: Callable[[str], None]) -> None:
     """The release's whole index into `path`, in one rename at the end, saying how far it has come."""
-    log(f"downloading the job index built {built_at(manifest):%Y-%m-%d} ({manifest['index']['bytes'] // 1_000_000} MB), once")
+    log(f"Getting the jobs ready, only the first time ({manifest['index']['bytes'] // 1_000_000} MB).")
     partial = path.with_suffix(".part")
     try:
         with urllib.request.urlopen(source, timeout=120) as response, partial.open("wb") as out:
