@@ -725,6 +725,38 @@ def test_a_score_arriving_while_the_person_reads_lands_ahead_of_them_and_never_m
     asyncio.run(run())
 
 
+def test_home_and_end_take_the_cursor_and_a_new_width_refits_the_columns_and_the_log(home: Path) -> None:
+    async def run() -> None:
+        app = AIHawk(home)
+        for n in range(80):
+            app.session.store.add(Job(f"j{n}", f"Firm {n}", "Engineer", "Milan", f"https://a.example/{n}", f"https://a.example/{n}", "d"))
+        app.start = lambda: None  # type: ignore[method-assign]
+        app.keep_ahead = lambda: None  # type: ignore[method-assign]
+        async with app.run_test(size=(140, 30)) as pilot:
+            app.refresh_jobs()
+            app.say("word " * 40)
+            await pilot.pause()
+            table = app.query_one(DataTable)
+            # DataTable's own End scrolled the view and left the cursor on the first row, out of sight.
+            await pilot.press("end")
+            await pilot.pause()
+            assert table.cursor_row == 79
+            await pilot.press("home")
+            await pilot.pause()
+            assert table.cursor_row == 0
+            log = app.query_one(RichLog)
+            await pilot.resize_terminal(80, 24)
+            await pilot.pause()
+            # Cut for the screen it now has, not the one before; the log wrapped again, nothing past its edge.
+            assert table.virtual_size.width <= table.size.width
+            assert all(len(line.text) <= log.scrollable_content_region.width for line in log.lines)
+            await pilot.resize_terminal(140, 30)
+            await pilot.pause()
+            assert len(table.columns) == 5 and table.virtual_size.width <= table.size.width
+
+    asyncio.run(run())
+
+
 def test_a_posting_with_no_description_is_judged_on_its_title_and_no_page_is_read(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     session = Session(home)
     session._client = ScriptedModelForApp()  # type: ignore[assignment]

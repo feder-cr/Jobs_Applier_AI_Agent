@@ -7,16 +7,16 @@ from pathlib import Path
 from typing import ClassVar
 
 from rich.text import Text
-from textual import on, work
+from textual import events, on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.widgets import DataTable, Footer, RichLog, Static
+from textual.widgets import DataTable, Footer, Static
 
 from aihawk.apply import MAILBOXES, Outcome, mail_provider
 from aihawk.config import KEY_ENV, KEY_URL, ConfigError
 from aihawk.database import DatabaseError
 from aihawk.llm import SPEND, explain, money, refused
-from aihawk.screens import WIDE_ENOUGH, JobDetails, SendBatch, SentDetails, SentList, Settings, SignIn, TextPrompt
+from aihawk.screens import WIDE_ENOUGH, JobDetails, Rows, Said, SendBatch, SentDetails, SentList, Settings, SignIn, TextPrompt
 from aihawk.session import Session
 from aihawk.store import SUBMITTED, Stored
 
@@ -79,9 +79,9 @@ class AIHawk(App[None]):
 
     def compose(self) -> ComposeResult:
         yield Static("AIHawk", id="heading", markup=False)
-        yield DataTable(id="jobs", cursor_type="row", zebra_stripes=True)
+        yield Rows(id="jobs", cursor_type="row", zebra_stripes=True)
         # min_width=1: RichLog wraps at 78 columns by default, under its own scrollbar, so the last words were hidden.
-        yield RichLog(id="log", wrap=True, min_width=1, markup=False)
+        yield Said(id="log", wrap=True, min_width=1, markup=False)
         yield Footer()
 
     def on_mount(self) -> None:
@@ -89,12 +89,13 @@ class AIHawk(App[None]):
         self.show_heading()
         self.start()
 
-    def on_resize(self) -> None:
-        self.fit_columns()
+    def on_resize(self, event: events.Resize) -> None:
+        # The event's size: the app's own still says the old one here, and the columns were cut for the screen before.
+        self.fit_columns(event.size.width)
 
-    def fit_columns(self) -> None:
+    def fit_columns(self, width: int | None = None) -> None:
         """The columns for this screen's width: all of them from WIDE_ENOUGH up, and below it no location, which the details show."""
-        width = self.size.width
+        width = width or self.size.width
         if width == self.columns_for:
             return
         self.columns_for = width
@@ -115,7 +116,7 @@ class AIHawk(App[None]):
     # What the person sees.
 
     def say(self, line: str) -> None:
-        self.query_one(RichLog).write(line)
+        self.query_one(Said).say(line)
 
     def failed(self, error: Exception) -> None:
         """Says what went wrong, in plain words. A key OrcaRouter refused is forgotten when it came from the file, and asked for again."""

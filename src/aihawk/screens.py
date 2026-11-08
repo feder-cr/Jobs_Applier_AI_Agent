@@ -4,19 +4,48 @@ browser left open for a sign-in. Each is self-contained and reports back by what
 from __future__ import annotations
 
 import webbrowser
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from rich.text import Text
-from textual import on
+from textual import events, on
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import DataTable, Footer, Input, Static
+from textual.widgets import DataTable, Footer, Input, RichLog, Static
 
 from aihawk.judge import QUESTIONS
 from aihawk.llm import money
 from aihawk.store import Sent, Stored, said, sent_word
+
+
+class Said(RichLog):
+    """The log, written again when its width changes: a line wrapped for a wider log was cut, one for a narrower one left
+    the rest of the line empty."""
+
+    def __init__(self, **options: Any) -> None:
+        super().__init__(**options)
+        self.said: list[str] = []
+        self.wrapped_for = 0
+
+    def say(self, line: str) -> None:
+        self.said.append(line)
+        self.write(line)
+
+    def on_resize(self, event: events.Resize) -> None:
+        width = self.scrollable_content_region.width
+        if self.wrapped_for and width != self.wrapped_for:
+            self.clear()
+            for line in self.said:
+                self.write(line)
+        self.wrapped_for = width
+
+
+class Rows(DataTable):
+    """A table read row by row: Home and End take the cursor to the first and the last row. DataTable's own Home and End
+    only scroll the view, and left the cursor behind, out of sight, where the next arrow brought the view back."""
+
+    BINDINGS: ClassVar = [Binding("home", "scroll_top", show=False), Binding("end", "scroll_bottom", show=False)]
 
 # Below this width there is no room for the location beside the company and the role.
 WIDE_ENOUGH = 100
@@ -94,7 +123,7 @@ class SentList(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="wide"):
             yield Static("Applications", id="question", markup=False)
-            yield DataTable(id="sent", cursor_type="row")
+            yield Rows(id="sent", cursor_type="row")
             yield Static("Enter opens one · Esc goes back", classes="hint")
             yield Footer()
 
@@ -203,7 +232,7 @@ class Settings(ModalScreen[str | None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="wide"):
             yield Static(self.title_text, id="question", markup=False)
-            yield DataTable(id="settings", cursor_type="row", show_header=False)
+            yield Rows(id="settings", cursor_type="row", show_header=False)
             yield Static("Enter changes it · Esc goes back", classes="hint")
             yield Footer()
 
