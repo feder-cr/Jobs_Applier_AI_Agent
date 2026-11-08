@@ -24,6 +24,8 @@ from aihawk.store import SUBMITTED, Stored
 SEARCH_SETTINGS = {"places", "exclude", "max_age_days"}
 # Jobs on a page: all scored, sorted once, and never moved while the person reads them.
 PAGE = 50
+# Scored jobs kept in reserve beyond the pages made, a round of them: the next pages are there when the person turns.
+AHEAD = 200
 RESUME_QUESTION = "Where is your resume?"
 MAIL_QUESTION = "The email you apply with."
 MAIL_HINT = "Job sites send their codes there, and AIHawk reads only those · Enter · Esc for later"
@@ -83,6 +85,8 @@ class AIHawk(App[None]):
         self.pages: list[list[str]] = []
         self.page = 0
         self.wanted: int | None = None
+        # The descriptions read so far of the round under way, and of how many.
+        self.progress: tuple[int, int] | None = None
         self.signing_in = False
         self.columns_for = 0
         self.with_location = True
@@ -233,30 +237,56 @@ class AIHawk(App[None]):
             self.show_heading()
 
     async def score(self) -> None:
-        """Pages, PAGE jobs each, up to the one after the page shown, then stop: Jev reads one page ahead of the person.
-        It reads the next postings the search ranked best, as many as one request holds, and scores them all; a page is
-        the best PAGE of what it scored and no page holds yet, sorted once, before it shows. The progress is said on one
-        line, which the next count replaces."""
+        """Pages, PAGE jobs each, up to the one after the page shown, and a round of scored jobs no page holds yet in
+        reserve: Jev reads the next round while the person reads, so a page they turn to is there. A round's wait is its
+        descriptions' download, half a minute; it is counted on the line below only while the person waits for a page."""
         session = self.session
         store = session.store
+        while True:
+            self.make_pages()
+            if not store.with_status("new") or (len(self.pages) >= self.page + 2 and len(self.spare()) >= AHEAD):
+                break
+            self.progress = None
+            self.show_progress()
+
+            def counted(done: int, size: int) -> None:
+                self.progress = (done, size)
+                self.show_progress()
+
+            await session.read(self.say, counted)
+            self.progress = None
+        self.make_pages()
+
+    def spare(self) -> list[str]:
+        """The scored jobs no page holds yet, the best first."""
+        paged = {job_id for page in self.pages for job_id in page}
+        return [item.job.id for item in self.session.store.all() if item.score is not None and item.job.id not in paged]
+
+    def make_pages(self) -> None:
+        """Pages from the jobs scored and not on one, up to the one after the page shown. A page is PAGE of them, sorted
+        once; a shorter one only when Jev has nothing left to read. A page the person waited for opens."""
         said = self.query_one(Said)
         while len(self.pages) < self.page + 2:
-            number = len(self.pages) + 1
-            paged = {job_id for page in self.pages for job_id in page}
-            spare = [item.job.id for item in store.all() if item.score is not None and item.job.id not in paged]
-            if len(spare) < PAGE and store.with_status("new"):
-                said.say(f"Preparing page {number}…", again=True)
-                await session.read(self.say, lambda done, size, number=number: said.say(f"Preparing page {number}… {done} of {size}", again=True))
-                continue
-            if not spare:
-                break
+            spare = self.spare()
+            if not spare or (len(spare) < PAGE and self.session.store.with_status("new")):
+                return
             self.pages.append(spare[:PAGE])
-            said.say(f"Page {number} ready.", again=True)
-            if self.wanted == len(self.pages) - 1:
+            number = len(self.pages)
+            if self.wanted == number - 1:
                 self.wanted = None
-                self.page = len(self.pages) - 1
+                self.page = number - 1
                 self.query_one(DataTable).move_cursor(row=0)
+            if said.counting or number == 1:
+                said.say(f"Page {number} ready.", again=True)
             self.refresh_jobs()
+
+    def show_progress(self) -> None:
+        """How far the page the person waits for is, on one line: only while they wait, the first page or one turned to."""
+        if self.wanted is None and len(self.pages) > self.page:
+            return
+        number = (self.wanted if self.wanted is not None else self.page) + 1
+        counted = f" {self.progress[0]} of {self.progress[1]}" if self.progress else ""
+        self.query_one(Said).say(f"Preparing page {number}…{counted}", again=True)
 
     def turn(self, step: int) -> None:
         """To the page before or after, on its first row. A page not ready yet opens once it is; the line below says how
@@ -278,6 +308,7 @@ class AIHawk(App[None]):
             self.say("No more jobs for this search.")
             return
         self.wanted = target
+        self.show_progress()
         self.keep_ahead()
 
     # The keys.
@@ -313,14 +344,11 @@ class AIHawk(App[None]):
             webbrowser.open(item.job.url)
 
     def keep_ahead(self) -> None:
-        """The page after the one shown is made, unless it is, a flow is already at it, or an application holds the
+        """The pages and the round in reserve are made, unless a flow is already at it, or an application holds the
         browser. A page turn still queued while the app quits finds the store closed: there is nothing left to score for."""
         if not self.is_running or self.applying() or any(worker.group == "flow" and worker.is_running for worker in self.workers):
             return
-        store = self.session.store
-        paged = {job_id for page in self.pages for job_id in page}
-        spare = any(item.score is not None and item.job.id not in paged for item in store.all())
-        if len(self.pages) < self.page + 2 and (spare or store.with_status("new")):
+        if self.session.store.with_status("new") or self.spare():
             self.more_jobs()
 
     @work(exclusive=True, group="flow")

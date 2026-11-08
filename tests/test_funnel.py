@@ -64,7 +64,7 @@ def test_a_round_reads_the_best_titles_one_full_request_and_scores_every_one(tmp
     assert read(session) == 20
     assert set(scored(session)) == ids(range(10, 30))
     assert {item.job.id for item in session.store.with_status("new")} == ids(range(10))
-    assert WIDE == 512
+    assert WIDE == 200
 
 
 def test_the_score_is_jevs_certainty_from_1_to_5(tmp_path: Path, values: dict[str, float | None]) -> None:

@@ -16,11 +16,14 @@ from aihawk.database import description_files, search, stored_descriptions
 from aihawk.llm import SPEND, explain, make_client, money, refused
 from aihawk.plugins import Plugin, always_plugins, load_plugins, plugin_for
 from aihawk.profile import ensure_account_password, import_answers_file, install_resume, save_setting
-from aihawk.shortlist import MAX_POSTINGS, fits, question, score
+from aihawk.shortlist import fits, question, score
 from aihawk.store import SENT_WORDS, SUBMITTED, Store, Stored, write_applied
 
-# Jev reads the next WIDE postings the search ranked best, as many as one request holds, and scores each of them.
-WIDE = MAX_POSTINGS
+# Jev reads the next WIDE postings the search ranked best and scores each of them: about what one of its requests holds,
+# 215 to 230 postings with their descriptions on 2026-11-08. What a round waits on is not Jev, three seconds for 512, but
+# their descriptions, each in its own block of a file on Hugging Face: 17 seconds for 100, 20 to 25 for 200, 40 to 90 for
+# 512. A round of 200 shows the first page in half a minute, and the next rounds are read while the person reads.
+WIDE = 200
 
 Log = Callable[[str], None]
 
@@ -114,13 +117,13 @@ class Session:
 
     async def read(self, log: Log, status: Callable[[int, int], None]) -> int:
         """Jev reads the next WIDE postings the search ranked best and scores each one by how sure it is that the job is in
-        line with the candidate. `status` is told the postings read so far, of how many. A posting Jev gave no answer for
+        line with the candidate. `status` is told the descriptions read so far, of how many. A posting Jev gave no answer for
         is set aside, not asked again and again. Returns how many were scored."""
         batch = self.store.with_status("new")[:WIDE]
         if not batch:
             return 0
         # By key: that reaches jobs found in any earlier build too.
-        texts = await _read_descriptions([item.job.id for item in batch], self.description_files, lambda _: None, log)
+        texts = await _read_descriptions([item.job.id for item in batch], self.description_files, lambda done: status(done, len(batch)), log)
         for item, text in zip(batch, texts, strict=True):
             self.store.set_description(item.job.id, text)
         jobs = [replace(item.job, description=text) for item, text in zip(batch, texts, strict=True)]
@@ -128,7 +131,7 @@ class Session:
         asked = question(self.config.goals, _places(self.config))
         reasons: list[str] = []
         try:
-            values = await fits(self.client, self.config.decision_model, cv, jobs, asked, lambda done: status(done, len(jobs)), reasons.append)
+            values = await fits(self.client, self.config.decision_model, cv, jobs, asked, lambda _: None, reasons.append)
         except Exception as error:
             # Only the client can fail here; a batch that fails is a failed verdict inside fits.
             if refused(error):
@@ -207,13 +210,13 @@ class Session:
         return outcome
 
 
-async def _read_descriptions(keys: list[str], files: tuple[tuple[str, str, str], ...], status: Log, log: Log) -> list[str]:
-    """The descriptions the database holds; the count of those read is said as each file is read, and a failure is logged."""
+async def _read_descriptions(keys: list[str], files: tuple[tuple[str, str, str], ...], status: Callable[[int], None], log: Log) -> list[str]:
+    """The descriptions the database holds; the count of those read is told as each file is read, and a failure is logged."""
     loop = asyncio.get_running_loop()
 
     def shown(done: int) -> None:
         # The read runs in a thread: its count is handed to the loop, which alone touches the screen.
-        loop.call_soon_threadsafe(status, f"reading descriptions {done}/{len(keys)}")
+        loop.call_soon_threadsafe(status, done)
 
     def problem(text: str) -> None:
         loop.call_soon_threadsafe(log, text)
