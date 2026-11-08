@@ -12,7 +12,7 @@ from openai import AsyncOpenAI
 from aihawk.apply import MAILBOXES, Outcome, apply_to_job, signed_in, site_of
 from aihawk.apply import sign_in as sign_in_browser
 from aihawk.config import KEY_ENV, KEY_URL, Config, ConfigError, load_config
-from aihawk.database import built_at, description_files, search, stored_descriptions
+from aihawk.database import description_files, search, stored_descriptions
 from aihawk.judge import score_job
 from aihawk.llm import SPEND, explain, make_client, money, refused
 from aihawk.plugins import Plugin, always_plugins, load_plugins, plugin_for
@@ -110,7 +110,8 @@ class Session:
         )
         self.description_files = description_files(manifest, self.config.database)
         new = sum(self.store.add(job) for job in jobs)
-        log(f"{len(jobs)} postings fit your search, of {manifest['rows_out']:,} in the job database built {built_at(manifest):%Y-%m-%d %H:%M} UTC; {new} new")
+        # Said for anyone, not for who builds the database: how many jobs, and, from the second search on, how many are new.
+        log(f"{len(jobs):,} jobs found for you" + (f", {new:,} new." if new != len(jobs) else "."))
         return new
 
     async def funnel(self, log: Log, status: Log) -> int:
@@ -142,7 +143,7 @@ class Session:
         failed = sum(value is None for value in values)
         if failed:
             why = "; ".join(dict.fromkeys(reasons))
-            log(f"Jev could not read {failed} of {len(jobs)} postings: {why}; they are ranked by their title alone")
+            log(f"{failed:,} of {len(jobs):,} jobs could not be read ({why}): they are ranked by their title alone.")
         for job, value in zip(jobs, values, strict=True):
             if value is not None:
                 self.store.set_evidence(job.id, value)

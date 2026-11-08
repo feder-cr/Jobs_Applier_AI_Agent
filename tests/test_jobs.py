@@ -583,7 +583,7 @@ def test_an_index_kept_here_is_downloaded_once_then_brought_up_to_date_by_its_de
     lines: list[str] = []
     path = local_index(second, "https://a.example/manifest.json", cache, lines.append)
     assert len(downloads) == 1, "the whole index is never downloaded again"
-    assert lines == ["updating the job index: 1 postings new or changed, 1 gone"]
+    assert lines == ["Getting the latest jobs."]
     keys = [row[0] for row in duckdb.connect().execute(f"SELECT key FROM read_parquet('{path.as_posix()}') ORDER BY key").fetchall()]
     assert keys == ["b", "c"]
     assert local_index(second, "https://a.example/manifest.json", cache) == path and len(downloads) == 1

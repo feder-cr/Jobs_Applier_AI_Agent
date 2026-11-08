@@ -109,8 +109,8 @@ def test_a_failed_verdict_is_counted_once_and_the_others_are_as_they_were(tmp_pa
     evidence = {item.job.id: item.evidence for item in session.store.all()}
     assert evidence["p007"] is None
     assert evidence["p008"] == pytest.approx(2 * math.log(9))
-    assert len(said) == 1 and said[0].startswith("Jev could not read 1 of 100 postings: OrcaRouter rejected the request.")
-    assert said[0].endswith("; they are ranked by their title alone")
+    assert len(said) == 1 and said[0].startswith("1 of 100 jobs could not be read (OrcaRouter rejected the request.")
+    assert said[0].endswith("): they are ranked by their title alone.")
     assert len(session.store.with_status("shortlisted")) == JUDGED
     assert len(session.store.with_status("shortlisted")) == JUDGED
 
@@ -150,7 +150,7 @@ def test_a_scan_that_logs_from_its_thread_says_it_on_the_loop(tmp_path: Path, mo
     loop_thread = threading.get_ident()
     asyncio.run(session.find(lambda line: seen.append((line, threading.get_ident()))))
     assert seen[0] == ("from the thread", loop_thread)
-    assert seen[1][0] == "0 postings fit your search, of 0 in the job database built 2026-11-04 00:00 UTC; 0 new" and seen[1][1] == loop_thread
+    assert seen[1][0] == "0 jobs found for you." and seen[1][1] == loop_thread
 
 
 def test_with_no_postings_left_the_funnel_does_nothing(tmp_path: Path) -> None:
