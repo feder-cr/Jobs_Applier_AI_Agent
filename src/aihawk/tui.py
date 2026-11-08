@@ -69,6 +69,10 @@ class AIHawk(App[None]):
         self.session = Session(workspace)
         self.resume = resume
         self.selected: set[str] = set()
+        # The jobs in the order the list shows them, and how many from the top the person has gone down through: those
+        # stay where they are.
+        self.shown: list[str] = []
+        self.read = 0
         self.signing_in = False
         self.columns_for = 0
         self.with_location = True
@@ -140,14 +144,23 @@ class AIHawk(App[None]):
         return (Text(mark, style="bold green"), score, Text(item.job.company), Text(item.job.title), *place)
 
     def refresh_jobs(self, current: str | None = None) -> None:
-        """The list, best first. The cursor stays on the job it was on."""
+        """The list, best first, but never moved under the person: the rows they have gone down through keep their order,
+        and a job scored while they read lands ahead of them, where they will meet it. Sorted whole, a score arriving went in
+        above the cursor, out of sight, and pushed the cursor's job down a row. Until the person goes down, nothing is read,
+        the whole list is sorted and the cursor stays on top, on the best."""
         table = self.query_one(DataTable)
         current = current or self.current_id()
+        items = self.session.store.all()
+        by_id = {item.job.id: item for item in items}
+        held = [job_id for job_id in self.shown[: self.read] if job_id in by_id]
+        ordered = [by_id[job_id] for job_id in held] + [item for item in items if item.job.id not in set(held)]
+        self.shown = [item.job.id for item in ordered]
+        self.read = len(held)
         table.clear()
-        for item in self.session.store.all():
+        for item in ordered:
             table.add_row(*self.row(item), key=item.job.id)
-        if current and current in {key.value for key in table.rows}:
-            table.move_cursor(row=table.get_row_index(current))
+        if held and current in by_id:
+            table.move_cursor(row=self.shown.index(current))
 
     def current_id(self) -> str | None:
         table = self.query_one(DataTable)
@@ -163,6 +176,8 @@ class AIHawk(App[None]):
 
     @work(exclusive=True, group="flow")
     async def start(self) -> None:
+        # A new search is a new list: nothing in it has been read yet.
+        self.read = 0
         self.refresh_jobs()
         session = self.session
         try:
@@ -201,11 +216,11 @@ class AIHawk(App[None]):
             self.show_heading()
 
     def scored_ahead(self) -> int:
-        """Scored jobs from the cursor to the end of the list: what the person still has to read."""
-        items = self.session.store.all()
+        """Scored jobs from the cursor to the end of the list, as the list shows them: what the person still has to read."""
+        scores = {item.job.id: item.score for item in self.session.store.all()}
         current = self.current_id()
-        start = next((index for index, item in enumerate(items) if item.job.id == current), 0)
-        return sum(1 for item in items[start:] if item.score is not None)
+        start = self.shown.index(current) if current in self.shown else 0
+        return sum(1 for job_id in self.shown[start:] if scores.get(job_id) is not None)
 
     async def judge(self) -> None:
         """Score what the reader is short of, up to LOOKAHEAD scored jobs below the cursor, then stop.
@@ -271,7 +286,10 @@ class AIHawk(App[None]):
 
     @on(DataTable.RowHighlighted)
     def row_moved(self) -> None:
-        """The judge follows the cursor, unless an application holds the browser."""
+        """The judge follows the cursor, unless an application holds the browser. The rows down to the cursor are read."""
+        row = self.query_one(DataTable).cursor_row
+        if row > 0:
+            self.read = max(self.read, row + 1)
         if not self.applying():
             self.keep_ahead()
 
