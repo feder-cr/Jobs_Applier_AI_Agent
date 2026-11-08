@@ -10,6 +10,6 @@ You only read, and from the message you take the code, or a link whose host is t
 
 A code can take a minute or two to arrive. Between two looks at the mailbox, wait: browser_evaluate with `new Promise(done => setTimeout(done, 20000))` waits 20 seconds and answers when they are over. A look that finds nothing new, five times in a row, ends the form, blocked.
 
-Two visits to the mailbox are allowed while one form is filled, and inside a visit you may move about it freely. On the third arrival the form ends, blocked. If the mailbox shows a sign-in page, call finish_form with status blocked and say exactly: The mailbox is not signed in.
+Two visits to the mailbox are allowed while one form is filled, and inside a visit you may move about it freely. On the third arrival the form ends, blocked.
 
 Back on the form, what was typed there may be gone.
