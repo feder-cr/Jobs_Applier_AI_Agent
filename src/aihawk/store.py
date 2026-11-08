@@ -28,7 +28,6 @@ CREATE TABLE IF NOT EXISTS jobs (
     status TEXT NOT NULL DEFAULT 'new',
     score REAL,
     report TEXT,
-    ref TEXT,
     lexical REAL NOT NULL DEFAULT 0,
     evidence REAL,
     note TEXT,
@@ -171,16 +170,16 @@ class Store:
         """Record a job seen in a search; True when it is new. A known job keeps its status and score."""
         now = _now()
         cursor = self._db.execute(
-            "INSERT OR IGNORE INTO jobs (id, company, title, location, url, apply_url, description, ref, lexical, first_seen, updated)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (job.id, job.company, job.title, job.location, job.url, job.apply_url, job.description, job.ref, job.lexical, now, now),
+            "INSERT OR IGNORE INTO jobs (id, company, title, location, url, apply_url, description, lexical, first_seen, updated)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (job.id, job.company, job.title, job.location, job.url, job.apply_url, job.description, job.lexical, now, now),
         )
         self._db.commit()
         return cursor.rowcount == 1
 
     @staticmethod
     def _job(row: sqlite3.Row) -> Job:
-        return Job(row["id"], row["company"], row["title"], row["location"], row["url"], row["apply_url"], row["description"], row["ref"] or "", row["lexical"])
+        return Job(row["id"], row["company"], row["title"], row["location"], row["url"], row["apply_url"], row["description"], row["lexical"])
 
     @classmethod
     def _stored(cls, row: sqlite3.Row) -> Stored:

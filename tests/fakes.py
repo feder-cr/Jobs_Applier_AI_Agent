@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -61,3 +62,16 @@ class ScriptedBrowser:
 
     def clicks(self) -> list[str]:
         return [arguments["selector"] for name, arguments in self.calls if name == "browser_click"]
+
+
+def publish(connection: Any, folder: Path, rows_out: int) -> str:
+    """Table t as the pipeline publishes it: a description file in key order whose range the manifest names, the index
+    beside it, the manifest. Returns the manifest's path."""
+    connection.execute("ALTER TABLE t ADD COLUMN IF NOT EXISTS country VARCHAR; ALTER TABLE t ADD COLUMN IF NOT EXISTS remote BOOLEAN")
+    connection.execute(f"COPY (SELECT * FROM t ORDER BY key) TO '{(folder / 'jobs_0.parquet').as_posix()}' (FORMAT parquet)")
+    connection.execute(f"COPY (SELECT * EXCLUDE (description) FROM t) TO '{(folder / 'index.parquet').as_posix()}' (FORMAT parquet)")
+    first, last = connection.execute("SELECT min(key), max(key) FROM t").fetchone()
+    manifest = {"schema": 2, "rows_out": rows_out, "built_at": "2026-11-04T00:00:00", "index": {"name": "index.parquet", "bytes": 1},
+                "files": [{"name": "jobs_0.parquet", "first_key": first, "last_key": last}]}
+    (folder / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return str(folder / "manifest.json")
