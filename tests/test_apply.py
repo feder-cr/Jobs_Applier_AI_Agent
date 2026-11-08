@@ -27,7 +27,7 @@ from aihawk.apply import (
     sign_in,
 )
 from aihawk.database import Job
-from aihawk.documents import score_from, score_job
+from aihawk.judge import score_from, score_job
 from fakes import ScriptedBrowser, ScriptedModel, tool_call
 
 JOB = Job("g:a:1", "Acme", "Engineer", "Rome", "https://u", "https://u/apply", "Build things")

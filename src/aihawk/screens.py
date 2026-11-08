@@ -14,7 +14,7 @@ from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Input, Static
 
-from aihawk.documents import QUESTIONS
+from aihawk.judge import QUESTIONS
 from aihawk.llm import money
 from aihawk.store import Sent, Stored, said, sent_word
 
