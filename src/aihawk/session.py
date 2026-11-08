@@ -40,6 +40,8 @@ class Session:
         self._client: AsyncOpenAI | None = None
         # Where descriptions are found by key, from the database the last search read.
         self.description_files: tuple[tuple[str, str, str], ...] = ()
+        # How many jobs the whole database holds, once a search has read it.
+        self.database_jobs = 0
 
     def close(self) -> None:
         self.store.close()
@@ -110,6 +112,7 @@ class Session:
             search, self.config.database, self.config.filters, self.config.max_age_days, index, lambda line: loop.call_soon_threadsafe(log, line)
         )
         self.description_files = description_files(manifest, self.config.database)
+        self.database_jobs = int(manifest.get("rows_out") or 0)
         new = sum(self.store.add(job) for job in jobs)
         return new
 

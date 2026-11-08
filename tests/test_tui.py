@@ -160,8 +160,8 @@ def test_a_resume_is_all_it_takes_to_get_the_best_jobs_first(home: Path, resume:
             assert companies(app) == ["Bestco", "Lowly", "Noplugin"]
             table = app.query_one(DataTable)
             assert table.get_row_at(0)[1] == "4.5"
-            # How many jobs, on the right of the heading, and nothing about the database in the log.
-            assert str(app.query_one("#count", Static).render()) == "Page 1 · 3 jobs"
+            # How many jobs the whole database holds, four, not the three this search found, on the right of the heading.
+            assert str(app.query_one("#count", Static).render()) == "Page 1 · 4 jobs"
             assert not any("database" in line.text for line in app.query_one(RichLog).lines)
 
     asyncio.run(run())
@@ -926,7 +926,7 @@ def test_the_judge_makes_one_page_ahead_and_the_arrows_turn_the_pages(home: Path
             await pilot.press("down")
             await settle(pilot, app)
             assert app.page == 1 and len(app.pages) == 3 and len(app.session.store.with_status("scored")) == 3
-            assert str(app.query_one("#count", Static).render()) == "Page 2 · 3 jobs"
+            assert str(app.query_one("#count", Static).render()) == "Page 2 · 4 jobs"
             await pilot.press("right", "down")
             await settle(pilot, app)
             assert app.page == 2 and "No more jobs for this search." in logged(app)

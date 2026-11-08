@@ -182,7 +182,9 @@ class AIHawk(App[None]):
         table.clear()
         for item in page:
             table.add_row(*self.row(item), key=item.job.id)
-        found = f"{len(items):,} job" + ("" if len(items) == 1 else "s") if items else ""
+        # The whole database's jobs, not the search's: what AIHawk looks through for the person.
+        total = self.session.database_jobs
+        found = f"{total:,} job" + ("" if total == 1 else "s") if total else ""
         self.query_one("#count", Static).update(" · ".join(part for part in (f"Page {self.page + 1}" if self.pages else "", found) if part))
         ids = [item.job.id for item in page]
         if current in ids:
