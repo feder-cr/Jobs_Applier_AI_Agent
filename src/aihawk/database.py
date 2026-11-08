@@ -436,14 +436,8 @@ def search(
         in_city = cities is not None and cities.search(row.location) is not None
         scored.append((_score(nodes, evidence, document, in_city, mean) * (1.0 if row.described else UNDESCRIBED), row))
 
-    # One job per title and company: its best posting, then its newest.
-    best_per_job: dict[tuple[str, str], tuple[float, _Posting]] = {}
-    for score, row in scored:
-        owner = (row.title.lower(), row.company.lower() or row.key)
-        kept = best_per_job.get(owner)
-        if kept is None or _rank(score, row) > _rank(*kept):
-            best_per_job[owner] = (score, row)
-    ranked = sorted(best_per_job.values(), key=lambda item: _rank(*item), reverse=True)[:limit]
+    # Every posting stands: the database already made one of a job carried by several sites.
+    ranked = sorted(scored, key=lambda item: _rank(*item), reverse=True)[:limit]
 
     best = max((score for score, _ in ranked), default=1.0) or 1.0
     # Some sources publish their names with HTML entities still in them.

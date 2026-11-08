@@ -62,6 +62,57 @@ COMMON = (
 KEY_SQL = Path(__file__).resolve().parents[1] / "src" / "aihawk" / "key.sql"
 KEY = "posting_key(url)"
 
+# One name for each vendor, whatever a source calls it.
+VENDOR_ALIASES = {
+    "ashbyhq": "ashby", "join_com": "join", "oracle_hcm": "oracle", "wttj": "welcometothejungle", "csod": "cornerstone",
+    "ultipro": "ukg", "beisen_legacy": "beisen",
+}  # fmt: skip
+# The vendor a link's host names, for the postings whose source does not say. The first that matches.
+VENDOR_HOSTS = (
+    ("myworkdayjobs.com", "workday"), ("myworkdaysite.com", "workday"), ("smartrecruiters.com", "smartrecruiters"),
+    ("greenhouse.io", "greenhouse"), ("lever.co", "lever"), ("ashbyhq.com", "ashby"), ("icims.com", "icims"),
+    ("paylocity.com", "paylocity"), ("adp.com", "adp"), ("oraclecloud.com", "oracle"), ("taleo.net", "taleo"),
+    ("successfactors", "successfactors"), ("sapsf.", "successfactors"), ("jobvite.com", "jobvite"), ("bamboohr.com", "bamboohr"),
+    ("applytojob.com", "jazzhr"), ("breezy.hr", "breezy"), ("recruitee.com", "recruitee"), ("teamtailor.com", "teamtailor"),
+    ("personio.", "personio"), ("workable.com", "workable"), ("pinpointhq.com", "pinpoint"), ("rippling.com", "rippling"),
+    ("ultipro.com", "ukg"), ("ukg.net", "ukg"), ("dayforcehcm.com", "dayforce"), ("paycomonline.", "paycom"),
+    ("csod.com", "cornerstone"), ("careerplug.com", "careerplug"), ("recruiterflow.com", "recruiterflow"),
+    ("zohorecruit.", "zoho"), ("jobs.gem.com", "gem"), ("applicantpro.com", "applicantpro"), ("isolvedhire.com", "isolved"),
+    ("eightfold.ai", "eightfold"), ("avature.net", "avature"), ("phenompeople.com", "phenom"), ("join.com", "join"),
+    ("hrmos.co", "hrmos"), ("gupy.io", "gupy"), ("softgarden.", "softgarden"), ("jobscore.com", "jobscore"),
+    ("freshteam.com", "freshteam"), ("manatal.com", "manatal"), ("keka.com", "keka"), ("darwinbox.", "darwinbox"),
+    ("recruiterbox.com", "recruiterbox"), ("betterteam.com", "betterteam"), ("linkedin.com", "linkedin"),
+    ("indeed.", "indeed"), ("glassdoor.", "glassdoor"), ("europa.eu", "eures"), ("arbeitsagentur.de", "bundesagentur"),
+    ("jobbank.gc.ca", "jobbankca"), ("jobicy.com", "jobicy"), ("welcometothejungle.com", "welcometothejungle"),
+)  # fmt: skip
+# Vendors that list other companies' postings rather than take the application: a copy on one is never the one kept when
+# the company's own form carries the same job.
+AGGREGATORS = (
+    "eures", "bundesagentur", "jobbankca", "linkedin", "indeed", "glassdoor", "jobicy", "arbeitnow", "weworkremotely",
+    "remoteok", "remotive", "himalayas", "workingnomads", "builtin", "themuse", "wellfound", "ycombinator", "getonbrd",
+    "cryptojobs", "fashionjobs", "jobsch", "programathor", "jobtech", "arbetsformedlingen", "manfred", "welcometothejungle",
+)  # fmt: skip
+LEGAL_FORMS = (
+    "inc", "llc", "ltd", "limited", "gmbh", "ag", "sa", "sas", "srl", "spa", "corp", "corporation", "co", "company", "plc",
+    "bv", "nv", "oy", "ab", "as", "pty", "pvt", "lp", "llp", "kg", "group", "holdings",
+)  # fmt: skip
+
+
+def _macros() -> str:
+    """The vendor a posting belongs to, and the print that knows one job under links of different sites."""
+    aliases = " ".join(f"WHEN '{name}' THEN '{to}'" for name, to in VENDOR_ALIASES.items())
+    hosts = " ".join(f"WHEN contains(regexp_extract(lower(url), '^https?://([^/]+)', 1), '{host}') THEN '{name}'" for host, name in VENDOR_HOSTS)
+    forms = "|".join(LEGAL_FORMS)
+    return f"""
+        CREATE OR REPLACE MACRO vendor(ats, url) AS coalesce(
+            CASE lower(nullif(trim(ats), '')) {aliases} ELSE lower(nullif(trim(ats), '')) END,
+            CASE {hosts} END);
+        CREATE OR REPLACE MACRO plain(text) AS trim(regexp_replace(regexp_replace(lower(coalesce(text, '')), '[^\\pL\\pN]+', ' ', 'g'), '\\s+', ' ', 'g'));
+        CREATE OR REPLACE MACRO employer(company) AS trim(regexp_replace(regexp_replace(plain(company), '\\b({forms})\\b', ' ', 'g'), '\\s+', ' ', 'g'));
+        CREATE OR REPLACE MACRO job_print(company, title, location) AS CASE WHEN employer(company) <> '' AND plain(title) <> ''
+            THEN employer(company) || '|' || plain(title) || '|' || plain(split_part(coalesce(location, ''), ',', 1)) END;
+    """
+
 
 def _text(value: str | None) -> str:
     return f"CAST({value} AS VARCHAR)" if value else "CAST(NULL AS VARCHAR)"
@@ -363,6 +414,7 @@ def connect(work: Path) -> duckdb.DuckDBPyConnection:
     # with the default limit used 12.4 GiB of 12.4 and stopped.
     connection.execute("SET memory_limit = '9GB'")
     connection.execute(KEY_SQL.read_text(encoding="utf-8"))
+    connection.execute(_macros())
     return connection
 
 
@@ -519,21 +571,43 @@ def merge(connection: duckdb.DuckDBPyConnection, work: Path) -> dict[str, int]:
             -- and then the row: left to DuckDB, a tie went a different way in each build, and a third of the postings
             -- came out changed in a delta though nothing about them had.
             arg_max(
-                struct_pack(filename := filename, row := file_row_number),
+                struct_pack(filename := filename, row := file_row_number, length := length, source := source, print := print,
+                    employer := vendor IS NOT NULL AND vendor NOT IN {AGGREGATORS!r}),
                 struct_pack(length := length, source := source, row := -file_row_number)
             ) AS winner
         FROM (
             SELECT {KEY} AS key, regexp_extract(filename, '([^/\\\\]+)\\.parquet$', 1) AS source, filename, file_row_number,
-                length(coalesce(description, '')) AS length
+                length(coalesce(description, '')) AS length, vendor(ats, url) AS vendor, job_print(company, title, location) AS print
             FROM {every_row}
             WHERE url LIKE 'http%' AND coalesce(title, '') <> ''
         ) GROUP BY key
+    """)
+    # One job under links of different sites, a company's form and a board's copy, has one print: the company, the title and
+    # the city. The company's own form is kept, so AIHawk can apply on it; then the longest description, then the key.
+    connection.execute("""
+        CREATE OR REPLACE TEMP TABLE twins AS
+        SELECT unnest(list_filter(keys, lambda k: k <> kept)) AS key, kept FROM (
+            SELECT list(key) AS keys,
+                arg_max(key, struct_pack(employer := winner.employer, length := winner.length, source := winner.source, key := key)) AS kept
+            FROM best WHERE winner.print IS NOT NULL GROUP BY winner.print HAVING count(*) > 1
+        )
+    """)
+    connection.execute("""
+        CREATE OR REPLACE TEMP TABLE best AS
+        SELECT best.key, best.copies + coalesce(merged.copies, 0) AS copies,
+            list_sort(list_distinct(list_concat(best.sources, coalesce(merged.sources, [])))) AS sources, best.winner
+        FROM best
+        LEFT JOIN (
+            SELECT twins.kept AS key, sum(other.copies) AS copies, flatten(list(other.sources)) AS sources
+            FROM twins JOIN best AS other ON other.key = twins.key GROUP BY twins.kept
+        ) AS merged ON merged.key = best.key
+        WHERE best.key NOT IN (SELECT key FROM twins)
     """)
     rows_in, rows_out_expected = connection.execute("SELECT sum(copies), count(*) FROM best").fetchone()
     out = work / "out"
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
-    columns = ", ".join(f"row.{column}" for column in COMMON)
+    columns = ", ".join("vendor(row.ats, row.url) AS ats" if column == "ats" else f"row.{column}" for column in COMMON)
     # The files are in key order, so a reader that asks for a posting by its key reads the one row group that can hold it,
     # whatever build it came from. Sorting ten million rows with their descriptions at once ran a runner out of memory,
     # so only the keys are sorted, into ranges of ROWS_PER_FILE; the rows go to their range's part in one pass; and each

@@ -224,7 +224,8 @@ def test_a_place_starts_the_location_or_follows_a_separator_a_dash_or_a_number_n
     assert {job.id for job in jobs} == set(kept)
 
 
-def test_the_own_city_comes_first_and_a_job_posted_once_per_place_is_one_job(tmp_path: Path) -> None:
+def test_the_own_city_comes_first_and_every_posting_stands_one_per_place(tmp_path: Path) -> None:
+    # The database makes one posting of a job carried by several sites; the same role in two cities is two jobs.
     connection = duckdb.connect()
     connection.execute("CREATE TABLE t (key VARCHAR, url VARCHAR, title VARCHAR, company VARCHAR, location VARCHAR, description VARCHAR, posted_at VARCHAR)")
     rows = [
@@ -238,7 +239,7 @@ def test_the_own_city_comes_first_and_a_job_posted_once_per_place_is_one_job(tmp
     path = publish(connection, tmp_path, 4)
     _, jobs = search(path, Filters(include=("Engineer",), locations=("Italy",), cities=("Milano",)), 60, tmp_path)
     assert jobs[0].id == "milan"
-    assert {job.id for job in jobs} == {"milan", "other", "no-name-1", "no-name-2"}
+    assert {job.id for job in jobs} == {"rome", "milan", "other", "no-name-1", "no-name-2"}
 
 
 def test_rarity_runs_from_a_floor_to_one() -> None:
