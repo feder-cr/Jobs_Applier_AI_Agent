@@ -1,75 +1,43 @@
-"""Publishes work/out as this run's release, and points the release `jobs-latest` at it.
+"""Publishes work/out to the Hugging Face dataset AIHawk reads, in one commit: the build's files, its delta and the
+manifest that names them, so a reader never sees a half-replaced database.
 
 A database much smaller than the one before it is refused: losing a big source must not silently empty everyone's search.
-The dated releases keep the files; `jobs-latest` holds only the manifest that names them, so a reader never sees a
-half-replaced database. The last KEEP dated releases stay, so a reader mid-search does not lose its files.
+The last KEEP builds stay, so a reader mid-search does not lose its files. Each build also publishes the delta of the
+index against the build before it: the postings added, the ones whose fields changed, and the keys gone. A reader that
+has the index applies them in order and never downloads the whole of it again; they are kept for ever, because a reader
+may come back after any time. After the commit the history is squashed: the files old commits hold would otherwise grow
+the dataset by three gigabytes a build.
 
-Each build also publishes the delta of the index against the build before it: the postings added, the ones whose fields
-changed, and the keys gone. A reader that has the index applies them in order and never downloads the whole of it again.
-They are kept for ever, a month to a release, because a reader may come back after any time.
+The database moved from GitHub's releases on 2026-11-08, when github.com answered 504 for its downloads for hours and its
+API allows sixty calls an hour with no account; Hugging Face allows three thousand every five minutes.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import re
-import subprocess
 import sys
-import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 import duckdb
 
-LATEST = "jobs-latest"
-DATED = re.compile(r"^jobs-\d{8}-\d{6}$")
+DATASET = "feder-cr/jobs"
+RESOLVE = f"https://huggingface.co/datasets/{DATASET}/resolve/main"
 # The columns a delta carries: the index's own, without the file and row that point into one build's files.
 INDEX_COLUMNS = ("url", "title", "company", "ats", "location", "country", "remote", "salary_min", "salary_max", "salary_currency", "posted_at", "described")
-KEEP = 6  # five-hourly builds: about 30 hours of releases, so a reader mid-search does not lose its files
+KEEP = 6  # five-hourly builds: about 30 hours of builds, so a reader mid-search does not lose its files
 MIN_SHARE_OF_PREVIOUS = 0.7
 
 
-def gh(*arguments: str) -> str:
-    done = subprocess.run(["gh", *arguments], check=False, capture_output=True, text=True)
-    if done.returncode:
-        raise GhError(f"gh {arguments[0]} {arguments[1]}: {done.stderr.strip()}")
-    return done.stdout
-
-
-class GhError(Exception):
-    """A gh command failed; its message says why."""
-
-
-def still_to_upload(local: dict[str, int], uploaded: dict[str, int]) -> list[str]:
-    """The files a release does not hold whole yet."""
-    return [name for name, size in local.items() if uploaded.get(name) != size]
-
-
-def publish_files(repo: str, tag: str, folder: Path, names: list[str], notes: str) -> None:
-    """The release of the day. One an earlier attempt left as a draft is finished, not uploaded again: these are gigabytes."""
-    local = {name: (folder / name).stat().st_size for name in names}
-    try:
-        listed = json.loads(gh("release", "view", tag, "--repo", repo, "--json", "assets"))
-    except GhError:
-        gh("release", "create", tag, *(str(folder / name) for name in names), "--repo", repo, "--title", f"Job database {tag}", "--notes", notes, "--latest=false")
-        return
-    uploaded = {asset["name"]: asset["size"] for asset in listed["assets"] if asset["state"] == "uploaded"}
-    missing = still_to_upload(local, uploaded)
-    if missing:
-        gh("release", "upload", tag, *(str(folder / name) for name in missing), "--clobber", "--repo", repo)
-    gh("release", "edit", tag, "--draft=false", "--latest=false", "--repo", repo)
-
-
-def previous_manifest(repo: str) -> dict | None:
+def previous_manifest() -> dict | None:
     """The manifest of the build now published, which this one follows; None for the first build of all."""
-    url = f"https://github.com/{repo}/releases/download/{LATEST}/manifest.json"
     try:
-        with urllib.request.urlopen(url, timeout=60) as response:
+        with urllib.request.urlopen(f"{RESOLVE}/manifest.json", timeout=60) as response:
             return json.load(response)
     except urllib.error.HTTPError as error:
-        if error.code == 404:
+        if error.code in (401, 404):  # Hugging Face answers 401 for a file a dataset does not have yet
             return None
         raise
 
@@ -77,11 +45,6 @@ def previous_manifest(repo: str) -> dict | None:
 def build_of(manifest: dict) -> str:
     """A build's tag: written in the manifest since schema 2, the end of its release's address before."""
     return manifest.get("build") or manifest["base_url"].rstrip("/").rsplit("/", 1)[-1]
-
-
-def deltas_release(tag: str) -> str:
-    """The release that keeps the deltas of the month a build belongs to: jobs-20261107-103405 is in jobs-deltas-202611."""
-    return f"jobs-deltas-{tag[5:11]}"
 
 
 def write_delta(previous_index: str, index: Path, out: Path) -> tuple[int, int]:
@@ -119,19 +82,6 @@ def write_delta(previous_index: str, index: Path, out: Path) -> tuple[int, int]:
         connection.close()
 
 
-def publish_delta(repo: str, tag: str, path: Path) -> str:
-    """The delta into its month's release, made the first time a month needs it; where a reader downloads it."""
-    release = deltas_release(tag)
-    try:
-        gh("release", "view", release, "--repo", repo)
-        gh("release", "upload", release, str(path), "--clobber", "--repo", repo)
-    except GhError:
-        gh("release", "create", release, str(path), "--repo", repo, "--title", f"Job index deltas {tag[5:9]}-{tag[9:11]}",
-           "--notes", "The changes to the job index, one file per build. Kept for ever: an AIHawk applies the ones it has not seen.",
-           "--latest=false")
-    return f"https://github.com/{repo}/releases/download/{release}/{path.name}"
-
-
 def check(rows: int, previous: int | None) -> None:
     if rows == 0:
         sys.exit("the database is empty: nothing published")
@@ -139,47 +89,55 @@ def check(rows: int, previous: int | None) -> None:
         sys.exit(f"{rows} postings against {previous} in the previous build: nothing published. See the manifest's failed sources.")
 
 
+def commit_plan(out: Path, manifest: dict, delta: Path | None, built: list[str]) -> tuple[list[tuple[str, Path]], list[str]]:
+    """What the commit adds, as (path in the dataset, file here), and the build folders it removes: all but the last KEEP."""
+    tag = manifest["build"]
+    names = [manifest["index"]["name"], *(item["name"] for item in manifest["files"])]
+    adds = [(f"builds/{tag}/{name}", out / name) for name in names]
+    if delta is not None:
+        adds.append((f"deltas/{delta.name}", delta))
+    adds.append(("manifest.json", out / "manifest.json"))
+    kept = sorted({*built, tag})[-KEEP:]
+    return adds, [f"builds/{old}" for old in sorted(built) if old not in kept]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--repo", required=True)
     parser.add_argument("--allow-shrink", action="store_true", help="Publish a database much smaller than the previous build's on purpose.")
     arguments = parser.parse_args()
+    # Imported here: the tests of the rest of this file do not need it, and the app never does.
+    from huggingface_hub import CommitOperationAdd, CommitOperationDelete, HfApi
 
+    api = HfApi()  # the token is HF_TOKEN's
+    api.create_repo(DATASET, repo_type="dataset", exist_ok=True)
     manifest_path: Path = arguments.out / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    previous = previous_manifest(arguments.repo)
+    previous = previous_manifest()
     check(manifest["rows_out"], None if arguments.allow_shrink or previous is None else previous["rows_out"])
 
     tag = "jobs-" + manifest["built_at"][:19].replace(":", "").replace("-", "").replace("T", "-")
     manifest["build"] = tag
+    manifest["base_url"] = f"{RESOLVE}/builds/{tag}"
     manifest["deltas"] = []
+    delta = None
     if previous is not None:
         delta = arguments.out / f"delta-{tag}.parquet"
         adds, drops = write_delta(f"{previous['base_url']}/{previous['index']['name']}", arguments.out / manifest["index"]["name"], delta)
-        url = publish_delta(arguments.repo, tag, delta)
-        manifest["deltas"] = [*previous.get("deltas", []), {"build": tag, "after": build_of(previous), "url": url, "adds": adds, "drops": drops}]
+        manifest["deltas"] = [*previous.get("deltas", []), {"build": tag, "after": build_of(previous), "url": f"{RESOLVE}/deltas/{delta.name}", "adds": adds, "drops": drops}]
         print(f"delta against {build_of(previous)}: {adds} added or changed, {drops} gone")
-    names = [manifest["index"]["name"], *(item["name"] for item in manifest["files"])]
-    notes = f"{manifest['rows_out']} job postings. See {LATEST} for the current database. Sources and licences: https://github.com/{arguments.repo}/blob/main/docs/data-sources.md"
-    publish_files(arguments.repo, tag, arguments.out, names, notes)
+    manifest_path.write_text(json.dumps(manifest, indent=1), encoding="utf-8")
 
-    manifest["base_url"] = f"https://github.com/{arguments.repo}/releases/download/{tag}"
-    with tempfile.TemporaryDirectory() as folder:
-        latest = Path(folder) / "manifest.json"
-        latest.write_text(json.dumps(manifest, indent=1), encoding="utf-8")
-        try:
-            gh("release", "view", LATEST, "--repo", arguments.repo)
-            gh("release", "upload", LATEST, str(latest), "--clobber", "--repo", arguments.repo)
-        except GhError:
-            gh("release", "create", LATEST, str(latest), "--repo", arguments.repo, "--title", "Job database: current", "--notes", "The manifest of the current job database.", "--latest=false")
-
-    tags = gh("release", "list", "--repo", arguments.repo, "--limit", "200", "--json", "tagName", "--jq", ".[].tagName").split()
-    # The deltas' monthly releases are kept for ever: only the dated builds are cleared.
-    dated = sorted(name for name in tags if DATED.match(name))
-    for old in dated[:-KEEP]:
-        gh("release", "delete", old, "--repo", arguments.repo, "--yes", "--cleanup-tag")
-    print(f"published {tag}: {manifest['rows_out']} postings in {len(names)} files")
+    try:
+        built = [item.path.removeprefix("builds/") for item in api.list_repo_tree(DATASET, path_in_repo="builds", repo_type="dataset")]
+    except Exception:  # noqa: BLE001  The first build: there is no builds folder yet.
+        built = []
+    adds, removed = commit_plan(arguments.out, manifest, delta, built)
+    operations = [CommitOperationAdd(path_in_repo=path, path_or_fileobj=str(local)) for path, local in adds]
+    operations += [CommitOperationDelete(path_in_repo=f"{folder}/", is_folder=True) for folder in removed]
+    api.create_commit(DATASET, repo_type="dataset", operations=operations, commit_message=f"{tag}: {manifest['rows_out']} postings")
+    api.super_squash_history(DATASET, repo_type="dataset", commit_message=f"The job database as of {tag}")
+    print(f"published {tag}: {manifest['rows_out']} postings, {len(adds)} files; removed {len(removed)} old builds")
 
 
 if __name__ == "__main__":

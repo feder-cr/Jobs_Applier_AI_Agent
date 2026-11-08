@@ -136,10 +136,18 @@ def test_a_healthy_database_is_published(rows: int, previous: int | None) -> Non
     publish.check(rows, previous)
 
 
-def test_a_release_interrupted_uploads_only_what_it_does_not_hold_whole() -> None:
-    local = {"a": 10, "b": 20, "c": 30}
-    assert publish.still_to_upload(local, {"a": 10, "b": 5}) == ["b", "c"]
-    assert publish.still_to_upload(local, local) == []
+def test_one_commit_adds_the_build_its_delta_and_the_manifest_and_removes_all_but_the_last_builds(tmp_path: Path) -> None:
+    manifest = {"build": "jobs-20261108-100000", "index": {"name": "index.parquet"}, "files": [{"name": "jobs_0.parquet"}, {"name": "jobs_1.parquet"}]}
+    built = [f"jobs-2026110{day}-000000" for day in range(1, 9)]
+    adds, removed = publish.commit_plan(tmp_path, manifest, tmp_path / "delta-jobs-20261108-100000.parquet", built)
+    assert [path for path, _ in adds] == [
+        "builds/jobs-20261108-100000/index.parquet", "builds/jobs-20261108-100000/jobs_0.parquet", "builds/jobs-20261108-100000/jobs_1.parquet",
+        "deltas/delta-jobs-20261108-100000.parquet", "manifest.json",
+    ]
+    assert adds[-1][0] == "manifest.json", "the manifest names files the same commit adds"
+    assert removed == [f"builds/jobs-2026110{day}-000000" for day in range(1, 4)]
+    adds, removed = publish.commit_plan(tmp_path, manifest, None, [])
+    assert "deltas/" not in " ".join(path for path, _ in adds) and removed == []
 
 
 def test_every_source_names_its_home_and_licence() -> None:
@@ -190,9 +198,6 @@ def test_a_column_the_previous_index_lacks_changes_every_posting_once(tmp_path: 
     assert (adds, drops) == (2, 0)
 
 
-def test_deltas_go_to_their_month_and_only_the_dated_builds_are_ever_cleared() -> None:
-    assert publish.deltas_release("jobs-20261107-103405") == "jobs-deltas-202611"
+def test_a_build_is_named_by_its_manifest_or_by_the_end_of_its_address() -> None:
     assert publish.build_of({"base_url": "https://github.com/o/r/releases/download/jobs-20261107-103405"}) == "jobs-20261107-103405"
     assert publish.build_of({"build": "jobs-20261107-153405", "base_url": "x"}) == "jobs-20261107-153405"
-    tags = ["jobs-latest", "jobs-deltas-202611", "golden-abc", "jobs-20261107-103405"]
-    assert [tag for tag in tags if publish.DATED.match(tag)] == ["jobs-20261107-103405"]

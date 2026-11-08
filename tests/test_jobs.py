@@ -472,7 +472,7 @@ def test_a_job_seen_again_keeps_its_score_and_status(tmp_path: Path) -> None:
 
 def test_a_new_folder_defaults_to_the_published_database(tmp_path: Path) -> None:
     config = load_config(tmp_path)
-    assert config.model == "deepseek/deepseek-v4.1-flash" and config.database.endswith("/jobs-latest/manifest.json")
+    assert config.model == "deepseek/deepseek-v4.1-flash" and config.database == "https://huggingface.co/datasets/feder-cr/jobs/resolve/main/manifest.json"
 
 
 

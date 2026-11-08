@@ -1,6 +1,6 @@
 name: job database
 
-# Every five hours: read the public job databases, merge them and publish the result as a release, which AIHawk reads when it searches.
+# Every five hours: read the public job databases, merge them and publish the result to the Hugging Face dataset feder-cr/jobs, which AIHawk reads when it searches.
 # Five hours because the biggest source, jobhive, publishes around 15:00 UTC and the small new-grad lists every hour; a daily build read them up to a day late.
 # Minute 23 because GitHub delays schedules at the top of the hour.
 # Users never scrape anything.
@@ -29,8 +29,8 @@ jobs:
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           df -h /
-      - run: pip install duckdb
+      - run: pip install duckdb huggingface_hub
       - run: python pipeline/build.py --out work
-      - run: python pipeline/publish.py --out work/out --repo "$GITHUB_REPOSITORY"
+      - run: python pipeline/publish.py --out work/out
         env:
-          GH_TOKEN: ${{ github.token }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
