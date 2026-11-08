@@ -1,6 +1,6 @@
 # Data sources
 
-AIHawk's job database merges 24 public sources. `pipeline/build.py` reads each one every five hours, and the [feder-cr/jobs](https://huggingface.co/datasets/feder-cr/jobs) dataset on Hugging Face keeps the postings that survive the merge. Each posting names the sources that carried it.
+AIHawk's job database merges 39 public sources. `pipeline/build.py` reads each one every five hours, and the [feder-cr/jobs](https://huggingface.co/datasets/feder-cr/jobs) dataset on Hugging Face keeps the postings that survive the merge. Each posting names the sources that carried it.
 
 The licence column says what the source's own page or dataset card states. "Not stated" means no licence was found on that page or in the repository's files. Nothing here is a legal opinion. Postings belong to their employers, and the link in each row goes to the page this table relies on. AIHawk's MIT licence covers its code, not this data.
 
@@ -32,6 +32,21 @@ The repository does not state how many postings each source gives. The total in 
 | `applyguy` | 2027 new-grad jobs | `ApplyGuy/2027-New-Grad-Jobs`, `data/new-grad-jobs.json` | Not stated. No LICENSE file was found. | [2027-New-Grad-Jobs](https://github.com/ApplyGuy/2027-New-Grad-Jobs) |
 | `fde-jobs` | Forward-deployed engineer job list, in CSV | `stephanelx88/forward-deployed-engineer-jobs`, `data/fde-jobs.csv` | CC BY 4.0 | [forward-deployed-engineer-jobs](https://github.com/stephanelx88/forward-deployed-engineer-jobs) |
 | `remote-india` | Remote jobs open to India, in one JSON file | `raghavendra81422-boop/remote-jobs-open-to-india`, `data.json` | MIT (the repository's `LICENSE` file) | [LICENSE](https://raw.githubusercontent.com/raghavendra81422-boop/remote-jobs-open-to-india/HEAD/LICENSE) |
+| `open-apply` | Active postings from company job boards (Ashby, Greenhouse, Lever, SmartRecruiters, Workday and others), one folder a day | `edwarddgao/open-apply-jobs`, the newest `data/date=...` folder | MIT | [open-apply-jobs](https://huggingface.co/datasets/edwarddgao/open-apply-jobs) |
+| `shifat` | Postings from about 130 national job boards, Indeed's included, with clean descriptions | `Shifat2110724169/job-market-intel-corpus`, `shards/` | CC-BY-4.0 | [job-market-intel-corpus](https://huggingface.co/datasets/Shifat2110724169/job-market-intel-corpus) |
+| `dtunkelang-paylocity` | Paylocity postings with descriptions, from a pipeline's working files | `dtunkelang/jobs-demo`, `pipeline-spill/**/paylocity-*.parquet` | CC-BY-4.0 | [jobs-demo](https://huggingface.co/datasets/dtunkelang/jobs-demo) |
+| `dtunkelang-adp` | ADP postings, from the same files | `dtunkelang/jobs-demo`, `pipeline-spill/**/adp-*.parquet` | CC-BY-4.0 | [jobs-demo](https://huggingface.co/datasets/dtunkelang/jobs-demo) |
+| `nexus` | Titles and links, no descriptions | `Yash514311/nexus-jobs`, `jobs.zip` | MIT in the tags; no dataset card | [nexus-jobs](https://huggingface.co/datasets/Yash514311/nexus-jobs) |
+| `weio` | A daily index of postings from company career sites | `weio-ops/career-jobs-index`, `jobs-index.jsonl.gz` | "other" on the card | [career-jobs-index](https://huggingface.co/datasets/weio-ops/career-jobs-index) |
+| `veritahire` | A monthly sample of verified postings | `VeritaHire/verified-jobs-feed-open-sample` | CC-BY-NC-4.0: non-commercial use | [verified-jobs-feed-open-sample](https://huggingface.co/datasets/VeritaHire/verified-jobs-feed-open-sample) |
+| `thejobsapi` | A dated sample of employer career-site postings, US and Canada | `thejobsapi/employer-career-site-jobs-us-canada-2026-11`, `jobs.jsonl` | CC-BY-4.0 | [employer-career-site-jobs](https://huggingface.co/datasets/thejobsapi/employer-career-site-jobs-us-canada-2026-11) |
+| `cleanfeeds` | Open roles at 26 tech companies, one file a day | `cleanfeeds/tech-jobs-daily`, the newest `data/jobs-*.csv` | CC-BY-4.0 | [tech-jobs-daily](https://huggingface.co/datasets/cleanfeeds/tech-jobs-daily) |
+| `jobicy` | Remote postings from Jobicy, one file a day; the last 14 days are read | `jobicy/remote-jobs`, `data/daily/*.jsonl` | Jobicy's own terms; redistribution allowed | [remote-jobs](https://huggingface.co/datasets/jobicy/remote-jobs) |
+| `mauritius` | IT postings in Mauritius | `goated69/mauritius-it-jobs`, `jobs.csv` | CC-BY-4.0 | [mauritius-it-jobs](https://huggingface.co/datasets/goated69/mauritius-it-jobs) |
+| `bangladeshi` | Postings in Bangladesh, extracted by a model | `swadhinbiswas/bangladeshi-jobs`, `parquet/fact_job.parquet` | CC-BY-4.0 | [bangladeshi-jobs](https://huggingface.co/datasets/swadhinbiswas/bangladeshi-jobs) |
+| `pennydata` | A snapshot of Greenhouse postings | `pennydata/greenhouse-jobs-snapshot-2026-10`, the newest `snapshot-*.csv` | CC0-1.0 | [greenhouse-jobs-snapshot](https://huggingface.co/datasets/pennydata/greenhouse-jobs-snapshot-2026-10) |
+| `linkedin-ryang2` | Data science and ML postings scraped from LinkedIn; the last two days are read | `ryang2/linkedin-job-scrape`, `data/*.parquet` | OpenRAIL-M: research use, no redistribution | [linkedin-job-scrape](https://huggingface.co/datasets/ryang2/linkedin-job-scrape) |
+| `linkedin-gsc` | US entry-level software postings from LinkedIn | `GlobalSoftwareCompanies/us-entry-level-software-job-listings`, `jobs.csv` | CC-BY-4.0 | [us-entry-level-software-job-listings](https://huggingface.co/datasets/GlobalSoftwareCompanies/us-entry-level-software-job-listings) |
 
 ## Credit
 
