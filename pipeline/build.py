@@ -3,11 +3,11 @@
     python pipeline/build.py --out work                 # everything
     python pipeline/build.py --out work --only riley    # only these sources
 
-Scheduled every five hours in .github/workflows/jobs-database.yml, which publishes work/out as a release. Each source is read into
+Scheduled every five hours in .github/workflows/jobs-database.yml, which publishes work/out to the Hugging Face dataset feder-cr/jobs. Each source is read into
 work/sources/<name>.parquet in the columns of COMMON. A source that fails is left out of that build's database and named in
 the manifest; publish.py refuses a database that lost too much of itself. Postings are the same posting when their links
 are the same after `KEY`, and of those the row with the longest description is kept, the other rows adding their source's
-name. The output is cut in files under GitHub's limit of 2 GiB per release file, with index.parquet beside them: every posting without its
+name. The output is cut in files of ROWS_PER_FILE postings, with index.parquet beside them: every posting without its
 description, and where to find that description. A search reads the index; only the jobs being judged read descriptions.
 """
 
@@ -387,7 +387,7 @@ def main() -> None:
     counts = merge(connection, work)
     out = work / "out"
     manifest = {
-        # 2: the description files are in key order and say their first and last key, and the release carries a
+        # 2: the description files are in key order and say their first and last key, and the dataset carries a
         # delta of the index for each build. Everything schema 1 had is still here, for an AIHawk not yet updated.
         "schema": 2,
         "built_at": datetime.now(UTC).isoformat(timespec="seconds"),
