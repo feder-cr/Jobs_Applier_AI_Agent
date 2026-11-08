@@ -109,8 +109,11 @@ def _macros() -> str:
             CASE {hosts} END);
         CREATE OR REPLACE MACRO plain(text) AS trim(regexp_replace(regexp_replace(lower(coalesce(text, '')), '[^\\pL\\pN]+', ' ', 'g'), '\\s+', ' ', 'g'));
         CREATE OR REPLACE MACRO employer(company) AS trim(regexp_replace(regexp_replace(plain(company), '\\b({forms})\\b', ' ', 'g'), '\\s+', ' ', 'g'));
+        CREATE OR REPLACE MACRO city(location) AS plain(split_part(coalesce(location, ''), ',', 1));
+        -- No city, no print: one role with no place given would otherwise be one job across a whole country.
         CREATE OR REPLACE MACRO job_print(company, title, location) AS CASE WHEN employer(company) <> '' AND plain(title) <> ''
-            THEN employer(company) || '|' || plain(title) || '|' || plain(split_part(coalesce(location, ''), ',', 1)) END;
+            AND city(location) NOT IN ('', 'not specified', 'n a', 'na', 'unknown', 'various', 'multiple locations')
+            THEN employer(company) || '|' || plain(title) || '|' || city(location) END;
     """
 
 
@@ -572,25 +575,32 @@ def merge(connection: duckdb.DuckDBPyConnection, work: Path) -> dict[str, int]:
             -- came out changed in a delta though nothing about them had.
             arg_max(
                 struct_pack(filename := filename, row := file_row_number, length := length, source := source, print := print,
-                    employer := vendor IS NOT NULL AND vendor NOT IN {AGGREGATORS!r}),
+                    employer := vendor IS NOT NULL AND vendor NOT IN {AGGREGATORS!r}, host := host),
                 struct_pack(length := length, source := source, row := -file_row_number)
             ) AS winner
         FROM (
             SELECT {KEY} AS key, regexp_extract(filename, '([^/\\\\]+)\\.parquet$', 1) AS source, filename, file_row_number,
-                length(coalesce(description, '')) AS length, vendor(ats, url) AS vendor, job_print(company, title, location) AS print
+                length(coalesce(description, '')) AS length, vendor(ats, url) AS vendor, job_print(company, title, location) AS print,
+                regexp_extract(posting_link(url), '^[^/]+') AS host
             FROM {every_row}
             WHERE url LIKE 'http%' AND coalesce(title, '') <> ''
         ) GROUP BY key
     """)
     # One job under links of different sites, a company's form and a board's copy, has one print: the company, the title and
-    # the city. The company's own form is kept, so AIHawk can apply on it; then the longest description, then the key.
+    # the city. The best of a print is kept, on a company's own form if there is one, then the longest description, then
+    # the key; a copy on another site that is not a company's form is merged into it. Postings on the kept one's own site
+    # stay: they are other openings (Accenture posts hundreds of one role in one city), and so do other companies' forms.
+    connection.execute("""
+        CREATE OR REPLACE TEMP TABLE ranked AS
+        SELECT key, winner.print AS print, winner.host AS host, winner.employer AS employer,
+            row_number() OVER (PARTITION BY winner.print ORDER BY winner.employer DESC, winner.length DESC, winner.source, key) AS place
+        FROM best WHERE winner.print IS NOT NULL
+    """)
     connection.execute("""
         CREATE OR REPLACE TEMP TABLE twins AS
-        SELECT unnest(list_filter(keys, lambda k: k <> kept)) AS key, kept FROM (
-            SELECT list(key) AS keys,
-                arg_max(key, struct_pack(employer := winner.employer, length := winner.length, source := winner.source, key := key)) AS kept
-            FROM best WHERE winner.print IS NOT NULL GROUP BY winner.print HAVING count(*) > 1
-        )
+        SELECT copy.key, first.key AS kept
+        FROM ranked AS copy JOIN ranked AS first ON first.print = copy.print AND first.place = 1
+        WHERE copy.place > 1 AND copy.host <> first.host AND NOT copy.employer
     """)
     merged_away, lost = connection.execute(f"""
         SELECT count(*), count(*) FILTER (WHERE kept.winner.length < {DESCRIBED} AND twin.winner.length >= {DESCRIBED})

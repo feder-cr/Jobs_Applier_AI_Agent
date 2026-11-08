@@ -120,6 +120,25 @@ def test_one_job_on_a_companys_form_and_on_a_board_is_one_posting_kept_on_the_fo
     assert sorted(kept[3]) == ["board", "company"], "the board's copy is named among the sources"
 
 
+def test_one_role_posted_twice_on_one_site_is_two_openings(tmp_path: Path) -> None:
+    write_full_source(tmp_path, "s", [
+        ("https://boards.greenhouse.io/acme/jobs/1", "Engineer", "Acme", "Rome", None, None),
+        ("https://boards.greenhouse.io/acme/jobs/2", "Engineer", "Acme", "Rome", None, None),
+        ("https://www.linkedin.com/jobs/view/3", "Engineer", "Acme", "Rome", None, None),
+    ])
+    counts, _ = merged(tmp_path)
+    assert counts["rows_out"] == 2, "both Greenhouse openings stay; LinkedIn's copy goes into one of them"
+
+
+def test_a_role_with_no_city_is_never_merged_across_a_country(tmp_path: Path) -> None:
+    write_full_source(tmp_path, "s", [
+        ("https://acme.example/jobs/1", "Sales Associate", "Acme", "", "workday", None),
+        ("https://www.linkedin.com/jobs/view/2", "Sales Associate", "Acme", "Not specified", None, None),
+    ])
+    counts, _ = merged(tmp_path)
+    assert counts["rows_out"] == 2
+
+
 def test_a_posting_with_no_company_is_never_merged_by_its_title(tmp_path: Path) -> None:
     write_full_source(tmp_path, "s", [
         ("https://a.example/1", "Engineer", None, "Rome", None, None),
