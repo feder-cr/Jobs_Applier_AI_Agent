@@ -10,6 +10,7 @@ from rich.text import Text
 from textual import events, on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.containers import Horizontal
 from textual.widgets import DataTable, Footer, Static
 
 from aihawk.apply import MAILBOXES, Outcome, mail_provider
@@ -39,9 +40,11 @@ class AIHawk(App[None]):
     # The footer of 80 columns has room for the keys only; with the palette's key, it hid Quit.
     ENABLE_COMMAND_PALETTE = False
     CSS = """
-    #heading { height: 1; padding: 0 1; background: $primary; color: $text; text-style: bold; }
+    #top { height: 1; background: $primary; color: $text; }
+    #heading { width: 1fr; padding: 0 1; text-style: bold; }
+    #count { width: auto; padding: 0 1; }
     #jobs { height: 1fr; }
-    #log { height: 4; border-top: solid $primary; padding: 0 1; scrollbar-size-vertical: 1; }
+    #log { height: 3; border-top: solid $primary; padding: 0 1; scrollbar-size-vertical: 0; }
     ModalScreen { align: center middle; background: $background 60%; }
     #dialog { width: 80%; max-width: 100; height: auto; max-height: 85%; padding: 1 2; background: $surface; border: thick $primary; }
     #wide { width: 95%; height: auto; max-height: 85%; padding: 1 2; background: $surface; border: thick $primary; }
@@ -78,7 +81,11 @@ class AIHawk(App[None]):
         self.with_location = True
 
     def compose(self) -> ComposeResult:
-        yield Static("AIHawk", id="heading", markup=False)
+        # What is being looked for, and on the right, out of the way, how many jobs the list holds: nothing else about
+        # the search is said, the person did not ask how big the database is.
+        with Horizontal(id="top"):
+            yield Static("AIHawk", id="heading", markup=False)
+            yield Static("", id="count", markup=False)
         yield Rows(id="jobs", cursor_type="row", zebra_stripes=True)
         # min_width=1: RichLog wraps at 78 columns by default, under its own scrollbar, so the last words were hidden.
         yield Said(id="log", wrap=True, min_width=1, markup=False)
@@ -160,6 +167,7 @@ class AIHawk(App[None]):
         table.clear()
         for item in ordered:
             table.add_row(*self.row(item), key=item.job.id)
+        self.query_one("#count", Static).update(f"{len(ordered):,} job" + ("" if len(ordered) == 1 else "s") if ordered else "")
         if held and current in by_id:
             table.move_cursor(row=self.shown.index(current))
 
@@ -203,7 +211,6 @@ class AIHawk(App[None]):
                 self.say(f"Reading {path.name}.")
                 await session.load_resume(path)
                 self.show_heading()
-                self.say(f"Looking for {session.config.filters.titles()} in {', '.join(session.config.filters.locations[:3])}.")
             if not session.mail()[1]:
                 await self.set_up_mail()
             await session.find(self.say)

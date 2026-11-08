@@ -160,6 +160,9 @@ def test_a_resume_is_all_it_takes_to_get_the_best_jobs_first(home: Path, resume:
             assert companies(app) == ["Bestco", "Lowly", "Noplugin"]
             table = app.query_one(DataTable)
             assert table.get_row_at(0)[1] == "4.5"
+            # How many jobs, on the right of the heading, and nothing about the database in the log.
+            assert str(app.query_one("#count", Static).render()) == "3 jobs"
+            assert not any("database" in line.text for line in app.query_one(RichLog).lines)
 
     asyncio.run(run())
     config = load_config(home)
