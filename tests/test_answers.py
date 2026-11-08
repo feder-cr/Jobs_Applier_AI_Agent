@@ -6,7 +6,7 @@ import string
 from pathlib import Path
 
 from aihawk.config import load_config
-from aihawk.profile import ACCOUNT_PASSWORD, PASSWORD_SYMBOLS, add_answers, ensure_account_password, import_answers_file, new_password, read_answers
+from aihawk.profile import ACCOUNT_PASSWORD, PASSWORD_SYMBOLS, ensure_account_password, import_answers_file, new_password
 from aihawk.store import Store
 
 
@@ -34,9 +34,9 @@ def test_the_old_answers_file_is_brought_in_once_and_renamed(tmp_path: Path) -> 
     assert store.answers() == {"location": "Rome", "email": "ada@example.com"}
     assert not (home / "answers.yaml").exists() and (home / "answers.yaml.imported").is_file()
     assert import_answers_file(config, store) == 0
+    store.add_answers({"phone": "+39 02"}, source="person")
+    assert store.answers() == {"location": "Rome", "email": "ada@example.com", "phone": "+39 02"}
     store.close()
-    add_answers(config, {"phone": "+39 02"})
-    assert read_answers(config) == {"location": "Rome", "email": "ada@example.com", "phone": "+39 02"}
 
 
 def test_the_account_password_is_made_once_and_has_every_class_of_character(tmp_path: Path) -> None:

@@ -68,7 +68,7 @@ class Session:
         return not self.config.cv.is_file() or not self.config.filters.include
 
     async def load_resume(self, path: Path) -> None:
-        await install_resume(self.client, self.config, path)
+        await install_resume(self.client, self.config, path, self.store)
         self.config = load_config(self.workspace)
 
     def change_setting(self, name: str, value: str) -> None:
