@@ -1,6 +1,6 @@
 # Data sources
 
-AIHawk's job database merges 39 public sources. `pipeline/build.py` reads each one every five hours, and the [feder-cr/jobs](https://huggingface.co/datasets/feder-cr/jobs) dataset on Hugging Face keeps the postings that survive the merge. Each posting names the sources that carried it.
+AIHawk's job database merges 37 public sources. No posting with a LinkedIn link is kept, whatever source carries it, and a board's posting whose page sends the applicant on to a company's own form gives way to that form. `pipeline/build.py` reads each one every five hours, and the [feder-cr/jobs](https://huggingface.co/datasets/feder-cr/jobs) dataset on Hugging Face keeps the postings that survive the merge. Each posting names the sources that carried it.
 
 The licence column says what the source's own page or dataset card states. "Not stated" means no licence was found on that page or in the repository's files. Nothing here is a legal opinion. Postings belong to their employers, and the link in each row goes to the page this table relies on. AIHawk's MIT licence covers its code, not this data.
 
@@ -45,8 +45,6 @@ The repository does not state how many postings each source gives. The total in 
 | `mauritius` | IT postings in Mauritius | `goated69/mauritius-it-jobs`, `jobs.csv` | CC-BY-4.0 | [mauritius-it-jobs](https://huggingface.co/datasets/goated69/mauritius-it-jobs) |
 | `bangladeshi` | Postings in Bangladesh, extracted by a model | `swadhinbiswas/bangladeshi-jobs`, `parquet/fact_job.parquet` | CC-BY-4.0 | [bangladeshi-jobs](https://huggingface.co/datasets/swadhinbiswas/bangladeshi-jobs) |
 | `pennydata` | A snapshot of Greenhouse postings | `pennydata/greenhouse-jobs-snapshot-2026-10`, the newest `snapshot-*.csv` | CC0-1.0 | [greenhouse-jobs-snapshot](https://huggingface.co/datasets/pennydata/greenhouse-jobs-snapshot-2026-10) |
-| `linkedin-ryang2` | Data science and ML postings scraped from LinkedIn; the last two days are read | `ryang2/linkedin-job-scrape`, `data/*.parquet` | OpenRAIL-M: research use, no redistribution | [linkedin-job-scrape](https://huggingface.co/datasets/ryang2/linkedin-job-scrape) |
-| `linkedin-gsc` | US entry-level software postings from LinkedIn | `GlobalSoftwareCompanies/us-entry-level-software-job-listings`, `jobs.csv` | CC-BY-4.0 | [us-entry-level-software-job-listings](https://huggingface.co/datasets/GlobalSoftwareCompanies/us-entry-level-software-job-listings) |
 
 ## Credit
 
