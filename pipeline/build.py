@@ -592,6 +592,11 @@ def merge(connection: duckdb.DuckDBPyConnection, work: Path) -> dict[str, int]:
             FROM best WHERE winner.print IS NOT NULL GROUP BY winner.print HAVING count(*) > 1
         )
     """)
+    merged_away, lost = connection.execute(f"""
+        SELECT count(*), count(*) FILTER (WHERE kept.winner.length < {DESCRIBED} AND twin.winner.length >= {DESCRIBED})
+        FROM twins JOIN best AS twin ON twin.key = twins.key JOIN best AS kept ON kept.key = twins.kept
+    """).fetchone()
+    print(f"one job under several sites: {merged_away} postings merged into another; {lost} of them described where the one kept is not", flush=True)
     connection.execute("""
         CREATE OR REPLACE TEMP TABLE best AS
         SELECT best.key, best.copies + coalesce(merged.copies, 0) AS copies,
