@@ -13,6 +13,7 @@ from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from importlib import resources
 from itertools import pairwise
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -52,6 +53,18 @@ class Job:
     description: str
     # How well the title and the place fit the search, from 0 to 1 against the best one found.
     lexical: float = 0.0
+
+
+def posting_keys(urls: list[str]) -> list[str]:
+    """The key each link is known by, as the job database computes it: one definition, in key.sql, for both."""
+    if not urls:
+        return []
+    connection = duckdb.connect()
+    try:
+        connection.execute(resources.files("aihawk").joinpath("key.sql").read_text(encoding="utf-8"))
+        return [row[0] for row in connection.execute("SELECT posting_key(url) FROM unnest(?) AS t(url)", [urls]).fetchall()]
+    finally:
+        connection.close()
 
 
 def description_files(manifest: dict[str, Any], location: str) -> tuple[tuple[str, str, str], ...]:

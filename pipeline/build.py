@@ -6,7 +6,7 @@
 Scheduled every five hours in .github/workflows/jobs-database.yml, which publishes work/out to the Hugging Face dataset feder-cr/jobs. Each source is read into
 work/sources/<name>.parquet in the columns of COMMON. A source that fails is left out of that build's database and named in
 the manifest; publish.py refuses a database that lost too much of itself. Postings are the same posting when their links
-are the same after `KEY`, and of those the row with the longest description is kept, the other rows adding their source's
+are the same after `posting_key` (src/aihawk/key.sql), and of those the row with the longest description is kept, the other rows adding their source's
 name. The output is cut in files of ROWS_PER_FILE postings, with index.parquet beside them: every posting without its
 description, and where to find that description. A search reads the index; only the jobs being judged read descriptions.
 """
@@ -57,12 +57,9 @@ COMMON = (
 )  # fmt: skip
 
 # The posting's identity in its link: no scheme, no www, no tracking, no /apply step, in lower case.
-KEY = r"""lower(regexp_replace(regexp_replace(regexp_replace(
-    url, '^https?://(www\.)?', ''),
-    '[?&](utm_[a-z]+|gh_src|source|src|ref|lever-[a-z-]+|trk|jobPipeline)=[^&#]*', '', 'g'),
-    '(/apply|/application|/)?([?#].*)?$', '\2'))"""
-# Greenhouse serves one posting from several hosts.
-KEY = rf"""regexp_replace({KEY}, '^(job-boards|boards)(\.eu)?\.greenhouse\.io/', 'greenhouse.io/')"""
+# The key a posting is known by, defined once for the build and for AIHawk, which stores every job under it.
+KEY_SQL = Path(__file__).resolve().parents[1] / "src" / "aihawk" / "key.sql"
+KEY = "posting_key(url)"
 
 
 def _text(value: str | None) -> str:
@@ -274,6 +271,7 @@ def connect(work: Path) -> duckdb.DuckDBPyConnection:
     # Below the runner's 16 GB, so DuckDB spills to the temp directory before the system runs out: a build that sorted
     # with the default limit used 12.4 GiB of 12.4 and stopped.
     connection.execute("SET memory_limit = '9GB'")
+    connection.execute(KEY_SQL.read_text(encoding="utf-8"))
     return connection
 
 
