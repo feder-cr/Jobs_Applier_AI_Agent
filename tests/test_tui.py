@@ -234,7 +234,7 @@ async def wait_for_screen(pilot: Any, kind: type) -> None:
 async def wait_for_apply(pilot: Any, app: AIHawk) -> None:
     for _ in range(100):
         await pilot.pause(0.05)
-        if not app.busy:
+        if not app.applying():
             return
     raise AssertionError("applying never finished")
 

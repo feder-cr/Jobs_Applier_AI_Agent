@@ -12,7 +12,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import DataTable, Footer, RichLog, Static
 
-from aihawk.apply import MAILBOXES, mail_provider
+from aihawk.apply import MAILBOXES, Outcome, mail_provider
 from aihawk.config import KEY_ENV, KEY_URL, ConfigError
 from aihawk.database import DatabaseError
 from aihawk.llm import SPEND, explain, money, refused
@@ -30,8 +30,6 @@ MAIL_QUESTION = "The email you apply with."
 MAIL_HINT = "Job sites send their codes there, and AIHawk reads only those · Enter · Esc for later"
 KEY_QUESTION = "Your OrcaRouter key."
 KEY_HINT = f"Get one at {KEY_URL} · it stays on this computer · Enter saves it"
-# What the mail plugins make the model say when the mailbox shows its sign-in page: the application is then run again after a sign-in.
-MAIL_NOT_SIGNED_IN = "The mailbox is not signed in."
 MAIL_NAMES = {"gmail": "Gmail", "outlook": "Outlook"}
 RESUME_HINT = "PDF, .docx or text · Enter reads it · Esc for later"
 
@@ -71,7 +69,6 @@ class AIHawk(App[None]):
         self.session = Session(workspace)
         self.resume = resume
         self.selected: set[str] = set()
-        self.busy = False
         self.signing_in = False
         self.columns_for = 0
         self.with_location = True
@@ -274,8 +271,13 @@ class AIHawk(App[None]):
 
     @on(DataTable.RowHighlighted)
     def row_moved(self) -> None:
-        """The judge follows the cursor: fewer than LOOKAHEAD scored jobs below it, and the next ones are scored."""
-        if self.busy or any(worker.group == "flow" and worker.is_running for worker in self.workers):
+        """The judge follows the cursor, unless an application holds the browser."""
+        if not self.applying():
+            self.keep_ahead()
+
+    def keep_ahead(self) -> None:
+        """Fewer than LOOKAHEAD scored jobs below the cursor, and the next ones are scored, unless a flow is already at it."""
+        if any(worker.group == "flow" and worker.is_running for worker in self.workers):
             return
         store = self.session.store
         if self.scored_ahead() < LOOKAHEAD and (store.with_status("shortlisted") or store.with_status("new")):
@@ -451,7 +453,7 @@ class AIHawk(App[None]):
 
     def applying(self) -> bool:
         """Whether an application holds the browser: one running, or one just started and not yet running."""
-        return self.busy or any(worker.group == "apply" and not worker.is_finished for worker in self.workers)
+        return any(worker.group == "apply" and not worker.is_finished for worker in self.workers)
 
     @work(exclusive=True, group="apply")
     async def apply_selected(self) -> None:
@@ -467,36 +469,31 @@ class AIHawk(App[None]):
         if not await self.push_screen_wait(SendBatch(ready)):
             self.say("Nothing was sent.")
             return
-        unread: list[Stored] = []
-        self.busy = True
-        try:
-            results = await self.session.send(ready, self.say, self.refresh_jobs)
-            unread = [item for item, outcome in results if MAIL_NOT_SIGNED_IN in outcome.summary]
-        except Exception as error:  # noqa: BLE001  Said on the screen, as in start; the batch stops where it failed.
-            self.failed(error)
-        finally:
-            self.busy = False
-            self.selected -= {item.job.id for item in chosen}
-            self.refresh_jobs()
+        results = await self.send(ready)
+        self.selected -= {item.job.id for item in chosen}
+        self.refresh_jobs()
+        unread = [item for item, outcome in results if outcome.needs_mail]
         if unread:
             await self.mail_then_retry(unread)
         # The applications used some of what lay ahead: fill it again, as a cursor move would.
-        self.row_moved()
+        self.keep_ahead()
+
+    async def send(self, items: list[Stored]) -> list[tuple[Stored, Outcome]]:
+        """The applications, each with what came of it; a failure is said on the screen, and the batch stops where it failed."""
+        try:
+            return await self.session.send(items, self.say, self.refresh_jobs)
+        except Exception as error:  # noqa: BLE001  Said on the screen, as in start.
+            self.failed(error)
+            return []
+        finally:
+            self.refresh_jobs()
 
     async def mail_then_retry(self, items: list[Stored]) -> None:
         """A site sent a code to the mail and the mailbox was not signed in: the sign-in now, then those applications again."""
         names = ", ".join(item.job.company for item in items)
         self.say(f"{names}: a code was sent to your mail, and the mailbox is not signed in.")
-        if not await self.set_up_mail():
-            return
-        self.busy = True
-        try:
-            await self.session.send(items, self.say, self.refresh_jobs)
-        except Exception as error:  # noqa: BLE001
-            self.failed(error)
-        finally:
-            self.busy = False
-            self.refresh_jobs()
+        if await self.set_up_mail():
+            await self.send(items)
 
     def can_send(self, item: Stored) -> bool:
         """Whether the job goes in the batch: all of them, but one already sent."""

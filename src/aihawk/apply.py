@@ -37,6 +37,8 @@ OPEN_RETRY_S = 10.0
 # takes several pages.
 MAILBOX_VISITS = 2
 NO_CODE = "No code arrived in the mailbox."
+# What a form ends with when the mailbox it opened sent the browser to a sign-in page: the person signs in, and it is sent again.
+MAIL_NOT_SIGNED_IN = "The mailbox is not signed in."
 # Set in the environment, the form is filled and the send control named, and nothing is sent: a trial of a site or a plugin.
 DRY_RUN_ENV = "AIHAWK_DRY_RUN"
 # Set in the environment, every step the model takes on a page is written to data/trace.log; a dry run always is.
@@ -180,6 +182,8 @@ class Outcome:
     proof: Proof = field(default_factory=Proof)
     # Whether the model made a candidate account on the site while filling this form, so the next form there signs in.
     made_account: bool = False
+    # Whether the form stopped at a mailbox that is not signed in, so the person signs in and it is tried again.
+    needs_mail: bool = False
 
 
 def instructions(guidance: str, page_rules: str = "") -> str:
@@ -347,6 +351,9 @@ async def fill_form(session: Browser, tools: list[dict[str, Any]], client: Async
             if name == "browser_navigate" and watch.one_visit_too_many(str(arguments.get("url", ""))):
                 return _blocked(NO_CODE)
             result = await session.call_tool(name, arguments)
+            if name == "browser_navigate" and watch.in_mailbox and not _is_mailbox(await _address_now(session)):
+                # The mailbox sent the browser to its sign-in page: that is the person's to do, once.
+                return {**_blocked(MAIL_NOT_SIGNED_IN), "mailbox_signed_out": True}
             pictures = _images(result)
             seen += pictures
             messages.append({"role": "tool", "tool_call_id": call.id, "content": tool_text(result) or "Done: what it shows comes next."})
@@ -507,7 +514,7 @@ async def run_on_page(
         traced.note(f"== finish_form: {json.dumps(report, ensure_ascii=False)[:500]}")
     made = bool(report.get("made_account"))
     if report.get("status") != "ready" or not report.get("submit_selector"):
-        return Outcome("blocked", summary, made_account=made)
+        return Outcome("blocked", summary, made_account=made, needs_mail=bool(report.get("mailbox_signed_out")))
     if dry_run:
         # A trial of the flow: the form is filled and the send control named, and nothing leaves for the employer.
         url, screenshot = await _where(session, shot)

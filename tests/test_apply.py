@@ -238,6 +238,28 @@ def test_a_loop_no_fingerprint_sees_is_stopped_when_a_model_is_sure_of_it(monkey
     assert (report["summary"] == "went on") is not stopped
 
 
+class SignedOutMailbox(ScriptedBrowser):
+    """A mailbox that sends the browser to its sign-in page."""
+
+    async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
+        result = await super().call_tool(name, arguments)
+        if name == "browser_navigate" and "mail.google.com" in (arguments or {}).get("url", ""):
+            self.page = {"url": "https://accounts.google.com/signin", "text": "Sign in"}
+        return result
+
+
+def test_a_mailbox_that_sends_the_browser_to_its_sign_in_page_ends_the_form_for_the_person_to_sign_in(tmp_path: Path) -> None:
+    model = ScriptedModel([tool_call("browser_navigate", url="https://mail.google.com/mail/u/0/")])
+    outcome = asyncio.run(run_on_page(SignedOutMailbox(), [], model, "m", JOB, "cv", "a", Path("cv.pdf"), tmp_path / "proof.png"))  # type: ignore[arg-type]
+    assert outcome.status == "blocked" and outcome.needs_mail and outcome.summary == apply_module.MAIL_NOT_SIGNED_IN
+
+
+def test_a_signed_in_mailbox_goes_on() -> None:
+    model = ScriptedModel([tool_call("browser_navigate", url="https://mail.google.com/mail/u/0/")], [tool_call("finish_form", status="blocked", summary="code read", submit_selector="")])
+    report = asyncio.run(fill_form(ScriptedBrowser(), [], model, "m", "brief"))  # type: ignore[arg-type]
+    assert report["summary"] == "code read" and "mailbox_signed_out" not in report
+
+
 def test_a_send_control_that_matches_several_elements_goes_back_to_the_model() -> None:
     browser = ScriptedBrowser({"button[type='button']": 3})
     model = ScriptedModel(
