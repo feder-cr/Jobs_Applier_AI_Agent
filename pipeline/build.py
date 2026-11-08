@@ -22,6 +22,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -61,6 +62,60 @@ COMMON = (
 KEY_SQL = Path(__file__).resolve().parents[1] / "src" / "aihawk" / "key.sql"
 KEY = "posting_key(url)"
 
+# One name for each vendor, whatever a source calls it.
+VENDOR_ALIASES = {
+    "ashbyhq": "ashby", "join_com": "join", "oracle_hcm": "oracle", "wttj": "welcometothejungle", "csod": "cornerstone",
+    "ultipro": "ukg", "beisen_legacy": "beisen",
+}  # fmt: skip
+# The vendor a link's host names, for the postings whose source does not say. The first that matches.
+VENDOR_HOSTS = (
+    ("myworkdayjobs.com", "workday"), ("myworkdaysite.com", "workday"), ("smartrecruiters.com", "smartrecruiters"),
+    ("greenhouse.io", "greenhouse"), ("lever.co", "lever"), ("ashbyhq.com", "ashby"), ("icims.com", "icims"),
+    ("paylocity.com", "paylocity"), ("adp.com", "adp"), ("oraclecloud.com", "oracle"), ("taleo.net", "taleo"),
+    ("successfactors", "successfactors"), ("sapsf.", "successfactors"), ("jobvite.com", "jobvite"), ("bamboohr.com", "bamboohr"),
+    ("applytojob.com", "jazzhr"), ("breezy.hr", "breezy"), ("recruitee.com", "recruitee"), ("teamtailor.com", "teamtailor"),
+    ("personio.", "personio"), ("workable.com", "workable"), ("pinpointhq.com", "pinpoint"), ("rippling.com", "rippling"),
+    ("ultipro.com", "ukg"), ("ukg.net", "ukg"), ("dayforcehcm.com", "dayforce"), ("paycomonline.", "paycom"),
+    ("csod.com", "cornerstone"), ("careerplug.com", "careerplug"), ("recruiterflow.com", "recruiterflow"),
+    ("zohorecruit.", "zoho"), ("jobs.gem.com", "gem"), ("applicantpro.com", "applicantpro"), ("isolvedhire.com", "isolved"),
+    ("eightfold.ai", "eightfold"), ("avature.net", "avature"), ("phenompeople.com", "phenom"), ("join.com", "join"),
+    ("hrmos.co", "hrmos"), ("gupy.io", "gupy"), ("softgarden.", "softgarden"), ("jobscore.com", "jobscore"),
+    ("freshteam.com", "freshteam"), ("manatal.com", "manatal"), ("keka.com", "keka"), ("darwinbox.", "darwinbox"),
+    ("recruiterbox.com", "recruiterbox"), ("betterteam.com", "betterteam"), ("linkedin.com", "linkedin"),
+    ("indeed.", "indeed"), ("glassdoor.", "glassdoor"), ("europa.eu", "eures"), ("arbeitsagentur.de", "bundesagentur"),
+    ("jobbank.gc.ca", "jobbankca"), ("jobicy.com", "jobicy"), ("welcometothejungle.com", "welcometothejungle"),
+)  # fmt: skip
+# Vendors that list other companies' postings rather than take the application: a copy on one is never the one kept when
+# the company's own form carries the same job.
+AGGREGATORS = (
+    "eures", "bundesagentur", "jobbankca", "linkedin", "indeed", "glassdoor", "jobicy", "arbeitnow", "weworkremotely",
+    "remoteok", "remotive", "himalayas", "workingnomads", "builtin", "themuse", "wellfound", "ycombinator", "getonbrd",
+    "cryptojobs", "fashionjobs", "jobsch", "programathor", "jobtech", "arbetsformedlingen", "manfred", "welcometothejungle",
+)  # fmt: skip
+LEGAL_FORMS = (
+    "inc", "llc", "ltd", "limited", "gmbh", "ag", "sa", "sas", "srl", "spa", "corp", "corporation", "co", "company", "plc",
+    "bv", "nv", "oy", "ab", "as", "pty", "pvt", "lp", "llp", "kg", "group", "holdings",
+)  # fmt: skip
+
+
+def _macros() -> str:
+    """The vendor a posting belongs to, and the print that knows one job under links of different sites."""
+    aliases = " ".join(f"WHEN '{name}' THEN '{to}'" for name, to in VENDOR_ALIASES.items())
+    hosts = " ".join(f"WHEN contains(regexp_extract(lower(url), '^https?://([^/]+)', 1), '{host}') THEN '{name}'" for host, name in VENDOR_HOSTS)
+    forms = "|".join(LEGAL_FORMS)
+    return f"""
+        CREATE OR REPLACE MACRO vendor(ats, url) AS coalesce(
+            CASE lower(nullif(trim(ats), '')) {aliases} ELSE lower(nullif(trim(ats), '')) END,
+            CASE {hosts} END);
+        CREATE OR REPLACE MACRO plain(text) AS trim(regexp_replace(regexp_replace(lower(coalesce(text, '')), '[^\\pL\\pN]+', ' ', 'g'), '\\s+', ' ', 'g'));
+        CREATE OR REPLACE MACRO employer(company) AS trim(regexp_replace(regexp_replace(plain(company), '\\b({forms})\\b', ' ', 'g'), '\\s+', ' ', 'g'));
+        CREATE OR REPLACE MACRO city(location) AS plain(split_part(coalesce(location, ''), ',', 1));
+        -- No city, no print: one role with no place given would otherwise be one job across a whole country.
+        CREATE OR REPLACE MACRO job_print(company, title, location) AS CASE WHEN employer(company) <> '' AND plain(title) <> ''
+            AND city(location) NOT IN ('', 'not specified', 'n a', 'na', 'unknown', 'various', 'multiple locations')
+            THEN employer(company) || '|' || plain(title) || '|' || city(location) END;
+    """
+
 
 def _text(value: str | None) -> str:
     return f"CAST({value} AS VARCHAR)" if value else "CAST(NULL AS VARCHAR)"
@@ -95,10 +150,52 @@ def select(
         FROM {source} WHERE ({where})"""
 
 
-def _hf_files(dataset: str, prefix: str) -> list[str]:
+def _hf_files(dataset: str, prefix: str, suffix: str = ".parquet") -> list[str]:
+    """A Hugging Face dataset's files under `prefix` and ending in `suffix`, in name order, as addresses to read."""
     with urllib.request.urlopen(f"{HF_API}/{dataset}", timeout=60) as response:
-        names = [item["rfilename"] for item in json.load(response)["siblings"]]
-    return [f"{HF}/{dataset}/resolve/main/{name}" for name in names if name.startswith(prefix) and name.endswith(".parquet")]
+        names = sorted(item["rfilename"] for item in json.load(response)["siblings"])
+    return [f"{HF}/{dataset}/resolve/main/{name}" for name in names if name.startswith(prefix) and name.endswith(suffix)]
+
+
+def _hf_newest(dataset: str, prefix: str, suffix: str, count: int = 1) -> list[str]:
+    """The last `count` of those files by name: the newest, for a dataset that names its files by date."""
+    return _hf_files(dataset, prefix, suffix)[-count:]
+
+
+def _open_apply(_: Path) -> str:
+    # One folder a day, data/date=YYYY-MM-DD/source=<board>/: the newest day is the jobs open now.
+    files = _hf_files("edwarddgao/open-apply-jobs", "data/date=")
+    newest = max(file.split("data/date=")[1].split("/")[0] for file in files)
+    today = [file for file in files if f"data/date={newest}/" in file]
+    return select(
+        f"read_parquet({today!r}, union_by_name=true)", url="apply_url", company="source_slug",
+        location="array_to_string(locations, '; ')", description="description_html", posted_at="posted_at",
+    )  # fmt: skip
+
+
+def _dtunkelang(work: Path, board: str) -> str:
+    # Thousands of small files of one board's postings, under pipeline-spill/: fetched in one go, then read together.
+    from huggingface_hub import snapshot_download  # imported here: only the published build reads this source
+
+    folder = work / "clones" / f"dtunkelang-{board}"
+    snapshot_download("dtunkelang/jobs-demo", repo_type="dataset", local_dir=str(folder), allow_patterns=[f"pipeline-spill/**/{board}-*.parquet"])
+    pattern = (folder / "pipeline-spill" / "**" / f"{board}-*.parquet").as_posix()
+    return select(
+        f"read_parquet('{pattern}', union_by_name=true)", url="apply_url", company="source_slug", ats=f"'{board}'",
+        location="array_to_string(locations, '; ')", description="description_html", posted_at="posted_at",
+    )  # fmt: skip
+
+
+def _nexus(work: Path) -> str:
+    # One JSON file inside a zip, which DuckDB cannot open: it is unpacked first.
+    folder = work / "clones" / "nexus"
+    folder.mkdir(parents=True, exist_ok=True)
+    with urllib.request.urlopen(f"{HF}/Yash514311/nexus-jobs/resolve/main/jobs.zip", timeout=600) as response:
+        (folder / "jobs.zip").write_bytes(response.read())
+    with zipfile.ZipFile(folder / "jobs.zip") as archive:
+        archive.extractall(folder)
+    found = sorted(folder.rglob("*.json"))
+    return select(f"read_json('{found[0].as_posix()}', maximum_object_size=500000000)", url="applyLink", location="location")
 
 
 def _unnested(url: str, field: str) -> str:
@@ -259,6 +356,54 @@ SOURCES = (
         _unnested(f"{RAW}/raghavendra81422-boop/remote-jobs-open-to-india/HEAD/data.json", "jobs"),
         url="u.roliva_url", title="u.title", company="u.company", location="u.location", remote="TRUE", posted_at="u.posted_date",
     )),
+    # Added on 2026-11-08 from Hugging Face, each dataset updated at least a few times a fortnight: see docs/data-sources.md.
+    Source("open-apply", "https://huggingface.co/datasets/edwarddgao/open-apply-jobs", "MIT", _open_apply),
+    Source("shifat", "https://huggingface.co/datasets/Shifat2110724169/job-market-intel-corpus", "CC-BY-4.0", lambda _: select(
+        f"read_parquet({_hf_files('Shifat2110724169/job-market-intel-corpus', 'shards/')!r}, union_by_name=true)",
+        url="coalesce(job_url, application_url)", title="title_original", company="company_name",
+        location="coalesce(location_raw, city_name, country_name)", description="description_clean", posted_at="posting_date",
+    )),
+    Source("dtunkelang-paylocity", "https://huggingface.co/datasets/dtunkelang/jobs-demo", "CC-BY-4.0", lambda work: _dtunkelang(work, "paylocity")),
+    Source("dtunkelang-adp", "https://huggingface.co/datasets/dtunkelang/jobs-demo", "CC-BY-4.0", lambda work: _dtunkelang(work, "adp")),
+    Source("nexus", "https://huggingface.co/datasets/Yash514311/nexus-jobs", "MIT (tag, no card)", _nexus),
+    Source("weio", "https://huggingface.co/datasets/weio-ops/career-jobs-index", "other", lambda _: select(
+        f"read_json('{HF}/weio-ops/career-jobs-index/resolve/main/jobs-index.jsonl.gz', format='newline_delimited')",
+        url="job_url", company="company_name", posted_at="posted_at",
+    )),
+    Source("veritahire", "https://huggingface.co/datasets/VeritaHire/verified-jobs-feed-open-sample", "CC-BY-NC-4.0", lambda _: select(
+        f"read_parquet('{HF}/VeritaHire/verified-jobs-feed-open-sample/resolve/main/veritahire-jobs-open-sample.parquet')",
+        url="apply_url", company="employer", posted_at="posted_at",
+    )),
+    Source("thejobsapi", "https://huggingface.co/datasets/thejobsapi/employer-career-site-jobs-us-canada-2026-11", "CC-BY-4.0", lambda _: select(
+        f"read_json('{HF}/thejobsapi/employer-career-site-jobs-us-canada-2026-11/resolve/main/jobs.jsonl', format='newline_delimited')",
+        url="source_url", company="employer", location=None, posted_at="posted_at",
+    )),
+    Source("cleanfeeds", "https://huggingface.co/datasets/cleanfeeds/tech-jobs-daily", "CC-BY-4.0", lambda _: select(
+        f"read_csv('{_hf_newest('cleanfeeds/tech-jobs-daily', 'data/jobs-', '.csv')[0]}', all_varchar=true)", url="url", posted_at="posted_at",
+    )),
+    Source("jobicy", "https://huggingface.co/datasets/jobicy/remote-jobs", "jobicy terms: redistribution allowed", lambda _: select(
+        f"read_json({_hf_newest('jobicy/remote-jobs', 'data/daily/', '.jsonl', 14)!r}, format='newline_delimited', union_by_name=true)",
+        url="url", title="jobTitle", company="companyName", location="jobGeo", description="jobDescription", posted_at="pubDate",
+    )),
+    Source("mauritius", "https://huggingface.co/datasets/goated69/mauritius-it-jobs", "CC-BY-4.0", lambda _: select(
+        f"read_csv('{HF}/goated69/mauritius-it-jobs/resolve/main/jobs.csv', all_varchar=true)",
+        url="url", title="job_title", description="job_details", posted_at="date_posted",
+    )),
+    Source("bangladeshi", "https://huggingface.co/datasets/swadhinbiswas/bangladeshi-jobs", "CC-BY-4.0", lambda _: select(
+        f"read_parquet('{HF}/swadhinbiswas/bangladeshi-jobs/resolve/main/parquet/fact_job.parquet')",
+        url="apply_links[1]", company="company_name", location="location_text", description="description_md", posted_at="posted_at_raw",
+    )),
+    Source("pennydata", "https://huggingface.co/datasets/pennydata/greenhouse-jobs-snapshot-2026-10", "CC0-1.0", lambda _: select(
+        f"read_csv('{_hf_newest('pennydata/greenhouse-jobs-snapshot-2026-10', 'snapshot-', '.csv')[0]}', all_varchar=true)", url="url", ats="'greenhouse'",
+    )),
+    Source("linkedin-ryang2", "https://huggingface.co/datasets/ryang2/linkedin-job-scrape", "OpenRAIL-M: research only, no redistribution", lambda _: select(
+        f"read_parquet({_hf_newest('ryang2/linkedin-job-scrape', 'data/', '.parquet', 2)!r}, union_by_name=true)",
+        url="job_url", title="job_title", company="company_name", description="job_description", posted_at="posted_at_estimate",
+    )),
+    Source("linkedin-gsc", "https://huggingface.co/datasets/GlobalSoftwareCompanies/us-entry-level-software-job-listings", "CC-BY-4.0", lambda _: select(
+        f"read_csv('{HF}/GlobalSoftwareCompanies/us-entry-level-software-job-listings/resolve/main/jobs.csv', all_varchar=true)",
+        url="job_url", title="job_title", company="advertiser_name", location="advertised_location", posted_at="posted_date",
+    )),
 )  # fmt: skip
 
 
@@ -272,6 +417,7 @@ def connect(work: Path) -> duckdb.DuckDBPyConnection:
     # with the default limit used 12.4 GiB of 12.4 and stopped.
     connection.execute("SET memory_limit = '9GB'")
     connection.execute(KEY_SQL.read_text(encoding="utf-8"))
+    connection.execute(_macros())
     return connection
 
 
@@ -428,21 +574,55 @@ def merge(connection: duckdb.DuckDBPyConnection, work: Path) -> dict[str, int]:
             -- and then the row: left to DuckDB, a tie went a different way in each build, and a third of the postings
             -- came out changed in a delta though nothing about them had.
             arg_max(
-                struct_pack(filename := filename, row := file_row_number),
+                struct_pack(filename := filename, row := file_row_number, length := length, source := source, print := print,
+                    employer := vendor IS NOT NULL AND vendor NOT IN {AGGREGATORS!r}, host := host),
                 struct_pack(length := length, source := source, row := -file_row_number)
             ) AS winner
         FROM (
             SELECT {KEY} AS key, regexp_extract(filename, '([^/\\\\]+)\\.parquet$', 1) AS source, filename, file_row_number,
-                length(coalesce(description, '')) AS length
+                length(coalesce(description, '')) AS length, vendor(ats, url) AS vendor, job_print(company, title, location) AS print,
+                regexp_extract(posting_link(url), '^[^/]+') AS host
             FROM {every_row}
             WHERE url LIKE 'http%' AND coalesce(title, '') <> ''
         ) GROUP BY key
+    """)
+    # One job under links of different sites, a company's form and a board's copy, has one print: the company, the title and
+    # the city. The best of a print is kept, on a company's own form if there is one, then the longest description, then
+    # the key; a copy on another site that is not a company's form is merged into it. Postings on the kept one's own site
+    # stay: they are other openings (Accenture posts hundreds of one role in one city), and so do other companies' forms.
+    connection.execute("""
+        CREATE OR REPLACE TEMP TABLE ranked AS
+        SELECT key, winner.print AS print, winner.host AS host, winner.employer AS employer,
+            row_number() OVER (PARTITION BY winner.print ORDER BY winner.employer DESC, winner.length DESC, winner.source, key) AS place
+        FROM best WHERE winner.print IS NOT NULL
+    """)
+    connection.execute("""
+        CREATE OR REPLACE TEMP TABLE twins AS
+        SELECT copy.key, first.key AS kept
+        FROM ranked AS copy JOIN ranked AS first ON first.print = copy.print AND first.place = 1
+        WHERE copy.place > 1 AND copy.host <> first.host AND NOT copy.employer
+    """)
+    merged_away, lost = connection.execute(f"""
+        SELECT count(*), count(*) FILTER (WHERE kept.winner.length < {DESCRIBED} AND twin.winner.length >= {DESCRIBED})
+        FROM twins JOIN best AS twin ON twin.key = twins.key JOIN best AS kept ON kept.key = twins.kept
+    """).fetchone()
+    print(f"one job under several sites: {merged_away} postings merged into another; {lost} of them described where the one kept is not", flush=True)
+    connection.execute("""
+        CREATE OR REPLACE TEMP TABLE best AS
+        SELECT best.key, best.copies + coalesce(merged.copies, 0) AS copies,
+            list_sort(list_distinct(list_concat(best.sources, coalesce(merged.sources, [])))) AS sources, best.winner
+        FROM best
+        LEFT JOIN (
+            SELECT twins.kept AS key, sum(other.copies) AS copies, flatten(list(other.sources)) AS sources
+            FROM twins JOIN best AS other ON other.key = twins.key GROUP BY twins.kept
+        ) AS merged ON merged.key = best.key
+        WHERE best.key NOT IN (SELECT key FROM twins)
     """)
     rows_in, rows_out_expected = connection.execute("SELECT sum(copies), count(*) FROM best").fetchone()
     out = work / "out"
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
-    columns = ", ".join(f"row.{column}" for column in COMMON)
+    columns = ", ".join("vendor(row.ats, row.url) AS ats" if column == "ats" else f"row.{column}" for column in COMMON)
     # The files are in key order, so a reader that asks for a posting by its key reads the one row group that can hold it,
     # whatever build it came from. Sorting ten million rows with their descriptions at once ran a runner out of memory,
     # so only the keys are sorted, into ranges of ROWS_PER_FILE; the rows go to their range's part in one pass; and each

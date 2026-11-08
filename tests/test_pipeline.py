@@ -88,6 +88,76 @@ def test_workday_and_smartrecruiters_postings_are_one_under_any_of_their_links(t
     assert keys == ["smartrecruiters:743999872941471", "workday:acme:r-113371"]
 
 
+def write_full_source(work: Path, name: str, rows: list[tuple]) -> None:
+    """A source whose rows give link, title, company, location, vendor and description."""
+    connection = duckdb.connect()
+    columns = ", ".join(f"{column} {kind}" for column, kind in (
+        ("url", "VARCHAR"), ("title", "VARCHAR"), ("company", "VARCHAR"), ("ats", "VARCHAR"), ("location", "VARCHAR"),
+        ("country", "VARCHAR"), ("remote", "BOOLEAN"), ("salary_min", "DOUBLE"), ("salary_max", "DOUBLE"),
+        ("salary_currency", "VARCHAR"), ("description", "VARCHAR"), ("posted_at", "VARCHAR"),
+    ))
+    connection.execute(f"CREATE TABLE t ({columns})")
+    connection.executemany("INSERT INTO t (url, title, company, location, ats, description) VALUES (?, ?, ?, ?, ?, ?)", rows)
+    (work / "sources").mkdir(parents=True, exist_ok=True)
+    connection.execute(f"COPY t TO '{(work / 'sources' / (name + '.parquet')).as_posix()}' (FORMAT parquet)")
+
+
+def index_rows(tmp_path: Path) -> list[tuple]:
+    return duckdb.connect().execute(f"SELECT key, ats FROM read_parquet('{(tmp_path / 'out').as_posix()}/index.parquet') ORDER BY key").fetchall()
+
+
+def test_one_job_on_a_companys_form_and_on_a_board_is_one_posting_kept_on_the_form(tmp_path: Path) -> None:
+    write_source_rows = [("https://boards.greenhouse.io/acme/jobs/1", "Engineer", "Acme Inc.", "Rome, Italy", None, "Short")]
+    write_full_source(tmp_path, "company", write_source_rows)
+    write_full_source(tmp_path, "board", [
+        ("https://www.linkedin.com/jobs/view/99", "engineer", "ACME", "Rome", None, "A much longer description of the job"),
+        ("https://www.linkedin.com/jobs/view/100", "Engineer", "Acme", "Milan", None, "The same role in another city"),
+    ])
+    counts, rows = merged(tmp_path)
+    assert counts == {"rows_in": 3, "rows_out": 2}, "the role in Milan is another job"
+    assert index_rows(tmp_path) == [("greenhouse.io/acme/jobs/1", "greenhouse"), ("linkedin.com/jobs/view/100", "linkedin")]
+    kept = next(row for url, row in rows.items() if "greenhouse" in url)
+    assert sorted(kept[3]) == ["board", "company"], "the board's copy is named among the sources"
+
+
+def test_one_role_posted_twice_on_one_site_is_two_openings(tmp_path: Path) -> None:
+    write_full_source(tmp_path, "s", [
+        ("https://boards.greenhouse.io/acme/jobs/1", "Engineer", "Acme", "Rome", None, None),
+        ("https://boards.greenhouse.io/acme/jobs/2", "Engineer", "Acme", "Rome", None, None),
+        ("https://www.linkedin.com/jobs/view/3", "Engineer", "Acme", "Rome", None, None),
+    ])
+    counts, _ = merged(tmp_path)
+    assert counts["rows_out"] == 2, "both Greenhouse openings stay; LinkedIn's copy goes into one of them"
+
+
+def test_a_role_with_no_city_is_never_merged_across_a_country(tmp_path: Path) -> None:
+    write_full_source(tmp_path, "s", [
+        ("https://acme.example/jobs/1", "Sales Associate", "Acme", "", "workday", None),
+        ("https://www.linkedin.com/jobs/view/2", "Sales Associate", "Acme", "Not specified", None, None),
+    ])
+    counts, _ = merged(tmp_path)
+    assert counts["rows_out"] == 2
+
+
+def test_a_posting_with_no_company_is_never_merged_by_its_title(tmp_path: Path) -> None:
+    write_full_source(tmp_path, "s", [
+        ("https://a.example/1", "Engineer", None, "Rome", None, None),
+        ("https://b.example/2", "Engineer", "", "Rome", None, None),
+    ])
+    counts, _ = merged(tmp_path)
+    assert counts["rows_out"] == 2
+
+
+def test_a_vendor_has_one_name_and_is_read_from_the_link_when_a_source_does_not_say(tmp_path: Path) -> None:
+    write_full_source(tmp_path, "s", [
+        ("https://jobs.ashbyhq.com/acme/1", "One", "A", "X", "ashbyhq", None),
+        ("https://recruiting.paylocity.com/Recruiting/Jobs/Details/2", "Two", "B", "Y", None, None),
+        ("https://nobody.example/3", "Three", "C", "Z", None, None),
+    ])
+    merged(tmp_path)
+    assert [ats for _, ats in index_rows(tmp_path)] == ["ashby", None, "paylocity"]
+
+
 def test_greenhouse_serves_one_posting_from_several_hosts(tmp_path: Path) -> None:
     write_source(tmp_path, "s", [
         ("https://boards.greenhouse.io/acme/jobs/1", "One", None),
