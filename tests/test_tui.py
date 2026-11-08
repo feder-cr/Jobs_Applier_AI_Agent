@@ -908,7 +908,7 @@ def test_the_mail_question_left_with_escape_is_not_asked_again_at_the_next_start
     assert answers_of(load_config(home))["mail_provider"] == "later"
 
 
-def test_the_judge_makes_one_page_ahead_and_the_arrows_turn_the_pages(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_jev_scores_one_page_ahead_and_only_the_side_arrows_turn_the_pages(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # A page of one job, and Jev reading two at a time: the three postings make three pages.
     import aihawk.session as session_module
 
@@ -923,29 +923,33 @@ def test_the_judge_makes_one_page_ahead_and_the_arrows_turn_the_pages(home: Path
             assert len(app.pages) == 2 and len(app.session.store.with_status("scored")) == 2
             assert app.query_one(DataTable).row_count == 1 and "Page 2 ready." in logged(app)
             assert not any(line.startswith("Preparing page") for line in logged(app).splitlines()), "the count gave way to the result"
-            # Down from the page's last row is the next page, and it asks for the one after.
-            await pilot.press("down")
+            # Down and up stay on the page: its last row and its first are where it ends.
+            await pilot.press("down", "up")
+            await settle(pilot, app)
+            assert app.page == 0
+            # The right arrow is the next page, and it asks for the one after.
+            await pilot.press("right")
             await settle(pilot, app)
             assert app.page == 1 and len(app.pages) == 3 and len(app.session.store.with_status("scored")) == 3
             assert str(app.query_one("#count", Static).render()) == "Page 2 · 4 jobs"
-            await pilot.press("right", "down")
+            await pilot.press("right", "right")
             await settle(pilot, app)
             assert app.page == 2 and "No more jobs for this search." in logged(app)
-            # Up from the first row is the page before; the left arrow too.
-            await pilot.press("up")
-            assert app.page == 1
             await pilot.press("left")
-            assert app.page == 0
+            assert app.page == 1 and app.query_one(DataTable).cursor_row == 0
+            # The footer says which keys turn the pages.
+            rows = ["".join(segment.text for segment in strip) for strip in app.screen._compositor.render_strips()]
+            assert any("← → Page" in row for row in rows) and not any(" More" in row for row in rows)
 
     asyncio.run(run())
 
 
-def test_m_says_so_when_there_is_nothing_left_to_read(home: Path, resume: Path) -> None:
+def test_the_right_arrow_says_so_when_there_is_nothing_left_to_read(home: Path, resume: Path) -> None:
     async def run() -> None:
         app = scripted_app(home, resume)
         async with app.run_test(size=(140, 40)) as pilot:
             await settle(pilot, app)
-            await pilot.press("m")
+            await pilot.press("right")
             await settle(pilot, app)
             assert "No more jobs for this search." in logged(app)
 

@@ -34,22 +34,10 @@ RESUME_HINT = "PDF, .docx or text · Enter reads it · Esc for later"
 
 
 class Pages(Rows):
-    """The jobs' table, a page at a time: down from its last row is the next page, up from its first the one before, and
-    the side arrows turn pages too."""
+    """The jobs' table, a page at a time. Only the side arrows turn pages: going down or up stays on the page, its last
+    row and its first are where it ends."""
 
-    BINDINGS: ClassVar = [Binding("right", "turn(1)", show=False), Binding("left", "turn(-1)", show=False)]
-
-    def action_cursor_down(self) -> None:
-        if self.row_count and self.cursor_row >= self.row_count - 1:
-            self.app.turn(1)  # type: ignore[attr-defined]
-        else:
-            super().action_cursor_down()
-
-    def action_cursor_up(self) -> None:
-        if self.cursor_row <= 0:
-            self.app.turn(-1, at_end=True)  # type: ignore[attr-defined]
-        else:
-            super().action_cursor_up()
+    BINDINGS: ClassVar = [Binding("right", "turn(1)", "Page", key_display="← →"), Binding("left", "turn(-1)", show=False)]
 
     def action_turn(self, step: int) -> None:
         self.app.turn(step)  # type: ignore[attr-defined]
@@ -79,7 +67,6 @@ class AIHawk(App[None]):
         Binding("a", "apply", "Apply"),
         Binding("s", "sent", show=False),
         Binding("o", "open_link", show=False),
-        Binding("m", "more", "More"),
         Binding("e", "settings", "Settings"),
         Binding("r", "new_resume", show=False),
         Binding("q", "quit", "Quit"),
@@ -271,9 +258,9 @@ class AIHawk(App[None]):
                 self.query_one(DataTable).move_cursor(row=0)
             self.refresh_jobs()
 
-    def turn(self, step: int, at_end: bool = False) -> None:
-        """To the page before or after, on its first row, or on its last when the person came up from the page after. A
-        page not ready yet opens once it is; the line below says how far it is."""
+    def turn(self, step: int) -> None:
+        """To the page before or after, on its first row. A page not ready yet opens once it is; the line below says how
+        far it is."""
         target = self.page + step
         if target < 0:
             return
@@ -282,7 +269,7 @@ class AIHawk(App[None]):
             self.wanted = None
             self.refresh_jobs()
             table = self.query_one(DataTable)
-            table.move_cursor(row=table.row_count - 1 if at_end else 0)
+            table.move_cursor(row=0)
             self.keep_ahead()
             return
         store = self.session.store
@@ -324,9 +311,6 @@ class AIHawk(App[None]):
         item = self.current()
         if item:
             webbrowser.open(item.job.url)
-
-    def action_more(self) -> None:
-        self.turn(1)
 
     def keep_ahead(self) -> None:
         """The page after the one shown is made, unless it is, a flow is already at it, or an application holds the
