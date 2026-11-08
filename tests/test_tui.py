@@ -914,14 +914,15 @@ def test_jev_scores_one_page_ahead_and_only_the_side_arrows_turn_the_pages(home:
 
     monkeypatch.setattr(session_module, "WIDE", 2)
     monkeypatch.setattr(tui_module, "PAGE", 1)
+    monkeypatch.setattr(tui_module, "AHEAD", 1)
 
     async def run() -> None:
         app = scripted_app(home, resume)
         async with app.run_test(size=(140, 40)) as pilot:
             await settle(pilot, app)
-            # The page shown, and the one after it, ready: no further.
-            assert len(app.pages) == 2 and len(app.session.store.with_status("scored")) == 2
-            assert app.query_one(DataTable).row_count == 1 and "Page 2 ready." in logged(app)
+            # The page shown and the one after it, and one scored job in reserve: the second round was read ahead.
+            assert len(app.pages) == 2 and len(app.session.store.with_status("scored")) == 3
+            assert app.query_one(DataTable).row_count == 1 and logged(app).splitlines()[-1] == "Page 2 ready."
             assert not any(line.startswith("Preparing page") for line in logged(app).splitlines()), "the count gave way to the result"
             # Down and up stay on the page: its last row and its first are where it ends.
             await pilot.press("down", "up")
