@@ -14,7 +14,6 @@ from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Input, RichLog, Static
 
-from aihawk.judge import QUESTIONS
 from aihawk.llm import money
 from aihawk.store import Sent, Stored, said, sent_word
 
@@ -202,15 +201,12 @@ class JobDetails(ModalScreen[None]):
         self.item = item
 
     def compose(self) -> ComposeResult:
-        job, report = self.item.job, self.item.report or {}
-        lines = [f"{job.title}", f"{job.company} · {job.location}", job.url, ""]
-        if report:
-            answers = " · ".join(f"{name.replace('_', ' ')}: {report.get(name, '?')}" for name in QUESTIONS)
-            lines += [f"Score {report.get('score', 0):.1f}/5 · posting looks {report.get('legitimacy', '?')}", answers, "", report.get("summary", "")]
-            if report.get("gaps"):
-                lines += ["", "Gaps:", *(f"  - {gap}" for gap in report["gaps"])]
+        job, score = self.item.job, self.item.score
+        lines = [f"{job.title}", f"{job.company} · {job.location}", job.url]
+        if score is not None:
+            lines += ["", f"Score {score:.1f}/5"]
             if not job.description.strip():
-                lines += ["", "Scored from the title alone: the posting had no text to read."]
+                lines += ["Scored from the title alone: the posting had no text to read."]
         if self.item.note:
             lines += ["", "Last attempt:", self.item.note]
         with Vertical(id="dialog"):

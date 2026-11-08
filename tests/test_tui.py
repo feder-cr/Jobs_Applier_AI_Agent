@@ -45,12 +45,7 @@ PROFILE = {
     "goals": "Senior Python work.",
     "answers": {"email": "ada@example.com", "phone": "", "location": "Milan", "linkedin": "", "website": "", "current_company": ""},
 }
-FIELDS = {"summary": "Fits.", "gaps": ["No Kubernetes"], "legitimacy": "credible"}
 CV_TEXT = "# Ada Rossi\n\nSenior Python Engineer at Acme for five years, working on backend services.\n"
-
-
-def report(role: str, must_haves: str) -> str:
-    return json.dumps({"role": role, "must_haves": must_haves, "level": "unclear", "location": "unclear", **FIELDS})
 
 
 def answers_of(config: Config) -> dict[str, str]:
@@ -110,19 +105,22 @@ class ScriptedModelForApp:
     def __init__(self) -> None:
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
         self.requests: list[dict[str, Any]] = []
+        self.posts: list[dict[str, Any]] = []
 
     async def post(self, path: str, *, body: dict[str, Any], cast_to: type) -> dict[str, Any]:
-        """The decision endpoint: no opinion on any question, so the evidence is zero and the title alone decides."""
-        return {"answers": {name: {"type": "noul", "noul": 0.5} for name in body["questions"]}}
+        """The decision endpoint: sure of Bestco, less of Lowly, and of anything else it says no."""
+        self.posts.append(body)
+
+        def sure(instructions: str) -> float:
+            return 0.875 if "Bestco" in instructions else 0.625 if "Lowly" in instructions else 0.125
+
+        return {"answers": {name: {"type": "noul", "noul": sure(question["instructions"])} for name, question in body["questions"].items()}}
 
     async def _create(self, **request: Any) -> Any:
         self.requests.append(request)
         name = (request.get("response_format") or {}).get("json_schema", {}).get("name")
         if name == "search_profile":
             content = json.dumps(PROFILE)
-        elif name == "job_report":
-            text = request["messages"][1]["content"]
-            content = report("yes", "yes") if "Bestco" in text else report("yes", "unclear") if "Lowly" in text else report("no", "unclear")
         else:
             content = "# Ada Rossi"
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content, tool_calls=None))])
@@ -159,7 +157,7 @@ def test_a_resume_is_all_it_takes_to_get_the_best_jobs_first(home: Path, resume:
             await settle(pilot, app)
             assert companies(app) == ["Bestco", "Lowly", "Noplugin"]
             table = app.query_one(DataTable)
-            assert table.get_row_at(0)[1] == "4.5"
+            assert [str(table.get_row_at(row)[1]) for row in range(3)] == ["4.5", "3.5", "1.5"]
             # How many jobs the whole database holds, four, not the three this search found, on the right of the heading.
             assert str(app.query_one("#count", Static).render()) == "Page 1 · 4 jobs"
             assert not any("database" in line.text for line in app.query_one(RichLog).lines)
@@ -438,7 +436,9 @@ def test_enter_shows_why_a_job_fits(home: Path, resume: Path) -> None:
             await settle(pilot, app)
             await pilot.press("enter")
             await wait_for_screen(pilot, JobDetails)
-            assert app.screen.item.report["gaps"] == ["No Kubernetes"]
+            # The job and its score, nothing else: Jev answers in or out, and writes no reasons.
+            text = str(app.screen.query_one("#summary Static").render())
+            assert "Bestco" in text and "Score 4.5/5" in text
             await pilot.press("escape")
 
     asyncio.run(run())
@@ -766,9 +766,10 @@ def test_a_posting_with_no_description_is_judged_on_its_title_and_no_page_is_rea
         raise AssertionError("a page was read from the person's computer")
 
     monkeypatch.setattr("urllib.request.urlopen", no_page)
-    asyncio.run(session.score([session.store.get("bare"), session.store.get("told")], lambda: None, lambda _: None))  # type: ignore[list-item]
+    monkeypatch.setattr(session_module, "stored_descriptions", lambda keys, files, done, problem: ["Stored text." if key == "told" else "" for key in keys])
+    asyncio.run(session.read(lambda _: None, lambda done, size: None))
     assert session.store.get("bare").score is not None and session.store.get("bare").job.description == ""  # type: ignore[union-attr]
-    asked = " ".join(request["messages"][1]["content"] for request in session._client.requests)  # type: ignore[union-attr]
+    asked = json.dumps(session._client.posts)  # type: ignore[union-attr]
     assert "Stored text." in asked
     session.close()
 
@@ -907,7 +908,7 @@ def test_the_mail_question_left_with_escape_is_not_asked_again_at_the_next_start
     assert answers_of(load_config(home))["mail_provider"] == "later"
 
 
-def test_the_judge_makes_one_page_ahead_and_the_arrows_turn_the_pages(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_jev_scores_one_page_ahead_and_only_the_side_arrows_turn_the_pages(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # A page of one job, and Jev reading two at a time: the three postings make three pages.
     import aihawk.session as session_module
 
@@ -922,29 +923,33 @@ def test_the_judge_makes_one_page_ahead_and_the_arrows_turn_the_pages(home: Path
             assert len(app.pages) == 2 and len(app.session.store.with_status("scored")) == 2
             assert app.query_one(DataTable).row_count == 1 and "Page 2 ready." in logged(app)
             assert not any(line.startswith("Preparing page") for line in logged(app).splitlines()), "the count gave way to the result"
-            # Down from the page's last row is the next page, and it asks for the one after.
-            await pilot.press("down")
+            # Down and up stay on the page: its last row and its first are where it ends.
+            await pilot.press("down", "up")
+            await settle(pilot, app)
+            assert app.page == 0
+            # The right arrow is the next page, and it asks for the one after.
+            await pilot.press("right")
             await settle(pilot, app)
             assert app.page == 1 and len(app.pages) == 3 and len(app.session.store.with_status("scored")) == 3
             assert str(app.query_one("#count", Static).render()) == "Page 2 · 4 jobs"
-            await pilot.press("right", "down")
+            await pilot.press("right", "right")
             await settle(pilot, app)
             assert app.page == 2 and "No more jobs for this search." in logged(app)
-            # Up from the first row is the page before; the left arrow too.
-            await pilot.press("up")
-            assert app.page == 1
             await pilot.press("left")
-            assert app.page == 0
+            assert app.page == 1 and app.query_one(DataTable).cursor_row == 0
+            # The footer says which keys turn the pages.
+            rows = ["".join(segment.text for segment in strip) for strip in app.screen._compositor.render_strips()]
+            assert any("← → Page" in row for row in rows) and not any(" More" in row for row in rows)
 
     asyncio.run(run())
 
 
-def test_m_says_so_when_there_is_nothing_left_to_read(home: Path, resume: Path) -> None:
+def test_the_right_arrow_says_so_when_there_is_nothing_left_to_read(home: Path, resume: Path) -> None:
     async def run() -> None:
         app = scripted_app(home, resume)
         async with app.run_test(size=(140, 40)) as pilot:
             await settle(pilot, app)
-            await pilot.press("m")
+            await pilot.press("right")
             await settle(pilot, app)
             assert "No more jobs for this search." in logged(app)
 

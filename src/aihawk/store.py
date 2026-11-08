@@ -14,7 +14,6 @@ from typing import Any
 
 from aihawk.database import Job, posting_keys
 from aihawk.secret import is_sealed, seal, unseal
-from aihawk.shortlist import fuse
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -65,13 +64,15 @@ CREATE TABLE IF NOT EXISTS answers (
 )
 """
 
-# new -> shortlisted -> scored -> refused | blocked | failed | submitted | unconfirmed. passed_over is what an earlier
-# version left out of the judge's queue; it is in the queue again.
+# new -> scored -> refused | blocked | failed | submitted | unconfirmed, or new -> passed_over when Jev gave no answer.
+# shortlisted is an earlier version's, a job waiting for its judge: see JEV_ONLY.
 SUBMITTED = ("submitted", "unconfirmed")
 # How far along a job is, for keeping one of two rows that turn out to be the same posting: a sent one is never lost.
 PROGRESS = ("new", "passed_over", "shortlisted", "scored", "failed", "blocked", "refused", "unconfirmed", "submitted")
 # The store's ids follow key.sql; 2 is the key that knows a Workday or SmartRecruiters posting under any of its links.
 KEY_VERSION = 2
+# 3: Jev alone scores; the jobs an earlier version left to its judge are new again.
+JEV_ONLY = 3
 # The jobs the person sees as tried, and what each status says in plain words.
 SENT_WORDS = {
     "submitted": "sent and confirmed",
@@ -169,6 +170,11 @@ class Store:
             self._db.commit()
         if self._db.execute("PRAGMA user_version").fetchone()[0] < KEY_VERSION:
             self._rekey()
+        if self._db.execute("PRAGMA user_version").fetchone()[0] < JEV_ONLY:
+            # An earlier version's jobs that its judge never scored, waiting or passed over: Jev reads them again.
+            self._db.execute("UPDATE jobs SET status = 'new' WHERE status IN ('shortlisted', 'passed_over') AND score IS NULL")
+            self._db.execute(f"PRAGMA user_version = {JEV_ONLY}")
+            self._db.commit()
 
     def _rekey(self) -> None:
         """The jobs stored before a key changed, under the key their link has now. Two that turn out to be one posting are
@@ -231,23 +237,14 @@ class Store:
         rows = self._db.execute("SELECT * FROM jobs WHERE status = ? ORDER BY lexical DESC, rowid", (status,)).fetchall()
         return [self._stored(row) for row in rows]
 
-    def queue(self) -> list[Stored]:
-        """What the judge has still to read, Jev's best first: the title's fit and Jev's evidence together."""
-        rows = self._db.execute("SELECT * FROM jobs WHERE status IN ('shortlisted', 'passed_over') AND score IS NULL").fetchall()
-        items = [self._stored(row) for row in rows]
-        order = fuse([item.job.lexical for item in items], [item.evidence or 0.0 for item in items])
-        return [item for _, item in sorted(zip(order, items, strict=True), key=lambda pair: (-pair[0], pair[1].job.id))]
-
     def all(self) -> list[Stored]:
-        """What the person sees, the best first: the judged by the judgment and the title's fit together, then the rest by the title's fit and Jev's evidence."""
+        """What the person sees, the best first: the scored by the score and the title's fit together, then the rest by the title's fit."""
         items = [self._stored(row) for row in self._db.execute("SELECT * FROM jobs").fetchall()]
         judged = sorted(
             (item for item in items if item.score is not None),
             key=lambda item: (-(item.score + LEXICAL_SHARE * item.job.lexical), -item.job.lexical, item.job.id),
         )
-        rest = [item for item in items if item.score is None]
-        order = fuse([item.job.lexical for item in rest], [item.evidence or 0.0 for item in rest])
-        rest = [item for _, item in sorted(zip(order, rest, strict=True), key=lambda pair: (-pair[0], pair[1].job.id))]
+        rest = sorted((item for item in items if item.score is None), key=lambda item: (-item.job.lexical, item.job.id))
         return judged + rest
 
     # The accounts the applications made, one per site: next time the model signs in instead of registering again.
