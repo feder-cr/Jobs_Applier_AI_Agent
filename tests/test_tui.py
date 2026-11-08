@@ -693,6 +693,38 @@ def test_a_posting_whose_words_look_like_markup_is_shown_as_it_is(home: Path) ->
     asyncio.run(run())
 
 
+def test_a_score_arriving_while_the_person_reads_lands_ahead_of_them_and_never_moves_the_list(home: Path) -> None:
+    async def run() -> None:
+        app = AIHawk(home)
+        store = app.session.store
+        for n in range(6):
+            store.add(Job(f"j{n}", f"Firm {n}", "Engineer", "Milan", f"https://a.example/{n}", f"https://a.example/{n}", "d"))
+        store.set_score("j0", 3.0, {})
+        store.set_score("j1", 2.0, {})
+        app.start = lambda: None  # type: ignore[method-assign]
+        app.keep_ahead = lambda: None  # type: ignore[method-assign]
+        async with app.run_test(size=(140, 40)) as pilot:
+            app.refresh_jobs()
+            await pilot.pause()
+            # Nothing read yet: a better job goes on top, where the cursor is.
+            store.set_score("j4", 4.0, {})
+            app.refresh_jobs()
+            await pilot.pause()
+            assert companies(app)[:3] == ["Firm 4", "Firm 0", "Firm 1"] and app.current_id() == "j4"
+            await pilot.press("down", "down", "down")
+            await pilot.pause()
+            assert app.current_id() == "j2"
+            # Read down to j2: the rows down to it stay, the new score comes right after it, and the cursor stays put.
+            store.set_score("j5", 5.0, {})
+            app.refresh_jobs()
+            await pilot.pause()
+            assert companies(app)[:5] == ["Firm 4", "Firm 0", "Firm 1", "Firm 2", "Firm 5"]
+            assert app.current_id() == "j2" and app.query_one(DataTable).cursor_row == 3
+            assert app.scored_ahead() == 1
+
+    asyncio.run(run())
+
+
 def test_a_posting_with_no_description_is_judged_on_its_title_and_no_page_is_read(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     session = Session(home)
     session._client = ScriptedModelForApp()  # type: ignore[assignment]
