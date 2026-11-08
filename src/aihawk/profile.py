@@ -168,7 +168,7 @@ def read_resume(path: Path) -> str:
     return text
 
 
-async def install_resume(client: AsyncOpenAI, config: Config, path: Path) -> dict[str, Any]:
+async def install_resume(client: AsyncOpenAI, config: Config, path: Path, store: Store) -> dict[str, Any]:
     """Read the resume and write what the search needs. What the person already answered stays."""
     cv = read_resume(path)
     profile = await structured(client, config.quick_model, PROFILE_SYSTEM, cv, "search_profile", PROFILE_SCHEMA)
@@ -195,7 +195,7 @@ async def install_resume(client: AsyncOpenAI, config: Config, path: Path) -> dic
     settings.update({"name": profile["name"], "goals": profile["goals"], "filters": filters})
     settings_path.write_text(yaml.safe_dump(settings, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
-    add_answers(config, {key: value for key, value in profile["answers"].items() if value.strip()}, source="cv")
+    store.add_answers({key: value for key, value in profile["answers"].items() if value.strip()}, source="cv")
     return profile
 
 
@@ -256,23 +256,3 @@ def ensure_account_password(store: Store) -> bool:
         return False
     store.set_answer(ACCOUNT_PASSWORD, new_password(), source="generated")
     return True
-
-
-def read_answers(config: Config) -> dict[str, str]:
-    """The answers in the store, after the old file, if any, has been brought in."""
-    store = Store(config.store_file)
-    try:
-        import_answers_file(config, store)
-        return store.answers()
-    finally:
-        store.close()
-
-
-def add_answers(config: Config, answers: dict[str, str], source: str = "person") -> None:
-    """Remember what the person said. An answer they gave wins over one read again from a CV."""
-    store = Store(config.store_file)
-    try:
-        import_answers_file(config, store)
-        store.add_answers(answers, source)
-    finally:
-        store.close()

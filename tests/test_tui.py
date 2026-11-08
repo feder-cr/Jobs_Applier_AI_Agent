@@ -24,10 +24,10 @@ from aihawk import apply as apply_module
 from aihawk import session as session_module
 from aihawk.apply import Outcome
 from aihawk.cli import main as cli_main
-from aihawk.config import ConfigError, load_config
+from aihawk.config import Config, ConfigError, load_config
 from aihawk.database import Job
 from aihawk.llm import explain
-from aihawk.profile import install_resume, read_answers, read_resume
+from aihawk.profile import import_answers_file, install_resume, read_resume
 from aihawk.screens import JobDetails, SendBatch, SentDetails, SentList, Settings, SignIn, TextPrompt
 from aihawk.session import Session
 from aihawk.store import Proof, Store, Stored
@@ -52,6 +52,14 @@ CV_TEXT = "# Ada Rossi\n\nSenior Python Engineer at Acme for five years, working
 
 def report(role: str, must_haves: str) -> str:
     return json.dumps({"role": role, "must_haves": must_haves, "level": "unclear", "location": "unclear", **FIELDS})
+
+
+def answers_of(config: Config) -> dict[str, str]:
+    store = Store(config.store_file)
+    try:
+        return store.answers()
+    finally:
+        store.close()
 
 
 def published(folder: Path) -> str:
@@ -161,7 +169,7 @@ def test_a_resume_is_all_it_takes_to_get_the_best_jobs_first(home: Path, resume:
     assert config.filters.locations == ("Milan", "Milano", "Italy")
     assert config.filters.cities == ("Milan", "Milano")
     assert config.cv.read_text(encoding="utf-8").startswith("# Ada Rossi")
-    answers = read_answers(config)
+    answers = answers_of(config)
     assert {name: answers[name] for name in ("email", "location")} == {"email": "ada@example.com", "location": "Milan"}
     # The one password for the sites that need an account, made at the first start and kept with the answers.
     assert len(answers["account_password"]) == 20
@@ -465,7 +473,10 @@ def test_a_resume_and_the_files_beside_it_saved_with_a_byte_order_mark_are_read(
     monkeypatch.delenv("ORCAROUTER_API_KEY")
     (home / "key").write_bytes(bom + b"sk-orca-typed\n")
     config = load_config(home)
-    assert read_answers(config)["email"] == "ada@example.com"
+    store = Store(config.store_file)
+    import_answers_file(config, store)
+    assert store.answers()["email"] == "ada@example.com"
+    store.close()
     assert config.api_key() == "sk-orca-typed"
 
 
@@ -499,13 +510,13 @@ def test_an_old_word_file_says_what_to_do(tmp_path: Path) -> None:
 
 def test_a_new_resume_never_invents_a_contact_detail(home: Path, resume: Path) -> None:
     config = load_config(home)
-    asyncio.run(install_resume(ScriptedModelForApp(), config, resume))  # type: ignore[arg-type]
-    assert "phone" not in read_answers(config)
+    asyncio.run(install_resume(ScriptedModelForApp(), config, resume, Store(config.store_file)))  # type: ignore[arg-type]
+    assert "phone" not in answers_of(config)
 
 
 def test_a_new_resume_replaces_the_plan_and_keeps_what_the_person_excluded(home: Path, resume: Path) -> None:
     (home / "aihawk.yaml").write_text("filters:\n  exclude: [intern]\n", encoding="utf-8")
-    asyncio.run(install_resume(ScriptedModelForApp(), load_config(home), resume))  # type: ignore[arg-type]
+    asyncio.run(install_resume(ScriptedModelForApp(), load_config(home), resume, Store(load_config(home).store_file)))  # type: ignore[arg-type]
     config = load_config(home)
     assert config.filters.exclude == ("intern",)
     assert config.filters.include == tuple(node.id for node in config.filters.plan.nodes)
@@ -815,7 +826,7 @@ def test_after_the_resume_the_mail_is_asked_once_and_gmail_is_opened_until_the_i
 
     asyncio.run(run())
     assert server.calls[-1] == ("browser_close", {})
-    answers = read_answers(load_config(home))
+    answers = answers_of(load_config(home))
     assert answers["email"] == "ada@gmail.com" and answers["mail_provider"] == "gmail"
 
 
@@ -835,7 +846,7 @@ def test_the_mail_question_left_with_escape_is_not_asked_again_at_the_next_start
             assert ("mail", "Your mail", "not set up") in app.setting_rows()
 
     asyncio.run(run())
-    assert read_answers(load_config(home))["mail_provider"] == "later"
+    assert answers_of(load_config(home))["mail_provider"] == "later"
 
 
 def test_the_judge_follows_the_cursor_and_stops_at_the_lookahead(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
