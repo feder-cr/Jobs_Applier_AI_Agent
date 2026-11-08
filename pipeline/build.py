@@ -41,6 +41,11 @@ SOURCES_DATASET = "feder-cr/jobs-sources"
 # enough that one file is sorted by key in memory.
 ROWS_PER_FILE = 200_000
 ROW_GROUP = 2048
+# A description file's row group: a reader asking for one posting downloads its whole group. At 2048 rows that was about
+# 700 KB a posting; at 256, with statistics on the key alone (the other columns' made the footer ten times larger), a batch
+# of postings downloads about a quarter of the bytes. DuckDB cannot write groups this small, so pyarrow writes these files.
+DESCRIPTION_GROUP = 256
+DESCRIPTION_COLUMNS = ("key", "description", "sources")
 INDEX = "index.parquet"
 # A description shorter than this says nothing a title does not: the index marks the posting as having none, and a search
 # puts it below one that has.
@@ -458,24 +463,38 @@ def merge(connection: duckdb.DuckDBPyConnection, work: Path) -> dict[str, int]:
             FORMAT parquet, COMPRESSION zstd, PARTITION_BY (part), ROW_GROUP_SIZE {ROW_GROUP}
         )
     """)
+    ordered = work / "tmp" / "ordered"
+    shutil.rmtree(ordered, ignore_errors=True)
+    ordered.mkdir(parents=True)
     for part in sorted(parts.glob("part=*"), key=lambda folder: int(folder.name.split("=")[1])):
+        number = part.name.split("=")[1]
         connection.execute(f"""
             COPY (SELECT * FROM read_parquet('{part.as_posix()}/*.parquet', hive_partitioning = false) ORDER BY key)
-            TO '{(out / f"jobs_{part.name.split('=')[1]}.parquet").as_posix()}' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE {ROW_GROUP})
+            TO '{(ordered / f"{number}.parquet").as_posix()}' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE {ROW_GROUP})
         """)
         shutil.rmtree(part)
+        description_file(ordered / f"{number}.parquet", out / f"jobs_{number}.parquet")
     rows_out = connection.execute(f"SELECT count(*) FROM read_parquet('{out.as_posix()}/jobs_*.parquet')").fetchone()[0]
     if rows_out != rows_out_expected:
         raise SystemExit(f"{rows_out_expected} postings chosen and {rows_out} written")
+    # Every posting without its description, which a reader finds by the key in the file whose range holds it.
     connection.execute(f"""
         COPY (
             SELECT key, url, title, company, ats, location, country, remote, salary_min, salary_max, salary_currency, posted_at,
-                length(coalesce(description, '')) >= {DESCRIBED} AS described,
-                regexp_extract(filename, '([^/\\\\\\\\]+)$', 1) AS part, file_row_number AS row_number
-            FROM read_parquet('{out.as_posix()}/jobs_*.parquet', filename = true, file_row_number = true)
+                length(coalesce(description, '')) >= {DESCRIBED} AS described
+            FROM read_parquet('{ordered.as_posix()}/*.parquet')
         ) TO '{(out / INDEX).as_posix()}' (FORMAT parquet, COMPRESSION zstd, COMPRESSION_LEVEL 9)
     """)
+    shutil.rmtree(ordered)
     return {"rows_in": int(rows_in), "rows_out": rows_out}
+
+
+def description_file(ordered: Path, out: Path) -> None:
+    """A part's descriptions, as a reader looks them up: by key alone, so the other columns stay in the index."""
+    import pyarrow.parquet as pq  # imported here: only the build writes these files
+
+    table = pq.read_table(ordered, columns=list(DESCRIPTION_COLUMNS))
+    pq.write_table(table, out, row_group_size=DESCRIPTION_GROUP, compression="zstd", write_statistics=["key"])
 
 
 def file_entry(connection: duckdb.DuckDBPyConnection, path: Path) -> dict[str, object]:
@@ -513,7 +532,7 @@ def main() -> None:
         "built_at": datetime.now(UTC).isoformat(timespec="seconds"),
         **counts,
         "seconds": round(time.monotonic() - started),
-        "columns": ["key", *COMMON, "sources"],
+        "columns": list(DESCRIPTION_COLUMNS),
         "index": {"name": INDEX, "bytes": (out / INDEX).stat().st_size},
         "files": [file_entry(connection, path) for path in sorted(out.glob("jobs_*.parquet"))],
         "sources": reports,

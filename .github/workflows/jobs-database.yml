@@ -29,7 +29,7 @@ jobs:
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           df -h /
-      - run: pip install duckdb huggingface_hub
+      - run: pip install duckdb huggingface_hub pyarrow
       - run: python pipeline/build.py --out work
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}  # the private cache of the sources not changed since the last build

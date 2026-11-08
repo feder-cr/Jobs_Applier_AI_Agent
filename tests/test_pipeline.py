@@ -44,8 +44,10 @@ def merged(tmp_path: Path) -> tuple[dict, dict[str, tuple]]:
     (tmp_path / "tmp").mkdir()
     connection = build.connect(tmp_path)
     counts = build.merge(connection, tmp_path)
+    out = (tmp_path / "out").as_posix()
     rows = duckdb.connect().execute(
-        f"SELECT url, title, description, sources FROM read_parquet('{(tmp_path / 'out').as_posix()}/jobs_*.parquet')"
+        f"SELECT i.url, i.title, d.description, d.sources FROM read_parquet('{out}/index.parquet') AS i"
+        f" JOIN read_parquet('{out}/jobs_*.parquet') AS d USING (key)"
     ).fetchall()
     return counts, {row[0]: row for row in rows}
 
@@ -92,9 +94,11 @@ def test_the_index_points_at_each_description_without_holding_it(tmp_path: Path)
     out = (tmp_path / "out").as_posix()
     connection = duckdb.connect()
     columns = [row[0] for row in connection.execute(f"DESCRIBE SELECT * FROM read_parquet('{out}/index.parquet')").fetchall()]
-    assert "description" not in columns and "described" in columns
-    for title, part, row in connection.execute(f"SELECT title, part, row_number FROM read_parquet('{out}/index.parquet')").fetchall():
-        text = connection.execute(f"SELECT description FROM read_parquet('{out}/{part}', file_row_number = true) WHERE file_row_number = {row}").fetchone()[0]
+    assert "description" not in columns and "described" in columns and "part" not in columns
+    held = [row[0] for row in connection.execute(f"DESCRIBE SELECT * FROM read_parquet('{out}/jobs_*.parquet')").fetchall()]
+    assert held == list(build.DESCRIPTION_COLUMNS), "a description file holds what a lookup by key needs, nothing the index has"
+    for key, title in connection.execute(f"SELECT key, title FROM read_parquet('{out}/index.parquet')").fetchall():
+        text = connection.execute(f"SELECT description FROM read_parquet('{out}/jobs_*.parquet') WHERE key = ?", [key]).fetchone()[0]
         assert text == {"One": "First text", "Two": "Second text"}[title]
 
 
@@ -106,7 +110,9 @@ def test_row_groups_stay_at_the_measured_size_and_the_files_stay_small(tmp_path:
     assert len(files) > 1
     for file in files:
         largest = duckdb.connect().execute("SELECT max(row_group_num_rows) FROM parquet_metadata(?)", [file.as_posix()]).fetchone()[0]
-        assert largest <= build.ROW_GROUP
+        assert largest <= build.DESCRIPTION_GROUP
+        stats = duckdb.connect().execute("SELECT path_in_schema, bool_or(stats_min_value IS NOT NULL) FROM parquet_metadata(?) GROUP BY 1", [file.as_posix()]).fetchall()
+        assert {column for column, kept in stats if kept} == {"key"}, "statistics on the key alone keep the footer small"
 
 
 def test_rows_without_a_link_or_a_title_are_left_out(tmp_path: Path) -> None:

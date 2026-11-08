@@ -35,7 +35,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.6"]
+dev = ["pytest>=8", "ruff>=0.6", "pyarrow>=15"]  # pyarrow: the pipeline writes description files with it
 
 [project.scripts]
 aihawk = "aihawk.cli:run"
