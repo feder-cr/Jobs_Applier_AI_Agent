@@ -1,12 +1,11 @@
-"""The decision model's view of a posting's fit: six closed questions answered by the decision model (Jev by default) through OrcaRouter, as log-odds of evidence."""
+"""Jev's verdict on each posting: one closed question, whether the job is in line with the candidate, answered through
+OrcaRouter with how sure the yes is. That certainty is the posting's score, from 1 to 5."""
 
 from __future__ import annotations
 
 import asyncio
 import json
-import math
 import re
-import statistics
 from collections.abc import Callable
 from typing import Any
 
@@ -17,39 +16,32 @@ from aihawk.llm import explain, refused
 
 DESCRIPTION_CHARS = 24000
 DECISION_ENDPOINT = "/systemone"
-# Postings are sent in batches to save requests. The endpoint refuses more than 512 questions in one request: 85 postings at
-# six questions each make 510. A batch is also kept to MAX_CHARS, a rough cap on its size at about four characters a token.
-MAX_POSTINGS = 85
+# Postings are sent in batches to save requests. The endpoint refuses more than 512 questions in one request, one per
+# posting here. A batch is also kept to MAX_CHARS, a rough cap on its size at about four characters a token.
+MAX_POSTINGS = 512
 MAX_CHARS = 180_000 * 4
 # The words an endpoint's refusal uses for a request or context that is too big, which a smaller batch can cure.
 TOO_LARGE = re.compile(r"context|too (?:large|long|many)")
 
 
-def logit(p: float) -> float:
-    """The log-odds of a probability; nothing near the middle, which is no evidence either way."""
-    if abs(p - 0.5) < 0.15:
-        return 0.0
-    p = min(1 - 1e-4, max(1e-4, p))
-    return math.log(p / (1 - p))
+def question(goals: str, places: str) -> str:
+    """The one question, asked of every posting: in or out."""
+    return (
+        f"The candidate is looking for this: {goals} This job is in line with it: the same kind of work at their level, "
+        f"their CV shows what the posting requires, and it is based in or near {places}, or remote and open to people living there."
+    )
 
 
-def questions(goals: str, places: str) -> dict[str, tuple[str, int]]:
-    """The six questions, each with the sign its yes adds to the evidence."""
-    return {
-        "role": (f"The candidate is looking for this: {goals} This job is that kind of work, in the same field.", 1),
-        "must_haves": ("Every requirement the posting states appears in the candidate's CV.", 1),
-        "gap": ("The posting requires a skill, licence, language or experience that the candidate's CV does not show.", -1),
-        "level": (f"The candidate is looking for this: {goals} The posting's seniority matches.", 1),
-        "location": (f"The job is based in or near {places}, or it is remote and open to people living there.", 1),
-        "elsewhere": (f"The job is based somewhere far from {places}, in a place the candidate could not commute to.", -1),
-    }
+def score(certainty: float) -> float:
+    """The score of a yes this sure, from 1 for a sure no to 5 for a sure yes."""
+    return round(1 + 4 * min(1.0, max(0.0, certainty)), 1)
 
 
-async def evidence(
-    client: AsyncOpenAI, model: str, cv: str, jobs: list[Job], asked: dict[str, tuple[str, int]], progress: Callable[[int], None], why: Callable[[str], None]
+async def fits(
+    client: AsyncOpenAI, model: str, cv: str, jobs: list[Job], asked: str, progress: Callable[[int], None], why: Callable[[str], None]
 ) -> list[float | None]:
-    """One value per posting, in order; None where it was not judged. The groups go at once, and `progress` is told the postings done so far.
-    `why` is told, once per failed request, in plain words why its postings were not judged."""
+    """How sure Jev is that each posting is in line, in order; None where it gave no answer. The groups go at once, and
+    `progress` is told the postings done so far. `why` is told, once per failed request, in plain words why."""
     done = 0
 
     async def read(group: list[Job]) -> list[float | None]:
@@ -63,14 +55,21 @@ async def evidence(
     return [value for part in parts for value in part]
 
 
-def groups(model: str, cv: str, jobs: list[Job], asked: dict[str, tuple[str, int]]) -> list[list[Job]]:
-    """In order, each group takes the next postings while it has fewer than MAX_POSTINGS and its request stays under MAX_CHARS."""
+def groups(model: str, cv: str, jobs: list[Job], asked: str) -> list[list[Job]]:
+    """In order, each group takes the next postings while it has fewer than MAX_POSTINGS and its request stays under
+    MAX_CHARS. A posting's size is counted once, not the whole request again for each one."""
+    base = len(json.dumps(request_body(model, cv, [], asked), ensure_ascii=False))
     out: list[list[Job]] = []
+    size = base
     for job in jobs:
-        if out and len(out[-1]) < MAX_POSTINGS and len(json.dumps(request_body(model, cv, [*out[-1], job], asked), ensure_ascii=False)) <= MAX_CHARS:
+        index = len(out[-1]) if out else 0
+        added = len(json.dumps({_name(index): _posting(job), **_question(index, job, asked)}, ensure_ascii=False)) + 8
+        if out and len(out[-1]) < MAX_POSTINGS and size + added <= MAX_CHARS:
             out[-1].append(job)
+            size += added
         else:
             out.append([job])
+            size = base + len(json.dumps({_name(0): _posting(job), **_question(0, job, asked)}, ensure_ascii=False)) + 8
     return out
 
 
@@ -81,7 +80,7 @@ def too_large(error: BaseException) -> bool:
     return error.status_code == 413 or (error.status_code == 400 and TOO_LARGE.search(str(error).lower()) is not None)
 
 
-async def _read(client: AsyncOpenAI, model: str, cv: str, jobs: list[Job], asked: dict[str, tuple[str, int]], why: Callable[[str], None]) -> list[float | None]:
+async def _read(client: AsyncOpenAI, model: str, cv: str, jobs: list[Job], asked: str, why: Callable[[str], None]) -> list[float | None]:
     """One request's values. A request too large for the endpoint is split in two and each half tried again. Any other failure ends
     the request at once, without a split: its postings have no verdict, and `why` says why."""
     try:
@@ -96,21 +95,21 @@ async def _read(client: AsyncOpenAI, model: str, cv: str, jobs: list[Job], asked
         why(explain(error))
         return [None] * len(jobs)
     answers = reply.get("answers") or {}
-    values = [_verdict(answers, index, asked) for index in range(len(jobs))]
+    values = [_verdict(answers, index) for index in range(len(jobs))]
     if any(value is None for value in values):
         why("OrcaRouter's answer left out some verdicts")
     return values
 
 
-def request_body(model: str, cv: str, jobs: list[Job], asked: dict[str, tuple[str, int]]) -> dict[str, Any]:
-    """The postings as p00, p01, ... in one state, each statement asked of each posting by name, and the posting named in its wording."""
+def request_body(model: str, cv: str, jobs: list[Job], asked: str) -> dict[str, Any]:
+    """The postings as p00, p01, ... in one state, the question asked of each posting by name, the posting named in its wording."""
     state = {"candidate_cv": cv, "job_postings": {_name(index): _posting(job) for index, job in enumerate(jobs)}}
-    questions_of = {
-        f"{_name(index)}_{name}": {"type": "noul", "instructions": f"Posting {_name(index)} ({job.title} at {job.company}): {text}"}
-        for index, job in enumerate(jobs)
-        for name, (text, _) in asked.items()
-    }
-    return {"model": model, "state": state, "questions": questions_of}
+    questions = {name: entry for index, job in enumerate(jobs) for name, entry in _question(index, job, asked).items()}
+    return {"model": model, "state": state, "questions": questions}
+
+
+def _question(index: int, job: Job, asked: str) -> dict[str, Any]:
+    return {f"{_name(index)}_fit": {"type": "noul", "instructions": f"Posting {_name(index)} ({job.title} at {job.company}): {asked}"}}
 
 
 def _name(index: int) -> str:
@@ -121,17 +120,10 @@ def _posting(job: Job) -> str:
     return f"{job.title} at {job.company}. Location: {job.location}\n\n{job.description[:DESCRIPTION_CHARS]}"
 
 
-def _verdict(answers: dict[str, Any], index: int, asked: dict[str, tuple[str, int]]) -> float | None:
-    """A posting's evidence: each answer's log-odds, signed as its question says, added up. A missing answer fails that posting alone."""
+def _verdict(answers: dict[str, Any], index: int) -> float | None:
+    """How sure the yes is, from 0 to 1. A missing answer, or one of another shape, fails that posting alone."""
     try:
-        return sum(sign * logit(answers[f"{_name(index)}_{name}"]["noul"]) for name, (_, sign) in asked.items())
-    except (KeyError, TypeError):
+        value = float(answers[f"{_name(index)}_fit"]["noul"])
+    except (KeyError, TypeError, ValueError):
         return None
-
-
-def fuse(lexical: list[float], evidence_of: list[float]) -> list[float]:
-    """Each posting's title fit as a z-score over its batch, plus its evidence: the order the funnel and the list both use."""
-    if not lexical:
-        return []
-    mean, spread = statistics.mean(lexical), statistics.pstdev(lexical) or 1.0
-    return [(value - mean) / spread + added for value, added in zip(lexical, evidence_of, strict=True)]
+    return value if 0.0 <= value <= 1.0 else None

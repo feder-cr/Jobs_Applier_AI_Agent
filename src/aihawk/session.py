@@ -13,18 +13,14 @@ from aihawk.apply import MAILBOXES, Outcome, apply_to_job, signed_in, site_of
 from aihawk.apply import sign_in as sign_in_browser
 from aihawk.config import KEY_ENV, KEY_URL, Config, ConfigError, load_config
 from aihawk.database import description_files, search, stored_descriptions
-from aihawk.judge import score_job
 from aihawk.llm import SPEND, explain, make_client, money, refused
 from aihawk.plugins import Plugin, always_plugins, load_plugins, plugin_for
 from aihawk.profile import ensure_account_password, import_answers_file, install_resume, save_setting
-from aihawk.shortlist import MAX_POSTINGS, evidence, questions
+from aihawk.shortlist import MAX_POSTINGS, fits, question, score
 from aihawk.store import SENT_WORDS, SUBMITTED, Store, Stored, write_applied
 
-# The funnel: the next WIDE postings by title are weighed by the decision model, one full request of it, and all of them
-# join the queue the judge takes its pages from, the best by that weight first. Nothing is passed over: a person who keeps
-# turning pages gets every job judged.
+# Jev reads the next WIDE postings the search ranked best, as many as one request holds, and scores each of them.
 WIDE = MAX_POSTINGS
-SCORING_AT_ONCE = 5
 
 Log = Callable[[str], None]
 
@@ -116,65 +112,38 @@ class Session:
         new = sum(self.store.add(job) for job in jobs)
         return new
 
-    async def funnel(self, log: Log, status: Log) -> int:
-        """Weigh the next WIDE postings by title with the decision model and put them all in the judge's queue, which the
-        title's fit and that evidence order. Returns how many joined it."""
+    async def read(self, log: Log, status: Callable[[int, int], None]) -> int:
+        """Jev reads the next WIDE postings the search ranked best and scores each one by how sure it is that the job is in
+        line with the candidate. `status` is told the postings read so far, of how many. A posting Jev gave no answer for
+        is set aside, not asked again and again. Returns how many were scored."""
         batch = self.store.with_status("new")[:WIDE]
         if not batch:
             return 0
         # By key: that reaches jobs found in any earlier build too.
-        texts = await _read_descriptions([item.job.id for item in batch], self.description_files, status, log)
+        texts = await _read_descriptions([item.job.id for item in batch], self.description_files, lambda _: None, log)
         for item, text in zip(batch, texts, strict=True):
             self.store.set_description(item.job.id, text)
         jobs = [replace(item.job, description=text) for item, text in zip(batch, texts, strict=True)]
         cv = self.config.cv.read_text(encoding="utf-8-sig")
-        asked = questions(self.config.goals, _places(self.config))
-        def shown(done: int) -> None:
-            status(f"Jev reads {done}/{len(jobs)}")
-
+        asked = question(self.config.goals, _places(self.config))
         reasons: list[str] = []
         try:
-            # The client is read here: with no key every verdict fails, the title alone decides, and the log says so once.
-            values = await evidence(self.client, self.config.decision_model, cv, jobs, asked, shown, reasons.append)
+            values = await fits(self.client, self.config.decision_model, cv, jobs, asked, lambda done: status(done, len(jobs)), reasons.append)
         except Exception as error:
-            # Only the client can fail here; a batch that fails is a failed verdict inside evidence.
+            # Only the client can fail here; a batch that fails is a failed verdict inside fits.
             if refused(error):
                 raise
             values = [None] * len(jobs)
             reasons.append(explain(error))
-        failed = sum(value is None for value in values)
+        failed = [job.id for job, value in zip(jobs, values, strict=True) if value is None]
         if failed:
             why = "; ".join(dict.fromkeys(reasons))
-            log(f"{failed:,} of {len(jobs):,} jobs could not be read ({why}): they are ranked by their title alone.")
+            log(f"{len(failed):,} of {len(jobs):,} jobs could not be read" + (f" ({why})." if why else "."))
+            self.store.set_statuses(failed, "passed_over")
         for job, value in zip(jobs, values, strict=True):
             if value is not None:
-                self.store.set_evidence(job.id, value)
-        # One Jev could not read joins too, ordered by its title alone: the judge reads it all the same.
-        self.store.set_statuses([job.id for job in jobs], "shortlisted")
-        return len(jobs)
-
-    async def score(self, items: list[Stored], on_scored: Callable[[], None], log: Log) -> None:
-        cv = self.config.cv.read_text(encoding="utf-8-sig")
-        limit = asyncio.Semaphore(SCORING_AT_ONCE)
-
-        async def one(item: Stored) -> None:
-            async with limit:
-                try:
-                    # The description the funnel read from the database, or the title alone: no page is read from here.
-                    report = await score_job(self.client, self.config.judge_model, item.job, cv, self.config.goals)
-                except Exception as error:
-                    # One posting that cannot be judged must not stop the others.
-                    if refused(error):
-                        raise
-                    log(f"{item.job.company}: not judged: {explain(error)}")
-                    return
-            self.store.set_score(item.job.id, report["score"], report)
-            on_scored()
-
-        # A refused key is raised after the others, so the screen can ask for another one.
-        for result in await asyncio.gather(*(one(item) for item in items), return_exceptions=True):
-            if isinstance(result, Exception):
-                raise result
+                self.store.set_score(job.id, score(value), {})
+        return len(jobs) - len(failed)
 
     def _own_cv(self) -> Path:
         """The person's CV as they gave it, which goes with every form."""

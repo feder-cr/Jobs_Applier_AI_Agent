@@ -21,10 +21,7 @@ DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash"
 # For the plan and the other short calls of a search. deepseek-v4.1-flash did not keep the plan's nested schema, and
 # z-ai/glm-5.3-flash was too slow for a search.
 DEFAULT_QUICK_MODEL = "google/gemini-3.5-flash"
-# Writes the score and the report of each posting the funnel shortlists.
-DEFAULT_JUDGE_MODEL = "deepseek/deepseek-v4.1-flash"
-# Answers the six questions that shortlist the postings. Kept as the default: shortlist.py turns its answers into evidence by rules
-# that were checked on this model, and another model answers differently, so those rules need checking again.
+# Answers, for each posting, whether it is in line with the candidate, and how sure it is: that is the posting's score.
 DEFAULT_DECISION_MODEL = "typesafe/jev-1.14"
 # The Hugging Face dataset the pipeline publishes to. It was GitHub's releases until 2026-11-08: see pipeline/publish.py.
 DEFAULT_DATABASE = "https://huggingface.co/datasets/feder-cr/jobs/resolve/main/manifest.json"
@@ -91,7 +88,6 @@ class Config:
     max_age_days: int = DEFAULT_MAX_AGE_DAYS
     model: str = DEFAULT_MODEL
     quick_model: str = DEFAULT_QUICK_MODEL
-    judge_model: str = DEFAULT_JUDGE_MODEL
     decision_model: str = DEFAULT_DECISION_MODEL
     filters: Filters = field(default_factory=Filters)
 
@@ -248,7 +244,6 @@ def load_config(workspace: Path) -> Config:
         max_age_days=_days(raw.get("max_age_days", DEFAULT_MAX_AGE_DAYS), "max_age_days"),
         model=str(raw.get("model") or DEFAULT_MODEL),
         quick_model=str(raw.get("quick_model") or DEFAULT_QUICK_MODEL),
-        judge_model=str(raw.get("judge_model") or DEFAULT_JUDGE_MODEL),
         decision_model=str(raw.get("decision_model") or DEFAULT_DECISION_MODEL),
         filters=Filters(
             _words(filters.get("include"), "filters.include"),

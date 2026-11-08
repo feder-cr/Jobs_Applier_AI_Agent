@@ -27,7 +27,6 @@ from aihawk.apply import (
     sign_in,
 )
 from aihawk.database import Job
-from aihawk.judge import score_from, score_job
 from fakes import ScriptedBrowser, ScriptedModel, tool_call
 
 JOB = Job("g:a:1", "Acme", "Engineer", "Rome", "https://u", "https://u/apply", "Build things")
@@ -433,31 +432,6 @@ class Typing(ScriptedBrowser):
             self.busy -= 1
             return SimpleNamespace(isError=True, content=[SimpleNamespace(text="still typing")])
         return await super().call_tool(name, arguments)
-
-
-@pytest.mark.parametrize(
-    ("answers", "score"),
-    [
-        ({"role": "yes", "must_haves": "yes", "level": "yes", "location": "yes"}, 5.0),
-        ({"role": "yes", "must_haves": "yes", "level": "unclear", "location": "unclear"}, 4.5),
-        ({"role": "yes", "must_haves": "unclear", "level": "unclear", "location": "unclear"}, 3.5),
-        ({"role": "unclear", "must_haves": "unclear", "level": "unclear", "location": "unclear"}, 2.5),
-        ({"role": "yes", "must_haves": "no", "level": "yes", "location": "yes"}, 2.5),
-        ({"role": "yes", "must_haves": "yes", "level": "yes", "location": "no"}, 1.0),
-        ({"role": "no", "must_haves": "yes", "level": "yes", "location": "yes"}, 2.5),
-        ({"role": "no", "must_haves": "no", "level": "no", "location": "no"}, 1.0),
-    ],
-)
-def test_the_score_comes_from_closed_answers_and_unclear_moves_nothing(answers: dict[str, str], score: float) -> None:
-    assert score_from(answers) == score
-
-
-def test_the_goals_reach_the_model_and_the_score_is_computed_not_asked() -> None:
-    reply = {"role": "yes", "must_haves": "yes", "level": "unclear", "location": "unclear", "summary": "s", "gaps": [], "legitimacy": "credible"}
-    model = ScriptedModel(json.dumps(reply))
-    report = asyncio.run(score_job(model, "m", JOB, "the cv", "remote only"))  # type: ignore[arg-type]
-    assert report["score"] == 4.5
-    assert "remote only" in model.requests[0]["messages"][1]["content"]
 
 
 class SaysNothingYet(ScriptedBrowser):

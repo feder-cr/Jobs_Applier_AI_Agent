@@ -16,7 +16,7 @@ from textual.widgets import DataTable, Footer, Static
 from aihawk.apply import MAILBOXES, Outcome, mail_provider
 from aihawk.config import KEY_ENV, KEY_URL, ConfigError
 from aihawk.database import DatabaseError
-from aihawk.llm import SPEND, explain, money, refused
+from aihawk.llm import explain, refused
 from aihawk.screens import WIDE_ENOUGH, JobDetails, Rows, Said, SendBatch, SentDetails, SentList, Settings, SignIn, TextPrompt
 from aihawk.session import Session
 from aihawk.store import SUBMITTED, Stored
@@ -172,7 +172,7 @@ class AIHawk(App[None]):
         return (Text(mark, style="bold green"), score, Text(item.job.company), Text(item.job.title), *place)
 
     def refresh_jobs(self, current: str | None = None) -> None:
-        """The page shown, as it was made: sorted once, by the judge's score, when all of it was scored. A job tried since
+        """The page shown, as it was made: sorted once, by Jev's score, when all of it was scored. A job tried since
         shows its sign, and nothing moves. The cursor stays on the job it was on."""
         table = self.query_one(DataTable)
         current = current or self.current_id()
@@ -200,7 +200,7 @@ class AIHawk(App[None]):
         job_id = self.current_id()
         return self.session.store.get(job_id) if job_id else None
 
-    # The flow: key, resume, find, judge.
+    # The flow: key, resume, find, score.
 
     @work(exclusive=True, group="flow")
     async def start(self) -> None:
@@ -237,7 +237,7 @@ class AIHawk(App[None]):
             scored = [item.job.id for item in session.store.all() if item.score is not None]
             self.pages = [scored[start : start + PAGE] for start in range(0, len(scored), PAGE)]
             self.refresh_jobs()
-            await self.judge()
+            await self.score()
         except (ConfigError, DatabaseError) as error:
             self.say(str(error))
         except Exception as error:  # noqa: BLE001  The screen stays up and says what went wrong, instead of a traceback over it.
@@ -245,41 +245,26 @@ class AIHawk(App[None]):
         finally:
             self.show_heading()
 
-    async def judge(self) -> None:
-        """Pages, PAGE jobs each, up to the one after the page shown, then stop: the judge works one page ahead of the
-        person, so a long search never pays to score what nobody will reach. A page is the queue's first PAGE jobs, Jev's
-        best, all scored before it shows; when the queue is short of a page, Jev reads the next postings into it. The
-        progress is said on one line, which the next count replaces."""
+    async def score(self) -> None:
+        """Pages, PAGE jobs each, up to the one after the page shown, then stop: Jev reads one page ahead of the person.
+        It reads the next postings the search ranked best, as many as one request holds, and scores them all; a page is
+        the best PAGE of what it scored and no page holds yet, sorted once, before it shows. The progress is said on one
+        line, which the next count replaces."""
         session = self.session
         store = session.store
         said = self.query_one(Said)
-        await session.priced()
         while len(self.pages) < self.page + 2:
-            said.say(f"Preparing page {len(self.pages) + 1}…", again=True)
-            paged = {job_id for page in self.pages for job_id in page}
-            batch = [item for item in store.queue() if item.job.id not in paged]
-            while len(batch) < PAGE and store.with_status("new"):
-                await session.funnel(self.say, lambda _: None)
-                batch = [item for item in store.queue() if item.job.id not in paged]
-            batch = batch[:PAGE]
-            if not batch:
-                break
             number = len(self.pages) + 1
-            before = SPEND.total
-            done = 0
-
-            def counted(number: int = number, size: int = len(batch)) -> None:
-                nonlocal done
-                done += 1
-                said.say(f"Preparing page {number}… {done} of {size}", again=True)
-
-            said.say(f"Preparing page {number}… 0 of {len(batch)}", again=True)
-            await session.score(batch, counted, self.say)
-            ids = {item.job.id for item in batch}
-            # Sorted once, now: the scored by their score, one the judge could not read below them.
-            self.pages.append([item.job.id for item in store.all() if item.job.id in ids])
-            spent = await session.settled() - before
-            said.say(f"Page {number} ready" + (f", {money(spent)}." if spent else "."), again=True)
+            paged = {job_id for page in self.pages for job_id in page}
+            spare = [item.job.id for item in store.all() if item.score is not None and item.job.id not in paged]
+            if len(spare) < PAGE and store.with_status("new"):
+                said.say(f"Preparing page {number}…", again=True)
+                await session.read(self.say, lambda done, size, number=number: said.say(f"Preparing page {number}… {done} of {size}", again=True))
+                continue
+            if not spare:
+                break
+            self.pages.append(spare[:PAGE])
+            said.say(f"Page {number} ready.", again=True)
             if self.wanted == len(self.pages) - 1:
                 self.wanted = None
                 self.page = len(self.pages) - 1
@@ -302,7 +287,7 @@ class AIHawk(App[None]):
             return
         store = self.session.store
         paged = {job_id for page in self.pages for job_id in page}
-        if not store.with_status("new") and all(item.job.id in paged for item in store.queue()):
+        if not store.with_status("new") and all(item.job.id in paged for item in store.all() if item.score is not None):
             self.say("No more jobs for this search.")
             return
         self.wanted = target
@@ -349,13 +334,15 @@ class AIHawk(App[None]):
         if not self.is_running or self.applying() or any(worker.group == "flow" and worker.is_running for worker in self.workers):
             return
         store = self.session.store
-        if len(self.pages) < self.page + 2 and (store.queue() or store.with_status("new")):
+        paged = {job_id for page in self.pages for job_id in page}
+        spare = any(item.score is not None and item.job.id not in paged for item in store.all())
+        if len(self.pages) < self.page + 2 and (spare or store.with_status("new")):
             self.more_jobs()
 
     @work(exclusive=True, group="flow")
     async def more_jobs(self) -> None:
         try:
-            await self.judge()
+            await self.score()
         except Exception as error:  # noqa: BLE001  Said on the screen, as in start.
             self.failed(error)
         finally:
@@ -380,9 +367,8 @@ class AIHawk(App[None]):
             ("mail", "Your mail", self.mail_words()),
             ("key", "OrcaRouter key", f"from {KEY_ENV}" if config.key_from_environment() else "saved" if config.api_key() else "none yet"),
             ("model", "Forms model", config.model),
-            ("judge_model", "Scoring model", config.judge_model),
             ("quick_model", "Search plan model", config.quick_model),
-            ("decision_model", "Shortlist model", config.decision_model),
+            ("decision_model", "Scoring model", config.decision_model),
             ("folder", "Your files", str(config.workspace)),
         ]
 

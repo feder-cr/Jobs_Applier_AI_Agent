@@ -45,12 +45,7 @@ PROFILE = {
     "goals": "Senior Python work.",
     "answers": {"email": "ada@example.com", "phone": "", "location": "Milan", "linkedin": "", "website": "", "current_company": ""},
 }
-FIELDS = {"summary": "Fits.", "gaps": ["No Kubernetes"], "legitimacy": "credible"}
 CV_TEXT = "# Ada Rossi\n\nSenior Python Engineer at Acme for five years, working on backend services.\n"
-
-
-def report(role: str, must_haves: str) -> str:
-    return json.dumps({"role": role, "must_haves": must_haves, "level": "unclear", "location": "unclear", **FIELDS})
 
 
 def answers_of(config: Config) -> dict[str, str]:
@@ -110,19 +105,22 @@ class ScriptedModelForApp:
     def __init__(self) -> None:
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
         self.requests: list[dict[str, Any]] = []
+        self.posts: list[dict[str, Any]] = []
 
     async def post(self, path: str, *, body: dict[str, Any], cast_to: type) -> dict[str, Any]:
-        """The decision endpoint: no opinion on any question, so the evidence is zero and the title alone decides."""
-        return {"answers": {name: {"type": "noul", "noul": 0.5} for name in body["questions"]}}
+        """The decision endpoint: sure of Bestco, less of Lowly, and of anything else it says no."""
+        self.posts.append(body)
+
+        def sure(instructions: str) -> float:
+            return 0.875 if "Bestco" in instructions else 0.625 if "Lowly" in instructions else 0.125
+
+        return {"answers": {name: {"type": "noul", "noul": sure(question["instructions"])} for name, question in body["questions"].items()}}
 
     async def _create(self, **request: Any) -> Any:
         self.requests.append(request)
         name = (request.get("response_format") or {}).get("json_schema", {}).get("name")
         if name == "search_profile":
             content = json.dumps(PROFILE)
-        elif name == "job_report":
-            text = request["messages"][1]["content"]
-            content = report("yes", "yes") if "Bestco" in text else report("yes", "unclear") if "Lowly" in text else report("no", "unclear")
         else:
             content = "# Ada Rossi"
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content, tool_calls=None))])
@@ -159,7 +157,7 @@ def test_a_resume_is_all_it_takes_to_get_the_best_jobs_first(home: Path, resume:
             await settle(pilot, app)
             assert companies(app) == ["Bestco", "Lowly", "Noplugin"]
             table = app.query_one(DataTable)
-            assert table.get_row_at(0)[1] == "4.5"
+            assert [str(table.get_row_at(row)[1]) for row in range(3)] == ["4.5", "3.5", "1.5"]
             # How many jobs the whole database holds, four, not the three this search found, on the right of the heading.
             assert str(app.query_one("#count", Static).render()) == "Page 1 · 4 jobs"
             assert not any("database" in line.text for line in app.query_one(RichLog).lines)
@@ -438,7 +436,9 @@ def test_enter_shows_why_a_job_fits(home: Path, resume: Path) -> None:
             await settle(pilot, app)
             await pilot.press("enter")
             await wait_for_screen(pilot, JobDetails)
-            assert app.screen.item.report["gaps"] == ["No Kubernetes"]
+            # The job and its score, nothing else: Jev answers in or out, and writes no reasons.
+            text = str(app.screen.query_one("#summary Static").render())
+            assert "Bestco" in text and "Score 4.5/5" in text
             await pilot.press("escape")
 
     asyncio.run(run())
@@ -766,9 +766,10 @@ def test_a_posting_with_no_description_is_judged_on_its_title_and_no_page_is_rea
         raise AssertionError("a page was read from the person's computer")
 
     monkeypatch.setattr("urllib.request.urlopen", no_page)
-    asyncio.run(session.score([session.store.get("bare"), session.store.get("told")], lambda: None, lambda _: None))  # type: ignore[list-item]
+    monkeypatch.setattr(session_module, "stored_descriptions", lambda keys, files, done, problem: ["Stored text." if key == "told" else "" for key in keys])
+    asyncio.run(session.read(lambda _: None, lambda done, size: None))
     assert session.store.get("bare").score is not None and session.store.get("bare").job.description == ""  # type: ignore[union-attr]
-    asked = " ".join(request["messages"][1]["content"] for request in session._client.requests)  # type: ignore[union-attr]
+    asked = json.dumps(session._client.posts)  # type: ignore[union-attr]
     assert "Stored text." in asked
     session.close()
 
