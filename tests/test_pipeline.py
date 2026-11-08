@@ -92,7 +92,7 @@ def test_the_index_points_at_each_description_without_holding_it(tmp_path: Path)
     out = (tmp_path / "out").as_posix()
     connection = duckdb.connect()
     columns = [row[0] for row in connection.execute(f"DESCRIBE SELECT * FROM read_parquet('{out}/index.parquet')").fetchall()]
-    assert "description" not in columns
+    assert "description" not in columns and "described" in columns
     for title, part, row in connection.execute(f"SELECT title, part, row_number FROM read_parquet('{out}/index.parquet')").fetchall():
         text = connection.execute(f"SELECT description FROM read_parquet('{out}/{part}', file_row_number = true) WHERE file_row_number = {row}").fetchone()[0]
         assert text == {"One": "First text", "Two": "Second text"}[title]
@@ -178,6 +178,16 @@ def test_a_delta_holds_the_postings_new_or_changed_and_the_keys_gone(tmp_path: P
     assert (adds, drops) == (2, 1)
     rows = duckdb.connect().execute(f"SELECT op, key, title FROM read_parquet('{(tmp_path / 'delta.parquet').as_posix()}') ORDER BY key").fetchall()
     assert rows == [("drop", "a", None), ("add", "b", "New title"), ("add", "d", "New")]
+
+
+def test_a_column_the_previous_index_lacks_changes_every_posting_once(tmp_path: Path) -> None:
+    write_index(tmp_path / "index.parquet", [("a", "Same"), ("b", "Same too")])
+    connection = duckdb.connect()
+    index = (tmp_path / "index.parquet").as_posix()
+    connection.execute(f"COPY (SELECT * REPLACE ('true' AS described) FROM read_parquet('{index}')) TO '{(tmp_path / 'after.parquet').as_posix()}' (FORMAT parquet)")
+    connection.execute(f"COPY (SELECT * EXCLUDE (described) FROM read_parquet('{index}')) TO '{(tmp_path / 'before.parquet').as_posix()}' (FORMAT parquet)")
+    adds, drops = publish.write_delta((tmp_path / "before.parquet").as_posix(), tmp_path / "after.parquet", tmp_path / "delta.parquet")
+    assert (adds, drops) == (2, 0)
 
 
 def test_deltas_go_to_their_month_and_only_the_dated_builds_are_ever_cleared() -> None:

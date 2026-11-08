@@ -26,7 +26,7 @@ import duckdb
 LATEST = "jobs-latest"
 DATED = re.compile(r"^jobs-\d{8}-\d{6}$")
 # The columns a delta carries: the index's own, without the file and row that point into one build's files.
-INDEX_COLUMNS = ("url", "title", "company", "ats", "location", "country", "remote", "salary_min", "salary_max", "salary_currency", "posted_at")
+INDEX_COLUMNS = ("url", "title", "company", "ats", "location", "country", "remote", "salary_min", "salary_max", "salary_currency", "posted_at", "described")
 KEEP = 6  # five-hourly builds: about 30 hours of releases, so a reader mid-search does not lose its files
 MIN_SHARE_OF_PREVIOUS = 0.7
 
@@ -91,7 +91,10 @@ def write_delta(previous_index: str, index: Path, out: Path) -> tuple[int, int]:
     connection = duckdb.connect()
     try:
         connection.execute("INSTALL httpfs; LOAD httpfs;")
-        connection.execute(f"CREATE TABLE before AS SELECT key, hash({columns}) AS h FROM read_parquet(?)", [previous_index])
+        # A column added since the previous build is NULL there: every posting is then changed once, and the delta carries it.
+        held = {row[0] for row in connection.execute("DESCRIBE SELECT * FROM read_parquet(?)", [previous_index]).fetchall()}
+        before = ", ".join(column if column in held else "NULL" for column in INDEX_COLUMNS)
+        connection.execute(f"CREATE TABLE before AS SELECT key, hash({before}) AS h FROM read_parquet(?)", [previous_index])
         connection.execute(f"CREATE TABLE after AS SELECT key, hash({columns}) AS h FROM read_parquet(?)", [index.as_posix()])
         connection.execute("""
             CREATE TABLE changed AS

@@ -12,7 +12,7 @@ from openai import AsyncOpenAI
 from aihawk.apply import MAILBOXES, Outcome, apply_to_job, signed_in, site_of
 from aihawk.apply import sign_in as sign_in_browser
 from aihawk.config import KEY_ENV, KEY_URL, Config, ConfigError, load_config
-from aihawk.database import built_at, description_files, search, stored_descriptions, with_description
+from aihawk.database import built_at, description_files, search, stored_descriptions
 from aihawk.judge import score_job
 from aihawk.llm import SPEND, explain, make_client, money, refused
 from aihawk.plugins import Plugin, always_plugins, load_plugins, plugin_for
@@ -161,12 +161,8 @@ class Session:
         async def one(item: Stored) -> None:
             async with limit:
                 try:
-                    job = item.job
-                    if not job.description.strip():
-                        # Many sources publish no text, and a score from the title alone says little: the posting's own page often has it.
-                        job = await asyncio.to_thread(with_description, job, self.description_files)
-                        self.store.set_description(job.id, job.description)
-                    report = await score_job(self.client, self.config.judge_model, job, cv, self.config.goals)
+                    # The description the funnel read from the database, or the title alone: no page is read from here.
+                    report = await score_job(self.client, self.config.judge_model, item.job, cv, self.config.goals)
                 except Exception as error:
                     # One posting that cannot be judged must not stop the others.
                     if refused(error):

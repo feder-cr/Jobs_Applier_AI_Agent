@@ -38,6 +38,9 @@ RAW = "https://raw.githubusercontent.com"
 ROWS_PER_FILE = 200_000
 ROW_GROUP = 2048
 INDEX = "index.parquet"
+# A description shorter than this says nothing a title does not: the index marks the posting as having none, and a search
+# puts it below one that has.
+DESCRIBED = 200
 
 COMMON = (
     "url", "title", "company", "ats", "location", "country", "remote",
@@ -347,6 +350,7 @@ def merge(connection: duckdb.DuckDBPyConnection, work: Path) -> dict[str, int]:
     connection.execute(f"""
         COPY (
             SELECT key, url, title, company, ats, location, country, remote, salary_min, salary_max, salary_currency, posted_at,
+                length(coalesce(description, '')) >= {DESCRIBED} AS described,
                 regexp_extract(filename, '([^/\\\\\\\\]+)$', 1) AS part, file_row_number AS row_number
             FROM read_parquet('{out.as_posix()}/jobs_*.parquet', filename = true, file_row_number = true)
         ) TO '{(out / INDEX).as_posix()}' (FORMAT parquet, COMPRESSION zstd, COMPRESSION_LEVEL 9)
