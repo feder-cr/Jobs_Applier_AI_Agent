@@ -276,8 +276,9 @@ class AIHawk(App[None]):
             self.keep_ahead()
 
     def keep_ahead(self) -> None:
-        """Fewer than LOOKAHEAD scored jobs below the cursor, and the next ones are scored, unless a flow is already at it."""
-        if any(worker.group == "flow" and worker.is_running for worker in self.workers):
+        """Fewer than LOOKAHEAD scored jobs below the cursor, and the next ones are scored, unless a flow is already at it.
+        A cursor move still queued while the app quits finds the store closed: there is nothing left to score for."""
+        if not self.is_running or any(worker.group == "flow" and worker.is_running for worker in self.workers):
             return
         store = self.session.store
         if self.scored_ahead() < LOOKAHEAD and (store.with_status("shortlisted") or store.with_status("new")):
