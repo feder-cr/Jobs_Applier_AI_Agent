@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -24,6 +25,7 @@ import time
 import urllib.request
 import zipfile
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -92,6 +94,11 @@ AGGREGATORS = (
     "remoteok", "remotive", "himalayas", "workingnomads", "builtin", "themuse", "wellfound", "ycombinator", "getonbrd",
     "cryptojobs", "fashionjobs", "jobsch", "programathor", "jobtech", "arbetsformedlingen", "manfred", "welcometothejungle",
 )  # fmt: skip
+# Boards whose posting pages, opened on 2026-11-08, sent the applicant on to one of the companies' own forms AIHawk applies
+# on: such a posting goes, as the job is the form's. EURES, the Bundesagentur, Welcome to the Jungle and Job Bank showed no
+# such link in their pages, and are not opened.
+LINKING_BOARDS = ("jobsch", "arbeitnow", "wellfound", "cryptojobs", "workingnomads", "arbetsformedlingen", "remotive")
+BOARD_CHECKS = "board_checks.json"
 LEGAL_FORMS = (
     "inc", "llc", "ltd", "limited", "gmbh", "ag", "sa", "sas", "srl", "spa", "corp", "corporation", "co", "company", "plc",
     "bv", "nv", "oy", "ab", "as", "pty", "pvt", "lp", "llp", "kg", "group", "holdings",
@@ -396,14 +403,6 @@ SOURCES = (
     Source("pennydata", "https://huggingface.co/datasets/pennydata/greenhouse-jobs-snapshot-2026-10", "CC0-1.0", lambda _: select(
         f"read_csv('{_hf_newest('pennydata/greenhouse-jobs-snapshot-2026-10', 'snapshot-', '.csv')[0]}', all_varchar=true)", url="url", ats="'greenhouse'",
     )),
-    Source("linkedin-ryang2", "https://huggingface.co/datasets/ryang2/linkedin-job-scrape", "OpenRAIL-M: research only, no redistribution", lambda _: select(
-        f"read_parquet({_hf_newest('ryang2/linkedin-job-scrape', 'data/', '.parquet', 2)!r}, union_by_name=true)",
-        url="job_url", title="job_title", company="company_name", description="job_description", posted_at="posted_at_estimate",
-    )),
-    Source("linkedin-gsc", "https://huggingface.co/datasets/GlobalSoftwareCompanies/us-entry-level-software-job-listings", "CC-BY-4.0", lambda _: select(
-        f"read_csv('{HF}/GlobalSoftwareCompanies/us-entry-level-software-job-listings/resolve/main/jobs.csv', all_varchar=true)",
-        url="job_url", title="job_title", company="advertiser_name", location="advertised_location", posted_at="posted_date",
-    )),
 )  # fmt: skip
 
 
@@ -501,6 +500,26 @@ class SourceCache:
             return None
         return kept["report"]
 
+    def checks(self) -> dict[str, bool]:
+        """The boards' pages already opened: each posting's key, and whether it sent on to a form."""
+        try:
+            from huggingface_hub import hf_hub_download
+
+            return json.loads(Path(hf_hub_download(SOURCES_DATASET, BOARD_CHECKS, repo_type="dataset", token=self.api.token)).read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001  None yet.
+            return {}
+
+    def keep_checks(self, checks: dict[str, bool], work: Path) -> None:
+        from huggingface_hub import CommitOperationAdd
+
+        (work / BOARD_CHECKS).write_text(json.dumps(checks), encoding="utf-8")
+        try:
+            self.api.create_commit(SOURCES_DATASET, repo_type="dataset", operations=[CommitOperationAdd(BOARD_CHECKS, str(work / BOARD_CHECKS))],
+                                   commit_message=f"{len(checks)} board pages checked")
+            self.api.super_squash_history(SOURCES_DATASET, repo_type="dataset")
+        except Exception as error:  # noqa: BLE001  The next build opens these pages again.
+            print(f"board checks: not kept: {error}", file=sys.stderr, flush=True)
+
     def keep(self, fresh: list[tuple[str, str, dict]], work: Path) -> None:
         """The sources read this build, at their versions, in one commit; the history squashed, so old copies do not pile up."""
         from huggingface_hub import CommitOperationAdd
@@ -514,6 +533,34 @@ class SourceCache:
             self.api.super_squash_history(SOURCES_DATASET, repo_type="dataset")
         except Exception as error:  # noqa: BLE001  The build is done; the next one reads these sources again.
             print(f"source cache: not kept: {error}", file=sys.stderr, flush=True)
+
+
+def sends_on(url: str) -> bool:
+    """Whether a board's posting page sends the applicant on to a company's own form: by its address after redirects, or a
+    link in it to one of the forms AIHawk applies on. A page that cannot be read does not."""
+    forms = [re.escape(host) for host, vendor in VENDOR_HOSTS if vendor not in AGGREGATORS]
+    request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0"})
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            seen = response.url + response.read(400_000).decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001  A board that cannot be read keeps its posting.
+        return False
+    return re.search("|".join(forms), seen) is not None
+
+
+def board_check(cache: SourceCache | None, work: Path) -> Callable[[list[tuple[str, str]]], set[str]]:
+    """The postings, of (key, link), that send on to a form. Each page is opened once: the answers are kept in the cache."""
+
+    def sent_on(postings: list[tuple[str, str]]) -> set[str]:
+        known = cache.checks() if cache else {}
+        new = [(key, url) for key, url in postings if key not in known]
+        with ThreadPoolExecutor(16) as pool:
+            known |= dict(zip((key for key, _ in new), pool.map(sends_on, (url for _, url in new)), strict=True))
+        if cache and new:
+            cache.keep_checks(known, work)
+        return {key for key, _ in postings if known.get(key)}
+
+    return sent_on
 
 
 def read_all(connection: duckdb.DuckDBPyConnection, chosen: list[Source], work: Path, cache: SourceCache | None) -> list[dict]:
@@ -556,7 +603,7 @@ def read_source(connection: duckdb.DuckDBPyConnection, source: Source, work: Pat
     return report
 
 
-def merge(connection: duckdb.DuckDBPyConnection, work: Path) -> dict[str, int]:
+def merge(connection: duckdb.DuckDBPyConnection, work: Path, sent_on: Callable[[list[tuple[str, str]]], set[str]] = lambda _: set()) -> dict[str, int]:
     """One row per posting, cut in files. Returns how many rows went in and came out.
 
     Which row wins is decided on the keys alone, and only then are the winners' rows, descriptions included, read and
@@ -575,15 +622,16 @@ def merge(connection: duckdb.DuckDBPyConnection, work: Path) -> dict[str, int]:
             -- came out changed in a delta though nothing about them had.
             arg_max(
                 struct_pack(filename := filename, row := file_row_number, length := length, source := source, print := print,
-                    employer := vendor IS NOT NULL AND vendor NOT IN {AGGREGATORS!r}, host := host),
+                    employer := vendor IS NOT NULL AND vendor NOT IN {AGGREGATORS!r}, host := host, vendor := vendor, url := url),
                 struct_pack(length := length, source := source, row := -file_row_number)
             ) AS winner
         FROM (
             SELECT {KEY} AS key, regexp_extract(filename, '([^/\\\\]+)\\.parquet$', 1) AS source, filename, file_row_number,
                 length(coalesce(description, '')) AS length, vendor(ats, url) AS vendor, job_print(company, title, location) AS print,
-                regexp_extract(posting_link(url), '^[^/]+') AS host
+                regexp_extract(posting_link(url), '^[^/]+') AS host, url
             FROM {every_row}
-            WHERE url LIKE 'http%' AND coalesce(title, '') <> ''
+            -- No LinkedIn posting is kept, whatever source carried it: the owner's decision of 2026-11-08.
+            WHERE url LIKE 'http%' AND coalesce(title, '') <> '' AND vendor(ats, url) IS DISTINCT FROM 'linkedin'
         ) GROUP BY key
     """)
     # One job under links of different sites, a company's form and a board's copy, has one print: the company, the title and
@@ -618,6 +666,13 @@ def merge(connection: duckdb.DuckDBPyConnection, work: Path) -> dict[str, int]:
         ) AS merged ON merged.key = best.key
         WHERE best.key NOT IN (SELECT key FROM twins)
     """)
+    # A board's posting whose page sends the applicant on to a company's own form goes: `sent_on` names them.
+    on_boards = connection.execute(f"SELECT key, winner.url FROM best WHERE winner.vendor IN {LINKING_BOARDS!r}").fetchall()
+    sent = sent_on(on_boards)
+    if sent:
+        connection.execute("CREATE OR REPLACE TEMP TABLE sent AS SELECT unnest(?) AS key", [sorted(sent)])
+        connection.execute("DELETE FROM best WHERE key IN (SELECT key FROM sent)")
+    print(f"boards: {len(sent)} of {len(on_boards)} postings checked send the applicant on to a company's form, and go", flush=True)
     rows_in, rows_out_expected = connection.execute("SELECT sum(copies), count(*) FROM best").fetchone()
     out = work / "out"
     shutil.rmtree(out, ignore_errors=True)
@@ -698,10 +753,11 @@ def main() -> None:
         kept = [source for source in chosen if (work / "sources" / f"{source.name}.parquet").exists()]
         reports = [{"name": source.name, "home": source.home, "license": source.license, "reused": True} for source in kept]
         reports += read_all(connection, [source for source in chosen if source not in kept], work, None)
-    else:
-        reports = read_all(connection, chosen, work, SourceCache.open())
+    cache = None if arguments.reuse else SourceCache.open()
+    if not arguments.reuse:
+        reports = read_all(connection, chosen, work, cache)
     _clean_up(work)
-    counts = merge(connection, work)
+    counts = merge(connection, work, board_check(cache, work))
     out = work / "out"
     manifest = {
         # 2: the description files are in key order and say their first and last key, and the dataset carries a

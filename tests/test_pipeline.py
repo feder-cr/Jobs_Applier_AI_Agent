@@ -110,12 +110,13 @@ def test_one_job_on_a_companys_form_and_on_a_board_is_one_posting_kept_on_the_fo
     write_source_rows = [("https://boards.greenhouse.io/acme/jobs/1", "Engineer", "Acme Inc.", "Rome, Italy", None, "Short")]
     write_full_source(tmp_path, "company", write_source_rows)
     write_full_source(tmp_path, "board", [
-        ("https://www.linkedin.com/jobs/view/99", "engineer", "ACME", "Rome", None, "A much longer description of the job"),
-        ("https://www.linkedin.com/jobs/view/100", "Engineer", "Acme", "Milan", None, "The same role in another city"),
+        ("https://www.welcometothejungle.com/en/companies/acme/jobs/99", "engineer", "ACME", "Rome", None, "A much longer description of the job"),
+        ("https://www.welcometothejungle.com/en/companies/acme/jobs/100", "Engineer", "Acme", "Milan", None, "The same role in another city"),
     ])
     counts, rows = merged(tmp_path)
     assert counts == {"rows_in": 3, "rows_out": 2}, "the role in Milan is another job"
-    assert index_rows(tmp_path) == [("greenhouse.io/acme/jobs/1", "greenhouse"), ("linkedin.com/jobs/view/100", "linkedin")]
+    # The company's own link wins over the board's copy, even when the copy's description is longer.
+    assert index_rows(tmp_path) == [("greenhouse.io/acme/jobs/1", "greenhouse"), ("welcometothejungle.com/en/companies/acme/jobs/100", "welcometothejungle")]
     kept = next(row for url, row in rows.items() if "greenhouse" in url)
     assert sorted(kept[3]) == ["board", "company"], "the board's copy is named among the sources"
 
@@ -124,19 +125,64 @@ def test_one_role_posted_twice_on_one_site_is_two_openings(tmp_path: Path) -> No
     write_full_source(tmp_path, "s", [
         ("https://boards.greenhouse.io/acme/jobs/1", "Engineer", "Acme", "Rome", None, None),
         ("https://boards.greenhouse.io/acme/jobs/2", "Engineer", "Acme", "Rome", None, None),
-        ("https://www.linkedin.com/jobs/view/3", "Engineer", "Acme", "Rome", None, None),
+        ("https://www.welcometothejungle.com/en/companies/acme/jobs/3", "Engineer", "Acme", "Rome", None, None),
     ])
     counts, _ = merged(tmp_path)
-    assert counts["rows_out"] == 2, "both Greenhouse openings stay; LinkedIn's copy goes into one of them"
+    assert counts["rows_out"] == 2, "both Greenhouse openings stay; the board's copy goes into one of them"
 
 
 def test_a_role_with_no_city_is_never_merged_across_a_country(tmp_path: Path) -> None:
     write_full_source(tmp_path, "s", [
         ("https://acme.example/jobs/1", "Sales Associate", "Acme", "", "workday", None),
-        ("https://www.linkedin.com/jobs/view/2", "Sales Associate", "Acme", "Not specified", None, None),
+        ("https://www.welcometothejungle.com/en/companies/acme/jobs/2", "Sales Associate", "Acme", "Not specified", None, None),
     ])
     counts, _ = merged(tmp_path)
     assert counts["rows_out"] == 2
+
+
+def test_no_linkedin_posting_is_kept_whatever_source_carries_it(tmp_path: Path) -> None:
+    write_full_source(tmp_path, "s", [
+        ("https://www.linkedin.com/jobs/view/1", "Engineer", "Acme", "Rome", None, None),
+        ("https://boards.greenhouse.io/beta/jobs/2", "Engineer", "Beta", "Rome", None, None),
+    ])
+    counts, _ = merged(tmp_path)
+    assert counts["rows_out"] == 1
+
+
+def test_a_boards_posting_that_sends_on_to_a_companys_form_goes(tmp_path: Path) -> None:
+    write_full_source(tmp_path, "s", [
+        ("https://www.arbeitnow.com/jobs/a", "Engineer", "Acme", "Berlin", "arbeitnow", None),
+        ("https://www.arbeitnow.com/jobs/b", "Designer", "Beta", "Berlin", "arbeitnow", None),
+    ])
+    (tmp_path / "tmp").mkdir()
+    asked: list[list[tuple[str, str]]] = []
+
+    def sent_on(postings: list[tuple[str, str]]) -> set[str]:
+        asked.append(postings)
+        return {key for key, url in postings if url.endswith("/a")}
+
+    counts = build.merge(build.connect(tmp_path), tmp_path, sent_on)
+    assert counts["rows_out"] == 1 and len(asked[0]) == 2
+
+
+def test_a_board_page_is_opened_once_and_its_answer_kept(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    opened: list[str] = []
+    monkeypatch.setattr(build, "sends_on", lambda url: opened.append(url) or url.endswith("/a"))
+
+    class Cache:
+        def __init__(self) -> None:
+            self.kept: dict[str, bool] = {"old": True}
+
+        def checks(self) -> dict[str, bool]:
+            return dict(self.kept)
+
+        def keep_checks(self, checks: dict[str, bool], work: Path) -> None:
+            self.kept = checks
+
+    cache = Cache()
+    sent = build.board_check(cache, tmp_path)([("old", "https://x/old"), ("k1", "https://x/a"), ("k2", "https://x/b")])  # type: ignore[arg-type]
+    assert sent == {"old", "k1"} and opened == ["https://x/a", "https://x/b"]
+    assert cache.kept == {"old": True, "k1": True, "k2": False}
 
 
 def test_a_posting_with_no_company_is_never_merged_by_its_title(tmp_path: Path) -> None:
