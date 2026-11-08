@@ -17,17 +17,16 @@ import pytest
 from aihawk.config import Arc, ConfigError, Filters, Form, Node, Plan, load_config
 from aihawk.database import (
     INDEX_COLUMNS,
+    UNDESCRIBED,
     DatabaseError,
     Job,
     _apply,
     _chain,
     description_files,
     local_index,
-    page_text,
     rarity,
     search,
     stored_descriptions,
-    with_description,
 )
 from aihawk.store import COLUMNS, Proof, Store, said, sent_word, write_applied
 from fakes import publish
@@ -291,20 +290,20 @@ def test_a_database_that_cannot_be_reached_says_so_in_plain_words_and_keeps_the_
     assert "<urlopen error [Errno 11001] getaddrinfo failed>" in str(error.value)
 
 
-def test_page_text_keeps_the_words_and_drops_scripts() -> None:
-    text = page_text("<html><head><title>x</title><style>a{}</style></head><body><nav>menu</nav><p>Build &amp; ship</p><script>evil()</script><li>Python</li></body></html>")
-    assert text.split() == ["Build", "&", "ship", "Python"]
+def test_a_posting_with_no_description_needs_a_title_twice_as_fitting(tmp_path: Path) -> None:
+    connection = duckdb.connect()
+    connection.execute("CREATE TABLE t (key VARCHAR, url VARCHAR, title VARCHAR, company VARCHAR, location VARCHAR, description VARCHAR, posted_at VARCHAR)")
+    connection.executemany("INSERT INTO t VALUES (?, ?, 'Python Engineer', ?, 'Rome', ?, NULL)", [
+        ("bare", "https://a.example/1", "Bare Co", ""),
+        ("told", "https://a.example/2", "Told Co", "Builds Python services. " * 20),
+    ])
+    _, jobs = search(publish(connection, tmp_path, 2), Filters(include=("python",)), 60, tmp_path)
+    assert [job.id for job in jobs] == ["told", "bare"]
+    assert jobs[1].lexical == pytest.approx(UNDESCRIBED)
 
 
 def files_of(location: str) -> tuple[tuple[str, str, str], ...]:
     return description_files(json.loads(Path(location).read_text(encoding="utf-8")), location)
-
-
-def test_a_job_being_judged_gets_its_description_from_the_database(tmp_path: Path) -> None:
-    location = database(tmp_path)
-    _, jobs = search(location, Filters(include=("intern",)), 60, tmp_path)
-    assert jobs[0].description == ""
-    assert with_description(jobs[0], files_of(location)).description == "Learn"
 
 
 def test_many_descriptions_come_in_order_and_empty_where_there_is_no_key(tmp_path: Path) -> None:
@@ -334,16 +333,6 @@ def test_a_database_that_cannot_be_read_is_reported_once_and_the_search_has_no_d
     reported: list[str] = []
     assert stored_descriptions(keys, files, problem=reported.append) == [""] * len(keys)
     assert len(reported) == 1 and "job database" in reported[0]
-
-
-def test_a_job_with_a_description_reads_no_page() -> None:
-    job = Job("a", "c", "t", "l", "http://127.0.0.1:9/never", "u", "Already here")
-    assert with_description(job, ()) is job
-
-
-def test_a_page_that_cannot_be_read_leaves_the_job_as_it_was() -> None:
-    job = Job("a", "c", "t", "l", "http://127.0.0.1:9/never", "u", "")
-    assert with_description(job, (), timeout=1) is job
 
 
 def test_what_was_tried_is_listed_newest_first_in_plain_words_with_what_the_page_said(tmp_path: Path) -> None:
@@ -450,12 +439,6 @@ def test_a_posting_whose_address_is_not_the_webs_is_left_out(tmp_path: Path) -> 
     assert [job.id for job in search(path, Filters(include=("java",)), 60, tmp_path)[1]] == ["web"]
 
 
-def test_a_link_too_malformed_to_ask_for_leaves_the_job_as_it_is() -> None:
-    for link in ("not a link", "https://a.example/with space"):
-        job = Job("x", "Co", "T", "L", link, link, "")
-        assert with_description(job, (), timeout=1).description == ""
-
-
 def test_a_full_disk_while_the_index_downloads_says_the_disk_is_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     class Unreadable(io.BytesIO):
         def read(self, *_: object) -> bytes:
@@ -527,6 +510,19 @@ def test_deltas_are_applied_in_one_rewrite_and_the_newest_action_on_a_key_wins(t
     _apply(index, chain)
     rows = duckdb.connect().execute(f"SELECT key, title FROM read_parquet('{index.as_posix()}') ORDER BY key").fetchall()
     assert rows == [("a", "New A"), ("c", "C"), ("e", "E")]
+
+
+def test_an_index_kept_from_before_a_column_was_added_takes_the_delta_that_brings_it(tmp_path: Path) -> None:
+    path = tmp_path / "index.parquet"
+    _index_rows(path, [("a", "A"), ("b", "B")])
+    connection = duckdb.connect()
+    connection.execute(f"COPY (SELECT * EXCLUDE (described) FROM read_parquet('{path.as_posix()}')) TO '{(tmp_path / 'old.parquet').as_posix()}' (FORMAT parquet)")
+    (tmp_path / "old.parquet").replace(path)
+    _delta_rows(tmp_path / "delta.parquet", [("add", "b", "B"), ("add", "c", "C")])
+    _apply(path, [{"url": (tmp_path / "delta.parquet").as_posix()}])
+    rows = connection.execute(f"SELECT key FROM read_parquet('{path.as_posix()}') ORDER BY key").fetchall()
+    assert rows == [("a",), ("b",), ("c",)]
+    assert "described" in {row[0] for row in connection.execute(f"DESCRIBE SELECT * FROM read_parquet('{path.as_posix()}')").fetchall()}
 
 
 def test_a_description_is_found_by_its_key_in_the_file_whose_range_holds_it(tmp_path: Path) -> None:

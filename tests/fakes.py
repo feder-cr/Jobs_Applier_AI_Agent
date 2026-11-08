@@ -69,7 +69,8 @@ def publish(connection: Any, folder: Path, rows_out: int) -> str:
     beside it, the manifest. Returns the manifest's path."""
     connection.execute("ALTER TABLE t ADD COLUMN IF NOT EXISTS country VARCHAR; ALTER TABLE t ADD COLUMN IF NOT EXISTS remote BOOLEAN")
     connection.execute(f"COPY (SELECT * FROM t ORDER BY key) TO '{(folder / 'jobs_0.parquet').as_posix()}' (FORMAT parquet)")
-    connection.execute(f"COPY (SELECT * EXCLUDE (description) FROM t) TO '{(folder / 'index.parquet').as_posix()}' (FORMAT parquet)")
+    connection.execute(f"""COPY (SELECT * EXCLUDE (description), length(coalesce(description, '')) >= 200 AS described FROM t)
+        TO '{(folder / 'index.parquet').as_posix()}' (FORMAT parquet)""")
     first, last = connection.execute("SELECT min(key), max(key) FROM t").fetchone()
     manifest = {"schema": 2, "rows_out": rows_out, "built_at": "2026-11-04T00:00:00", "index": {"name": "index.parquet", "bytes": 1},
                 "files": [{"name": "jobs_0.parquet", "first_key": first, "last_key": last}]}

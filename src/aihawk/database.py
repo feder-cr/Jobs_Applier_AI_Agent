@@ -10,10 +10,8 @@ import re
 import urllib.request
 from bisect import bisect_right
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from html.parser import HTMLParser
-from http.client import HTTPException
 from itertools import pairwise
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -26,9 +24,12 @@ from aihawk.config import Arc, Filters, Form, Node, Plan
 RECALL = 600
 # What being in the person's own city is worth, against a node of the plan: about as much as a named skill.
 CITY_WEIGHT = 1.5
+# What a posting with no description keeps of its score: judged on its title alone, it needs a title twice as fitting to
+# come before one that has a description. The pipeline marks which have one.
+UNDESCRIBED = 0.5
 # The columns of the index that a delta carries and an index kept on this computer is read by. A description is found by
 # the posting's key, in the description file whose range holds it.
-INDEX_COLUMNS = ("key", "url", "title", "company", "ats", "location", "country", "remote", "salary_min", "salary_max", "salary_currency", "posted_at")
+INDEX_COLUMNS = ("key", "url", "title", "company", "ats", "location", "country", "remote", "salary_min", "salary_max", "salary_currency", "posted_at", "described")
 # What a remote posting's location says when it does not narrow the job to a place.
 NO_PLACE = ("", "remote", "anywhere", "worldwide", "global")
 
@@ -48,36 +49,6 @@ class Job:
     description: str
     # How well the title and the place fit the search, from 0 to 1 against the best one found.
     lexical: float = 0.0
-
-
-class _PageText(HTMLParser):
-    SKIPPED = frozenset({"script", "style", "noscript", "svg", "head", "nav", "footer"})
-    BLOCKS = frozenset({"p", "div", "li", "br", "h1", "h2", "h3", "h4", "tr", "ul", "ol", "section"})
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.parts: list[str] = []
-        self.skipping = 0
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag in self.SKIPPED:
-            self.skipping += 1
-        elif tag in self.BLOCKS:
-            self.parts.append("\n")
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag in self.SKIPPED and self.skipping:
-            self.skipping -= 1
-
-    def handle_data(self, data: str) -> None:
-        if not self.skipping:
-            self.parts.append(data)
-
-
-def page_text(markup: str) -> str:
-    parser = _PageText()
-    parser.feed(html.unescape(markup))
-    return re.sub(r"\n\s*\n+", "\n\n", "".join(parser.parts)).strip()
 
 
 def description_files(manifest: dict[str, Any], location: str) -> tuple[tuple[str, str, str], ...]:
@@ -131,22 +102,6 @@ def stored_descriptions(
         finally:
             connection.close()
     return texts
-
-
-def with_description(job: Job, files: tuple[tuple[str, str, str], ...], timeout: float = 30.0) -> Job:
-    """The job with its description: the database's, or else the text of its page. One job, the one being judged."""
-    if job.description.strip():
-        return job
-    stored = stored_descriptions([job.id], files)[0]
-    if stored.strip():
-        return replace(job, description=stored)
-    try:
-        request = urllib.request.Request(job.url, headers={"User-Agent": "AIHawk (+https://github.com/feder-cr/Jobs_Applier_AI_Agent)"})
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return replace(job, description=page_text(response.read().decode("utf-8", "replace")))
-    except (OSError, ValueError, HTTPException):
-        # A dead link, or one too malformed to ask for: the job is judged on what is known.
-        return job
 
 
 def unreachable(error: BaseException) -> str:
@@ -223,6 +178,9 @@ def _apply(path: Path, chain: list[dict[str, Any]]) -> None:
     connection = duckdb.connect()
     try:
         connection.execute("INSTALL httpfs; LOAD httpfs;")
+        # A column added since this index was kept is NULL in it, until a delta brings the posting with it.
+        held = {row[0] for row in connection.execute("DESCRIBE SELECT * FROM read_parquet(?)", [path.as_posix()]).fetchall()}
+        kept = ", ".join(column if column in held else f"NULL AS {column}" for column in INDEX_COLUMNS)
         connection.execute(
             """CREATE TABLE changes AS
                SELECT * EXCLUDE (filename, newest) FROM (
@@ -233,7 +191,7 @@ def _apply(path: Path, chain: list[dict[str, Any]]) -> None:
         )
         connection.execute(f"""
             COPY (
-                SELECT {columns} FROM read_parquet(?) WHERE key NOT IN (SELECT key FROM changes)
+                SELECT {kept} FROM read_parquet(?) WHERE key NOT IN (SELECT key FROM changes)
                 UNION ALL
                 SELECT {columns} FROM changes WHERE op = 'add'
             ) TO '{partial.as_posix()}' (FORMAT parquet, COMPRESSION zstd)
@@ -296,6 +254,7 @@ class _Posting(NamedTuple):
     location: str
     url: str
     posted: datetime | None
+    described: bool
 
 
 def _whole_words(words: Iterable[str]) -> re.Pattern[str]:
@@ -433,7 +392,7 @@ def search(
             _Posting(*row)
             for row in connection.execute(
                 f"""SELECT key, coalesce(company, ''), title, coalesce(location, ''), url,
-                        TRY_CAST(posted_at AS TIMESTAMP)
+                        TRY_CAST(posted_at AS TIMESTAMP), coalesce(described, true)
                     FROM read_parquet(?) WHERE {' AND '.join(clauses)}""",
                 [index, *parameters],
             ).fetchall()
@@ -449,7 +408,7 @@ def search(
         evidence = _evidence(row.title, nodes, patterns, rarities)
         document = _apply_arcs(plan.arcs, row.title, evidence)
         in_city = cities is not None and cities.search(row.location) is not None
-        scored.append((_score(nodes, evidence, document, in_city, mean), row))
+        scored.append((_score(nodes, evidence, document, in_city, mean) * (1.0 if row.described else UNDESCRIBED), row))
 
     # One job per title and company: its best posting, then its newest.
     best_per_job: dict[tuple[str, str], tuple[float, _Posting]] = {}

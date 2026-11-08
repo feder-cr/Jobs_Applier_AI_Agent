@@ -6,7 +6,6 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -694,24 +693,21 @@ def test_a_posting_whose_words_look_like_markup_is_shown_as_it_is(home: Path) ->
     asyncio.run(run())
 
 
-def test_a_posting_with_no_stored_text_is_scored_on_its_own_pages_text(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_posting_with_no_description_is_judged_on_its_title_and_no_page_is_read(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     session = Session(home)
     session._client = ScriptedModelForApp()  # type: ignore[assignment]
     asyncio.run(session.load_resume(resume))
     session.store.add(Job("bare", "Firm", "Python Engineer", "Milan", "https://a.example/1", "https://a.example/1", "", 1.0))
     session.store.add(Job("told", "Firm", "Python Engineer", "Milan", "https://a.example/2", "https://a.example/2", "Stored text.", 1.0))
-    fetched: list[str] = []
 
-    def page(job: Job, *_: Any) -> Job:
-        fetched.append(job.id)
-        return replace(job, description="The text of its page.")
+    def no_page(*_: Any, **__: Any) -> None:
+        raise AssertionError("a page was read from the person's computer")
 
-    monkeypatch.setattr(session_module, "with_description", page)
+    monkeypatch.setattr("urllib.request.urlopen", no_page)
     asyncio.run(session.score([session.store.get("bare"), session.store.get("told")], lambda: None, lambda _: None))  # type: ignore[list-item]
-    assert fetched == ["bare"]
-    assert session.store.get("bare").job.description == "The text of its page."  # type: ignore[union-attr]
+    assert session.store.get("bare").score is not None and session.store.get("bare").job.description == ""  # type: ignore[union-attr]
     asked = " ".join(request["messages"][1]["content"] for request in session._client.requests)  # type: ignore[union-attr]
-    assert "The text of its page." in asked and "Stored text." in asked
+    assert "Stored text." in asked
     session.close()
 
 
