@@ -40,7 +40,7 @@ def session_with(tmp_path: Path, count: int) -> Session:
     (tmp_path / "cv.md").write_text("# Ada Rossi\n", encoding="utf-8")
     session = Session(tmp_path)
     for number in range(count):
-        session.store.add(Job(f"p{number:03d}", "Firm", f"Engineer {number}", "Rome", "u", "a", "", "", number / count))
+        session.store.add(Job(f"p{number:03d}", "Firm", f"Engineer {number}", "Rome", "u", "a", "", number / count))
     # The scripted evidence never calls the client, so a placeholder stands in for it.
     session._client = SimpleNamespace()  # type: ignore[assignment]
     return session

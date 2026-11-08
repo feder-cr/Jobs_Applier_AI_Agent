@@ -37,7 +37,7 @@ class Session:
         import_answers_file(self.config, self.store)
         ensure_account_password(self.store)
         self._client: AsyncOpenAI | None = None
-        # Where descriptions are found by key, from the database the last search read; empty before schema 2.
+        # Where descriptions are found by key, from the database the last search read.
         self.description_files: tuple[tuple[str, str, str], ...] = ()
 
     def close(self) -> None:
@@ -119,9 +119,8 @@ class Session:
         batch = self.store.with_status("new")[:WIDE]
         if not batch:
             return 0
-        # By key where the database says where keys are: that reaches jobs found in any earlier build too.
-        refs = [item.job.id if self.description_files else item.job.ref for item in batch]
-        texts = await _read_descriptions(refs, self.description_files, status, log)
+        # By key: that reaches jobs found in any earlier build too.
+        texts = await _read_descriptions([item.job.id for item in batch], self.description_files, status, log)
         for item, text in zip(batch, texts, strict=True):
             self.store.set_description(item.job.id, text)
         jobs = [replace(item.job, description=text) for item, text in zip(batch, texts, strict=True)]
@@ -165,7 +164,7 @@ class Session:
                     job = item.job
                     if not job.description.strip():
                         # Many sources publish no text, and a score from the title alone says little: the posting's own page often has it.
-                        job = await asyncio.to_thread(with_description, job, 30.0, self.description_files)
+                        job = await asyncio.to_thread(with_description, job, self.description_files)
                         self.store.set_description(job.id, job.description)
                     report = await score_job(self.client, self.config.judge_model, job, cv, self.config.goals)
                 except Exception as error:
@@ -244,18 +243,18 @@ class Session:
         return outcome
 
 
-async def _read_descriptions(refs: list[str], files: tuple[tuple[str, str, str], ...], status: Log, log: Log) -> list[str]:
+async def _read_descriptions(keys: list[str], files: tuple[tuple[str, str, str], ...], status: Log, log: Log) -> list[str]:
     """The descriptions the database holds; the count of those read is said as each file is read, and a failure is logged."""
     loop = asyncio.get_running_loop()
 
     def shown(done: int) -> None:
         # The read runs in a thread: its count is handed to the loop, which alone touches the screen.
-        loop.call_soon_threadsafe(status, f"reading descriptions {done}/{len(refs)}")
+        loop.call_soon_threadsafe(status, f"reading descriptions {done}/{len(keys)}")
 
     def problem(text: str) -> None:
         loop.call_soon_threadsafe(log, text)
 
-    return await asyncio.to_thread(stored_descriptions, refs, files, shown, problem)
+    return await asyncio.to_thread(stored_descriptions, keys, files, shown, problem)
 
 
 def _places(config: Config) -> str:

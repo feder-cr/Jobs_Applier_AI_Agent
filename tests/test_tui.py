@@ -32,7 +32,7 @@ from aihawk.screens import JobDetails, SendBatch, SentDetails, SentList, Setting
 from aihawk.session import Session
 from aihawk.store import Proof, Store, Stored
 from aihawk.tui import AIHawk
-from fakes import ScriptedBrowser
+from fakes import ScriptedBrowser, publish
 
 PROFILE = {
     "name": "Ada Rossi",
@@ -67,13 +67,7 @@ def published(folder: Path) -> str:
             ("other", "https://jobs.lever.co/gamma/4", "Accountant", "Gamma"),
         ],
     )
-    connection.execute("ALTER TABLE t ADD COLUMN IF NOT EXISTS country VARCHAR; ALTER TABLE t ADD COLUMN IF NOT EXISTS remote BOOLEAN")
-    connection.execute(f"COPY t TO '{(folder / 'jobs_0.parquet').as_posix()}' (FORMAT parquet)")
-    connection.execute(f"""COPY (SELECT * EXCLUDE (description, file_row_number), 'jobs_0.parquet' AS part, file_row_number AS row_number
-        FROM read_parquet('{(folder / 'jobs_0.parquet').as_posix()}', file_row_number = true)) TO '{(folder / 'index.parquet').as_posix()}' (FORMAT parquet)""")
-    manifest = {"rows_out": 4, "built_at": "2026-11-04T00:00:00", "index": {"name": "index.parquet", "bytes": 1}, "files": [{"name": "jobs_0.parquet"}]}
-    (folder / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
-    return str(folder / "manifest.json")
+    return publish(connection, folder, 4)
 
 
 @pytest.fixture
@@ -693,8 +687,8 @@ def test_a_posting_with_no_stored_text_is_scored_on_its_own_pages_text(home: Pat
     session = Session(home)
     session._client = ScriptedModelForApp()  # type: ignore[assignment]
     asyncio.run(session.load_resume(resume))
-    session.store.add(Job("bare", "Firm", "Python Engineer", "Milan", "https://a.example/1", "https://a.example/1", "", "", 1.0))
-    session.store.add(Job("told", "Firm", "Python Engineer", "Milan", "https://a.example/2", "https://a.example/2", "Stored text.", "", 1.0))
+    session.store.add(Job("bare", "Firm", "Python Engineer", "Milan", "https://a.example/1", "https://a.example/1", "", 1.0))
+    session.store.add(Job("told", "Firm", "Python Engineer", "Milan", "https://a.example/2", "https://a.example/2", "Stored text.", 1.0))
     fetched: list[str] = []
 
     def page(job: Job, *_: Any) -> Job:
@@ -760,7 +754,7 @@ def test_the_persons_own_cv_goes_with_the_form_and_a_new_resume_replaces_it(home
     session = Session(home)
     session._client = ScriptedModelForApp()  # type: ignore[assignment]
     asyncio.run(session.load_resume(resume))
-    session.store.add(Job("one", "Firm", "Python Engineer", "Milan", "https://jobs.lever.co/a/1", "https://jobs.lever.co/a/1", "A posting.", "", 1.0))
+    session.store.add(Job("one", "Firm", "Python Engineer", "Milan", "https://jobs.lever.co/a/1", "https://jobs.lever.co/a/1", "A posting.", 1.0))
     files: list[str] = []
 
     async def fill(_client: Any, _model: str, _job: Any, _cv: str, _answers: str, cv_file: Path, *_rest: Any, **_options: Any) -> Outcome:
@@ -782,7 +776,7 @@ def test_a_site_with_no_plugin_is_tried_like_any_other(home: Path, resume: Path,
     session._client = ScriptedModelForApp()  # type: ignore[assignment]
     asyncio.run(session.load_resume(resume))
     url = "https://careers.nobody.example/job/1"
-    session.store.add(Job("any", "Firm", "Python Engineer", "Milan", url, url, "A posting.", "", 1.0))
+    session.store.add(Job("any", "Firm", "Python Engineer", "Milan", url, url, "A posting.", 1.0))
     asked: list[Any] = []
 
     async def fill(_client: Any, _model: str, job: Any, *_rest: Any, **_options: Any) -> Outcome:

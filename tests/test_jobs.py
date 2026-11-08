@@ -26,24 +26,13 @@ from aihawk.database import (
     page_text,
     rarity,
     search,
-    stored_description,
     stored_descriptions,
     with_description,
 )
 from aihawk.store import COLUMNS, Proof, Store, said, sent_word, write_applied
+from fakes import publish
 
 JOB = Job("g:a:1", "Acme", "Senior Python Engineer", "Rome, Italy", "u", "a", "d")
-
-
-def publish_locally(connection: duckdb.DuckDBPyConnection, folder: Path) -> str:
-    """Table t as the pipeline publishes it: the file of descriptions, the index beside it, the manifest."""
-    connection.execute("ALTER TABLE t ADD COLUMN IF NOT EXISTS country VARCHAR; ALTER TABLE t ADD COLUMN IF NOT EXISTS remote BOOLEAN")
-    connection.execute(f"COPY t TO '{(folder / 'jobs_0.parquet').as_posix()}' (FORMAT parquet)")
-    connection.execute(f"""COPY (SELECT * EXCLUDE (description, file_row_number), 'jobs_0.parquet' AS part, file_row_number AS row_number
-        FROM read_parquet('{(folder / 'jobs_0.parquet').as_posix()}', file_row_number = true)) TO '{(folder / 'index.parquet').as_posix()}' (FORMAT parquet)""")
-    manifest = {"rows_out": 4, "built_at": "2026-11-04T00:00:00", "index": {"name": "index.parquet", "bytes": 1}, "files": [{"name": "jobs_0.parquet"}]}
-    (folder / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
-    return str(folder / "manifest.json")
 
 
 def database(tmp_path: Path) -> str:
@@ -56,7 +45,7 @@ def database(tmp_path: Path) -> str:
     connection = duckdb.connect()
     connection.execute("CREATE TABLE t (key VARCHAR, url VARCHAR, title VARCHAR, company VARCHAR, location VARCHAR, description VARCHAR, posted_at VARCHAR)")
     connection.executemany("INSERT INTO t VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
-    return publish_locally(connection, tmp_path)
+    return publish(connection, tmp_path, 4)
 
 
 @pytest.mark.parametrize(
@@ -78,7 +67,7 @@ def catalogue(tmp_path: Path, rows: list[tuple[str, str, str, str]]) -> str:
     connection = duckdb.connect()
     connection.execute("CREATE TABLE t (key VARCHAR, url VARCHAR, title VARCHAR, company VARCHAR, location VARCHAR, description VARCHAR, posted_at VARCHAR)")
     connection.executemany("INSERT INTO t VALUES (?, 'https://a.example/', ?, ?, ?, 'd', NULL)", rows)
-    return publish_locally(connection, tmp_path)
+    return publish(connection, tmp_path, 4)
 
 
 def test_a_title_holding_the_rare_node_comes_before_one_holding_only_the_common_one(tmp_path: Path) -> None:
@@ -86,7 +75,7 @@ def test_a_title_holding_the_rare_node_comes_before_one_holding_only_the_common_
     connection.execute("CREATE TABLE t (key VARCHAR, url VARCHAR, title VARCHAR, company VARCHAR, location VARCHAR, description VARCHAR, posted_at VARCHAR)")
     rows = [(str(n), "Engineer") for n in range(200)] + [("rare", "Fortran Engineer"), ("both", "Senior Fortran Engineer Fortran")]
     connection.executemany("INSERT INTO t VALUES (?, 'https://a.example/', ?, 'c', 'Rome', 'd', NULL)", rows)
-    path = publish_locally(connection, tmp_path)
+    path = publish(connection, tmp_path, 4)
     plan = Plan((Node("role", 1.0, (Form("Engineer"),)), Node("skill", 1.5, (Form("Fortran"),))))
     _, jobs = search(path, Filters(plan=plan), 60, tmp_path, limit=3)
     assert jobs[0].id in {"rare", "both"} and jobs[1].id in {"rare", "both"}
@@ -207,7 +196,7 @@ def test_a_place_is_found_by_its_word_by_its_country_code_or_by_a_remote_posting
         ("same-name-elsewhere", "Milano, Indiana", "US", False),
     ]
     connection.executemany("INSERT INTO t VALUES (?, 'https://a.example/', 'Engineer', ?, ?, ?, ?, 'd', NULL)", [(row[0], *row) for row in rows])
-    path = publish_locally(connection, tmp_path)
+    path = publish(connection, tmp_path, 4)
     _, jobs = search(path, Filters(include=("Engineer",), locations=("Milano", "Italy"), countries=("IT",)), 60, tmp_path)
     assert {job.id for job in jobs} == {"word", "code", "spelled", "open-remote"}
 
@@ -247,7 +236,7 @@ def test_the_own_city_comes_first_and_a_job_posted_once_per_place_is_one_job(tmp
         ("no-name-2", "Engineer", "", "Rome, Italy"),
     ]
     connection.executemany("INSERT INTO t VALUES (?, 'https://a.example/', ?, ?, ?, 'd', NULL)", rows)
-    path = publish_locally(connection, tmp_path)
+    path = publish(connection, tmp_path, 4)
     _, jobs = search(path, Filters(include=("Engineer",), locations=("Italy",), cities=("Milano",)), 60, tmp_path)
     assert jobs[0].id == "milan"
     assert {job.id for job in jobs} == {"milan", "other", "no-name-1", "no-name-2"}
@@ -266,7 +255,7 @@ def test_filters_match_whole_words_and_keep_symbols_literal(tmp_path: Path) -> N
         "INSERT INTO t VALUES (?, 'https://a.example/', ?, 'c', ?, 'd', NULL)",
         [("1", "Java Developer", "Roma, Italy"), ("2", "JavaScript Developer", "Roma"), ("3", "Java Lead", "Bucharest, Romania"), ("4", "C++ Developer", "Roma")],
     )
-    path = publish_locally(connection, tmp_path)
+    path = publish(connection, tmp_path, 4)
 
     def keys(filters: Filters) -> set[str]:
         return {job.id for job in search(path, filters, 60, tmp_path)[1]}
@@ -307,24 +296,32 @@ def test_page_text_keeps_the_words_and_drops_scripts() -> None:
     assert text.split() == ["Build", "&", "ship", "Python"]
 
 
+def files_of(location: str) -> tuple[tuple[str, str, str], ...]:
+    return description_files(json.loads(Path(location).read_text(encoding="utf-8")), location)
+
+
 def test_a_job_being_judged_gets_its_description_from_the_database(tmp_path: Path) -> None:
-    _, jobs = search(database(tmp_path), Filters(include=("intern",)), 60, tmp_path)
+    location = database(tmp_path)
+    _, jobs = search(location, Filters(include=("intern",)), 60, tmp_path)
     assert jobs[0].description == ""
-    assert with_description(jobs[0]).description == "Learn"
+    assert with_description(jobs[0], files_of(location)).description == "Learn"
 
 
-def test_many_descriptions_come_in_order_and_empty_where_there_is_no_reference(tmp_path: Path) -> None:
-    _, jobs = search(database(tmp_path), Filters(include=("python",)), 60, tmp_path)
-    refs = [job.ref for job in jobs] + ["", "no-reference"]
+def test_many_descriptions_come_in_order_and_empty_where_there_is_no_key(tmp_path: Path) -> None:
+    location = database(tmp_path)
+    _, jobs = search(location, Filters(include=("python",)), 60, tmp_path)
+    keys = [job.id for job in jobs] + ["", "no-such-key"]
     counts: list[int] = []
-    texts = stored_descriptions(refs, done=counts.append)
-    assert texts == [stored_description(ref) for ref in refs[:-2]] + ["", ""]
-    assert sorted(texts[:-2]) == ["Build", "Learn"] and counts[-1] == len(refs)
+    texts = stored_descriptions(keys, files_of(location), done=counts.append)
+    assert texts == [stored_descriptions([key], files_of(location))[0] for key in keys[:-2]] + ["", ""]
+    assert sorted(texts[:-2]) == ["Build", "Learn"] and counts[-1] == len(keys)
 
 
 def test_a_database_that_cannot_be_read_is_reported_once_and_the_search_has_no_descriptions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _, jobs = search(database(tmp_path), Filters(include=("python",)), 60, tmp_path)
-    refs = [job.ref for job in jobs]
+    location = database(tmp_path)
+    _, jobs = search(location, Filters(include=("python",)), 60, tmp_path)
+    keys = [job.id for job in jobs]
+    files = files_of(location)
 
     class Unreadable:
         def execute(self, *args: object) -> None:
@@ -335,18 +332,18 @@ def test_a_database_that_cannot_be_read_is_reported_once_and_the_search_has_no_d
 
     monkeypatch.setattr(duckdb, "connect", lambda: Unreadable())
     reported: list[str] = []
-    assert stored_descriptions(refs, problem=reported.append) == [""] * len(refs)
+    assert stored_descriptions(keys, files, problem=reported.append) == [""] * len(keys)
     assert len(reported) == 1 and "job database" in reported[0]
 
 
 def test_a_job_with_a_description_reads_no_page() -> None:
     job = Job("a", "c", "t", "l", "http://127.0.0.1:9/never", "u", "Already here")
-    assert with_description(job) is job
+    assert with_description(job, ()) is job
 
 
 def test_a_page_that_cannot_be_read_leaves_the_job_as_it_was() -> None:
     job = Job("a", "c", "t", "l", "http://127.0.0.1:9/never", "u", "")
-    assert with_description(job, timeout=1) is job
+    assert with_description(job, (), timeout=1) is job
 
 
 def test_what_was_tried_is_listed_newest_first_in_plain_words_with_what_the_page_said(tmp_path: Path) -> None:
@@ -414,7 +411,7 @@ def test_applied_csv_has_the_columns_and_a_page_cannot_make_a_formula_of_a_cell(
 def test_the_list_weighs_the_judgment_and_the_title_together_and_keeps_what_jev_passed_over_below(tmp_path: Path) -> None:
     store = Store(tmp_path / "jobs.db")
     for name, lexical in (("judged-fit", 0.2), ("same-score-better-title", 1.0), ("unjudged", 0.9), ("passed", 1.0)):
-        store.add(Job(name, "A", "T", "L", "u", "a", "d", "", lexical))
+        store.add(Job(name, "A", "T", "L", "u", "a", "d", lexical))
     store.set_score("judged-fit", 4.0, {})
     store.set_score("same-score-better-title", 4.0, {})
     store.set_statuses(["passed"], "passed_over")
@@ -449,14 +446,14 @@ def test_a_posting_whose_address_is_not_the_webs_is_left_out(tmp_path: Path) -> 
         "INSERT INTO t VALUES (?, ?, 'Java Developer', ?, 'Rome', 'd', NULL)",
         [("web", "HTTPS://a.example/1", "a"), ("disk", "file:///home/me/.aihawk/key", "b"), ("app", "javascript:alert(1)", "c")],
     )
-    path = publish_locally(connection, tmp_path)
+    path = publish(connection, tmp_path, 4)
     assert [job.id for job in search(path, Filters(include=("java",)), 60, tmp_path)[1]] == ["web"]
 
 
 def test_a_link_too_malformed_to_ask_for_leaves_the_job_as_it_is() -> None:
     for link in ("not a link", "https://a.example/with space"):
         job = Job("x", "Co", "T", "L", link, link, "")
-        assert with_description(job, timeout=1).description == ""
+        assert with_description(job, (), timeout=1).description == ""
 
 
 def test_a_full_disk_while_the_index_downloads_says_the_disk_is_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

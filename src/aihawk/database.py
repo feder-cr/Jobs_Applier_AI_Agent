@@ -26,10 +26,10 @@ from aihawk.config import Arc, Filters, Form, Node, Plan
 RECALL = 600
 # What being in the person's own city is worth, against a node of the plan: about as much as a named skill.
 CITY_WEIGHT = 1.5
-# What a remote posting's location says when it does not narrow the job to a place.
-# The columns an index kept on this computer holds: the release's own, without the file and row that point into one
-# build's files, since a description is found by its key.
+# The columns of the index that a delta carries and an index kept on this computer is read by. A description is found by
+# the posting's key, in the description file whose range holds it.
 INDEX_COLUMNS = ("key", "url", "title", "company", "ats", "location", "country", "remote", "salary_min", "salary_max", "salary_currency", "posted_at")
+# What a remote posting's location says when it does not narrow the job to a place.
 NO_PLACE = ("", "remote", "anywhere", "worldwide", "global")
 
 
@@ -46,8 +46,6 @@ class Job:
     url: str
     apply_url: str
     description: str
-    # Where the database holds the description: "<file>#<row>".
-    ref: str = ""
     # How well the title and the place fit the search, from 0 to 1 against the best one found.
     lexical: float = 0.0
 
@@ -83,8 +81,7 @@ def page_text(markup: str) -> str:
 
 
 def description_files(manifest: dict[str, Any], location: str) -> tuple[tuple[str, str, str], ...]:
-    """Where a description is found by its posting's key: each file's first key, last key and address, in key order.
-    Empty for a database from before schema 2, whose files are not in key order."""
+    """Where a description is found by its posting's key: each file's first key, last key and address, in key order."""
     base = _base(manifest, location)
     found = [(item["first_key"], item["last_key"], f"{base}/{item['name']}") for item in manifest.get("files", []) if "first_key" in item]
     return tuple(sorted(found))
@@ -97,52 +94,37 @@ def _holder(key: str, files: tuple[tuple[str, str, str], ...]) -> str | None:
 
 
 def stored_descriptions(
-    refs: list[str],
-    files: tuple[tuple[str, str, str], ...] = (),
+    keys: list[str],
+    files: tuple[tuple[str, str, str], ...],
     done: Callable[[int], None] = lambda _: None,
     problem: Callable[[str], None] = lambda _: None,
 ) -> list[str]:
-    """The descriptions the database holds for these postings, in order; empty where its sources published none.
-
-    A ref is a file and a row, `<file>#<row>`, in a database from before schema 2, or a posting's key, found in the one file
-    whose range holds it. One connection, and one query per file: a file's footer is fetched once for the search, not once
-    per posting, and a key read in a file in key order reads only the row group that can hold it.
+    """The descriptions the database holds for these postings, by their keys, in order; empty where its sources published
+    none. One connection, and one query per file: a file's footer is fetched once for the search, and a key read in a
+    file in key order reads only the row group that can hold it.
     `done` is told how many have been read, as each file is. A read that fails is told once to `problem`, and the
     descriptions read before it are kept: the search goes on with what it has.
     """
-    texts = [""] * len(refs)
-    by_row: dict[str, list[tuple[int, int]]] = {}
-    by_key: dict[str, list[tuple[int, str]]] = {}
+    texts = [""] * len(keys)
+    by_file: dict[str, list[tuple[int, str]]] = {}
     count = 0
-    for position, ref in enumerate(refs):
-        if "#" in ref:
-            file, number = ref.rsplit("#", 1)
-            by_row.setdefault(file, []).append((position, int(number)))
-        elif ref and (file := _holder(ref, files)):
-            by_key.setdefault(file, []).append((position, ref))
+    for position, key in enumerate(keys):
+        if key and (file := _holder(key, files)):
+            by_file.setdefault(file, []).append((position, key))
         else:
             count += 1
             done(count)
-    if by_row or by_key:
+    if by_file:
         connection = duckdb.connect()
         try:
             connection.execute("INSTALL httpfs; LOAD httpfs;")
-            for file, rows in by_row.items():
-                marks = ", ".join(str(number) for _, number in rows)
-                query = f"SELECT file_row_number, description FROM read_parquet(?, file_row_number = true) WHERE file_row_number IN ({marks})"
-                found = dict(connection.execute(query, [file]).fetchall())
-                for position, number in rows:
-                    texts[position] = found.get(number) or ""
-                count += len(rows)
-                done(count)
-            for file, keys in by_key.items():
+            for file, held in by_file.items():
                 # Constants, not a subquery: that is what lets the reader skip every row group whose range cannot hold them.
-                marks = ", ".join("?" for _ in keys)
-                query = f"SELECT key, description FROM read_parquet(?) WHERE key IN ({marks})"
-                found = dict(connection.execute(query, [file, *(key for _, key in keys)]).fetchall())
-                for position, key in keys:
+                marks = ", ".join("?" for _ in held)
+                found = dict(connection.execute(f"SELECT key, description FROM read_parquet(?) WHERE key IN ({marks})", [file, *(key for _, key in held)]).fetchall())
+                for position, key in held:
                     texts[position] = found.get(key) or ""
-                count += len(keys)
+                count += len(held)
                 done(count)
         except duckdb.Error:
             problem("Some job descriptions could not be read from the job database, so those postings are judged without them.")
@@ -151,17 +133,11 @@ def stored_descriptions(
     return texts
 
 
-def stored_description(ref: str, files: tuple[tuple[str, str, str], ...] = ()) -> str:
-    """The description the database holds for one posting; empty when its sources published none."""
-    return stored_descriptions([ref], files)[0]
-
-
-def with_description(job: Job, timeout: float = 30.0, files: tuple[tuple[str, str, str], ...] = ()) -> Job:
+def with_description(job: Job, files: tuple[tuple[str, str, str], ...], timeout: float = 30.0) -> Job:
     """The job with its description: the database's, or else the text of its page. One job, the one being judged."""
     if job.description.strip():
         return job
-    # Found by its key where the database says where keys are: that holds for every job, whatever build it came from.
-    stored = stored_description(job.id if files else job.ref, files)
+    stored = stored_descriptions([job.id], files)[0]
     if stored.strip():
         return replace(job, description=stored)
     try:
@@ -202,25 +178,26 @@ def _base(manifest: dict[str, Any], location: str) -> str:
 
 
 def local_index(manifest: dict[str, Any], location: str, cache: Path, log: Callable[[str], None] = lambda _: None) -> Path:
-    """The index on this computer, as of the manifest's build.
-
-    A database that publishes deltas, schema 2, is downloaded whole once and then kept up to date by applying the deltas
-    it has not seen, in order. One from before keeps the old way: downloaded once per build, the older copies removed.
-    """
+    """The index on this computer, as of the manifest's build: downloaded whole once, then kept up to date by applying the
+    deltas it has not seen, in order. A database on this computer is read where it is."""
     source = f"{_base(manifest, location)}/{manifest['index']['name']}"
     if not source.startswith(("http://", "https://")):
         return Path(source)
     cache.mkdir(parents=True, exist_ok=True)
-    if manifest.get("build") and "deltas" in manifest:
-        return _kept_index(manifest, source, cache, log)
-    stamp = re.sub(r"[^0-9]", "", manifest["built_at"])
-    path = cache / f"index-{stamp}.parquet"
-    if path.is_file():
+    path = cache / "index.parquet"
+    state = cache / "index.build"
+    build = manifest.get("build") or manifest["built_at"]
+    have = state.read_text(encoding="utf-8").strip() if path.is_file() and state.is_file() else ""
+    if have == build:
         return path
-    _download(manifest, source, path, log)
-    for old in cache.glob("index-*.parquet"):
-        if old != path:
-            old.unlink()
+    chain = _chain(manifest.get("deltas", []), have) if have else None
+    if chain is not None:
+        log(f"updating the job index: {sum(delta['adds'] for delta in chain):,} postings new or changed, {sum(delta['drops'] for delta in chain):,} gone")
+        _apply(path, chain)
+    else:
+        # The first time, or a gap no delta covers: the whole index, once.
+        _download(manifest, source, path, log)
+    state.write_text(build, encoding="utf-8")
     return path
 
 
@@ -267,35 +244,6 @@ def _apply(path: Path, chain: list[dict[str, Any]]) -> None:
     finally:
         connection.close()
     partial.replace(path)
-
-
-def _kept_index(manifest: dict[str, Any], source: str, cache: Path, log: Callable[[str], None]) -> Path:
-    path = cache / "index.parquet"
-    state = cache / "index.build"
-    build = manifest["build"]
-    have = state.read_text(encoding="utf-8").strip() if path.is_file() and state.is_file() else ""
-    if have == build:
-        return path
-    chain = _chain(manifest["deltas"], have) if have else None
-    if chain is not None:
-        log(f"updating the job index: {sum(delta['adds'] for delta in chain):,} postings new or changed, {sum(delta['drops'] for delta in chain):,} gone")
-        _apply(path, chain)
-        state.write_text(build, encoding="utf-8")
-        return path
-    # The first time, or a gap no delta covers: the whole index, once, in the columns kept here.
-    whole = cache / "index.download"
-    _download(manifest, source, whole, log)
-    connection = duckdb.connect()
-    try:
-        connection.execute(f"COPY (SELECT {', '.join(INDEX_COLUMNS)} FROM read_parquet(?)) TO '{path.as_posix()}' (FORMAT parquet, COMPRESSION zstd)",
-                           [whole.as_posix()])
-    finally:
-        connection.close()
-    whole.unlink()
-    state.write_text(build, encoding="utf-8")
-    for old in cache.glob("index-*.parquet"):
-        old.unlink()
-    return path
 
 
 def _download(manifest: dict[str, Any], source: str, path: Path, log: Callable[[str], None]) -> None:
@@ -347,8 +295,6 @@ class _Posting(NamedTuple):
     title: str
     location: str
     url: str
-    part: str
-    number: int
     posted: datetime | None
 
 
@@ -464,10 +410,6 @@ def search(
         raise DatabaseError("the plan weighs nothing: give a node a weight above 0")
     manifest = load_manifest(location)
     index = str(local_index(manifest, location, cache, log))
-    # An index kept up to date here has no file and row: a posting's description is then found by its key.
-    held = {row[0] for row in duckdb.connect().execute("DESCRIBE SELECT * FROM read_parquet(?)", [index]).fetchall()}
-    pointer = "part, row_number" if "part" in held else "NULL AS part, NULL AS row_number"
-    base = _base(manifest, location)
     texts = tuple(dict.fromkeys(form.text for node in nodes for form in node.forms))
     patterns = {text: _whole_words((text,)) for text in texts}
     cities = _whole_words(filters.cities) if filters.cities else None
@@ -490,7 +432,7 @@ def search(
         rows = [
             _Posting(*row)
             for row in connection.execute(
-                f"""SELECT key, coalesce(company, ''), title, coalesce(location, ''), url, {pointer},
+                f"""SELECT key, coalesce(company, ''), title, coalesce(location, ''), url,
                         TRY_CAST(posted_at AS TIMESTAMP)
                     FROM read_parquet(?) WHERE {' AND '.join(clauses)}""",
                 [index, *parameters],
@@ -529,7 +471,6 @@ def search(
             row.url,
             row.url,
             "",
-            f"{base}/{row.part}#{row.number}" if row.part is not None else row.key,
             score / best,
         )
         for score, row in ranked
