@@ -18,7 +18,7 @@ from aihawk import session as session_module
 from aihawk import shortlist as shortlist_module
 from aihawk.config import Config, Filters
 from aihawk.database import Job
-from aihawk.session import JUDGED, WIDE, Session, _places
+from aihawk.session import WIDE, Session, _places
 from aihawk.shortlist import fuse
 
 
@@ -58,39 +58,39 @@ def shortlisted(session: Session) -> set[str]:
     return {item.job.id for item in session.store.with_status("shortlisted")}
 
 
-def test_the_title_alone_shortlists_the_best_judged_postings(tmp_path: Path) -> None:
-    session = session_with(tmp_path, WIDE)
-    assert funnel(session) == JUDGED
-    assert shortlisted(session) == ids(range(75, 100))
-    assert {item.job.id for item in session.store.with_status("passed_over")} == ids(range(75))
+def test_a_round_of_jev_is_one_full_request_and_all_of_it_joins_the_queue(tmp_path: Path) -> None:
+    session = session_with(tmp_path, 100)
+    assert WIDE == 85
+    assert funnel(session) == WIDE
+    # The best titles, every one of them: nothing is passed over.
+    assert shortlisted(session) == ids(range(15, 100))
+    assert {item.job.id for item in session.store.with_status("new")} == ids(range(15))
+    assert session.store.with_status("passed_over") == []
 
 
-def test_evidence_moves_a_posting_into_the_shortlist_and_out_of_it_by_its_sign(tmp_path: Path, values: dict[str, float]) -> None:
-    # p000 has the worst title and strong evidence for it; p099 the best title and evidence against it.
-    values.update({"p000": 10.0, "p001": 10.0, "p002": 10.0, "p003": 10.0, "p004": 10.0, "p099": -10.0})
+def test_the_queue_puts_jevs_best_first_by_the_title_and_the_evidence(tmp_path: Path, values: dict[str, float]) -> None:
+    # p000 has the worst title and strong evidence for it; p084 the best title and evidence against it.
+    values.update({"p000": 10.0, "p001": 10.0, "p002": 10.0, "p003": 10.0, "p004": 10.0, "p084": -10.0})
     session = session_with(tmp_path, WIDE)
     funnel(session)
-    assert shortlisted(session) == ids(range(5)) | ids(range(79, 99))
+    queue = [item.job.id for item in session.store.queue()]
+    assert set(queue[:5]) == ids(range(5)) and queue[-1] == "p084" and len(queue) == WIDE
 
 
-def test_the_second_batch_takes_the_next_postings_still_new(tmp_path: Path) -> None:
+def test_the_second_round_takes_the_next_postings_still_new(tmp_path: Path) -> None:
     session = session_with(tmp_path, 150)
-    assert funnel(session) == JUDGED
-    assert shortlisted(session) == ids(range(125, 150))
-    assert funnel(session) == JUDGED
-    assert shortlisted(session) == ids(range(125, 150)) | ids(range(25, 50))
-    assert len(session.store.with_status("passed_over")) == 100
+    assert funnel(session) == WIDE
+    assert shortlisted(session) == ids(range(65, 150))
+    assert funnel(session) == 65
+    assert shortlisted(session) == ids(range(150))
 
 
-def test_the_passed_over_postings_are_kept_and_listed_below_the_judged(tmp_path: Path) -> None:
-    session = session_with(tmp_path, WIDE)
-    funnel(session)
-    for item in session.store.with_status("shortlisted"):
-        session.store.set_score(item.job.id, 4.0, {})
-    listed = [item.job.id for item in session.store.all()]
-    assert len(listed) == WIDE
-    assert set(listed[:JUDGED]) == ids(range(75, 100))
-    assert set(listed[JUDGED:]) == ids(range(75))
+def test_a_posting_an_earlier_version_passed_over_is_in_the_queue_again_and_a_scored_one_is_not(tmp_path: Path) -> None:
+    session = session_with(tmp_path, 3)
+    session.store.set_statuses(["p000"], "passed_over")
+    session.store.set_statuses(["p001", "p002"], "shortlisted")
+    session.store.set_score("p002", 4.0, {})
+    assert [item.job.id for item in session.store.queue()] == ["p001", "p000"]
 
 
 def test_a_failed_verdict_is_counted_once_and_the_others_are_as_they_were(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -109,10 +109,9 @@ def test_a_failed_verdict_is_counted_once_and_the_others_are_as_they_were(tmp_pa
     evidence = {item.job.id: item.evidence for item in session.store.all()}
     assert evidence["p007"] is None
     assert evidence["p008"] == pytest.approx(2 * math.log(9))
-    assert len(said) == 1 and said[0].startswith("1 of 100 jobs could not be read (OrcaRouter rejected the request.")
+    assert len(said) == 1 and said[0].startswith("1 of 85 jobs could not be read (OrcaRouter rejected the request.")
     assert said[0].endswith("): they are ranked by their title alone.")
-    assert len(session.store.with_status("shortlisted")) == JUDGED
-    assert len(session.store.with_status("shortlisted")) == JUDGED
+    assert len(session.store.with_status("shortlisted")) == WIDE
 
 
 def test_a_judge_that_reads_nothing_passes_no_posting_over_for_good(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -123,10 +122,9 @@ def test_a_judge_that_reads_nothing_passes_no_posting_over_for_good(tmp_path: Pa
 
     monkeypatch.setattr(session_module, "evidence", unread)
     session = session_with(tmp_path, 30)
-    assert funnel(session) == JUDGED
-    assert shortlisted(session) == ids(range(5, 30))
-    assert {item.job.id for item in session.store.with_status("new")} == ids(range(5))
-    assert session.store.with_status("passed_over") == []
+    # Unread, they join the queue all the same, ordered by their title alone: the judge reads them.
+    assert funnel(session) == 30
+    assert shortlisted(session) == ids(range(30))
 
 
 def test_the_funnel_says_how_many_descriptions_and_postings_it_has_read(tmp_path: Path) -> None:
@@ -179,5 +177,5 @@ def test_a_description_database_that_cannot_be_read_is_said_once_and_the_funnel_
     monkeypatch.setattr(session_module, "stored_descriptions", unreadable)
     session = session_with(tmp_path, 30)
     said: list[str] = []
-    assert asyncio.run(session.funnel(said.append, lambda line: None)) == JUDGED
+    assert asyncio.run(session.funnel(said.append, lambda line: None)) == 30
     assert len(said) == 1 and "could not be read" in said[0]

@@ -28,7 +28,7 @@ What the forms are told about you beyond the CV (email, phone, location, links, 
 | `max_age_days` | `60` | Postings posted more than this many days ago are left out. A posting with no date is kept. |
 | `model` | `deepseek/deepseek-v4.1-flash` | Fills the application forms. |
 | `quick_model` | `google/gemini-3.5-flash` | Writes the search plan from your CV, and the other short calls of a search. |
-| `judge_model` | `deepseek/deepseek-v4.1-flash` | Writes the score and the report of each shortlisted posting. |
+| `judge_model` | `deepseek/deepseek-v4.1-flash` | Writes the score and the report of each posting on a page, 50 to a page. |
 | `decision_model` | `typesafe/jev-1.14` | Jev, which answers the six questions that shortlist the postings. |
 | `filters.include` | empty | Title words to search for. With no `plan`, each word is one title. AIHawk asks for a resume until there is a CV and at least one of these. Reading a resume writes this and `plan`, and the Settings screen does not offer them: a different search comes from a different resume. |
 | `filters.exclude` | empty | Whole words: a posting whose title has one of them is left out. |

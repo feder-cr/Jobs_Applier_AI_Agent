@@ -22,10 +22,8 @@ from aihawk.session import Session
 from aihawk.store import SUBMITTED, Stored
 
 SEARCH_SETTINGS = {"places", "exclude", "max_age_days"}
-# Scored jobs kept below the cursor. The judge follows the person down the list and stops there, so a long search never
-# pays to score what nobody will reach. Scoring runs in small chunks, to stop as soon as the count is met.
-LOOKAHEAD = 50
-CHUNK = 10
+# Jobs on a page: all scored, sorted once, and never moved while the person reads them.
+PAGE = 50
 RESUME_QUESTION = "Where is your resume?"
 MAIL_QUESTION = "The email you apply with."
 MAIL_HINT = "Job sites send their codes there, and AIHawk reads only those · Enter · Esc for later"
@@ -33,6 +31,28 @@ KEY_QUESTION = "Your OrcaRouter key."
 KEY_HINT = f"Get one at {KEY_URL} · it stays on this computer · Enter saves it"
 MAIL_NAMES = {"gmail": "Gmail", "outlook": "Outlook"}
 RESUME_HINT = "PDF, .docx or text · Enter reads it · Esc for later"
+
+
+class Pages(Rows):
+    """The jobs' table, a page at a time: down from its last row is the next page, up from its first the one before, and
+    the side arrows turn pages too."""
+
+    BINDINGS: ClassVar = [Binding("right", "turn(1)", show=False), Binding("left", "turn(-1)", show=False)]
+
+    def action_cursor_down(self) -> None:
+        if self.row_count and self.cursor_row >= self.row_count - 1:
+            self.app.turn(1)  # type: ignore[attr-defined]
+        else:
+            super().action_cursor_down()
+
+    def action_cursor_up(self) -> None:
+        if self.cursor_row <= 0:
+            self.app.turn(-1, at_end=True)  # type: ignore[attr-defined]
+        else:
+            super().action_cursor_up()
+
+    def action_turn(self, step: int) -> None:
+        self.app.turn(step)  # type: ignore[attr-defined]
 
 
 class AIHawk(App[None]):
@@ -72,10 +92,10 @@ class AIHawk(App[None]):
         self.session = Session(workspace)
         self.resume = resume
         self.selected: set[str] = set()
-        # The jobs in the order the list shows them, and how many from the top the person has gone down through: those
-        # stay where they are.
-        self.shown: list[str] = []
-        self.read = 0
+        # The pages made so far, each its jobs' ids in the order shown; the page shown; and one asked for before it was ready.
+        self.pages: list[list[str]] = []
+        self.page = 0
+        self.wanted: int | None = None
         self.signing_in = False
         self.columns_for = 0
         self.with_location = True
@@ -86,7 +106,7 @@ class AIHawk(App[None]):
         with Horizontal(id="top"):
             yield Static("AIHawk", id="heading", markup=False)
             yield Static("", id="count", markup=False)
-        yield Rows(id="jobs", cursor_type="row", zebra_stripes=True)
+        yield Pages(id="jobs", cursor_type="row", zebra_stripes=True)
         # min_width=1: RichLog wraps at 78 columns by default, under its own scrollbar, so the last words were hidden.
         yield Said(id="log", wrap=True, min_width=1, markup=False)
         yield Footer()
@@ -152,24 +172,21 @@ class AIHawk(App[None]):
         return (Text(mark, style="bold green"), score, Text(item.job.company), Text(item.job.title), *place)
 
     def refresh_jobs(self, current: str | None = None) -> None:
-        """The list, best first, but never moved under the person: the rows they have gone down through keep their order,
-        and a job scored while they read lands ahead of them, where they will meet it. Sorted whole, a score arriving went in
-        above the cursor, out of sight, and pushed the cursor's job down a row. Until the person goes down, nothing is read,
-        the whole list is sorted and the cursor stays on top, on the best."""
+        """The page shown, as it was made: sorted once, by the judge's score, when all of it was scored. A job tried since
+        shows its sign, and nothing moves. The cursor stays on the job it was on."""
         table = self.query_one(DataTable)
         current = current or self.current_id()
         items = self.session.store.all()
         by_id = {item.job.id: item for item in items}
-        held = [job_id for job_id in self.shown[: self.read] if job_id in by_id]
-        ordered = [by_id[job_id] for job_id in held] + [item for item in items if item.job.id not in set(held)]
-        self.shown = [item.job.id for item in ordered]
-        self.read = len(held)
+        page = [by_id[job_id] for job_id in self.pages[self.page] if job_id in by_id] if self.pages else []
         table.clear()
-        for item in ordered:
+        for item in page:
             table.add_row(*self.row(item), key=item.job.id)
-        self.query_one("#count", Static).update(f"{len(ordered):,} job" + ("" if len(ordered) == 1 else "s") if ordered else "")
-        if held and current in by_id:
-            table.move_cursor(row=self.shown.index(current))
+        found = f"{len(items):,} job" + ("" if len(items) == 1 else "s") if items else ""
+        self.query_one("#count", Static).update(" · ".join(part for part in (f"Page {self.page + 1}" if self.pages else "", found) if part))
+        ids = [item.job.id for item in page]
+        if current in ids:
+            table.move_cursor(row=ids.index(current))
 
     def current_id(self) -> str | None:
         table = self.query_one(DataTable)
@@ -185,8 +202,8 @@ class AIHawk(App[None]):
 
     @work(exclusive=True, group="flow")
     async def start(self) -> None:
-        # A new search is a new list: nothing in it has been read yet.
-        self.read = 0
+        # A new search is a new list: its pages are made again.
+        self.pages, self.page, self.wanted = [], 0, None
         self.refresh_jobs()
         session = self.session
         try:
@@ -214,6 +231,9 @@ class AIHawk(App[None]):
             if not session.mail()[1]:
                 await self.set_up_mail()
             await session.find(self.say)
+            # The jobs scored before, by an earlier search: the first pages, sorted as they are.
+            scored = [item.job.id for item in session.store.all() if item.score is not None]
+            self.pages = [scored[start : start + PAGE] for start in range(0, len(scored), PAGE)]
             self.refresh_jobs()
             await self.judge()
         except (ConfigError, DatabaseError) as error:
@@ -223,41 +243,68 @@ class AIHawk(App[None]):
         finally:
             self.show_heading()
 
-    def scored_ahead(self) -> int:
-        """Scored jobs from the cursor to the end of the list, as the list shows them: what the person still has to read."""
-        scores = {item.job.id: item.score for item in self.session.store.all()}
-        current = self.current_id()
-        start = self.shown.index(current) if current in self.shown else 0
-        return sum(1 for job_id in self.shown[start:] if scores.get(job_id) is not None)
-
     async def judge(self) -> None:
-        """Score what the reader is short of, up to LOOKAHEAD scored jobs below the cursor, then stop.
-
-        Nothing is announced: the scores filling the list are the progress. Jev weighs a batch of titles and descriptions
-        for a fraction of a cent; the judge, which costs, scores a chunk at a time. Moving the cursor down calls this again,
-        so the list stays ahead of the person and no further.
-        """
+        """Pages, PAGE jobs each, up to the one after the page shown, then stop: the judge works one page ahead of the
+        person, so a long search never pays to score what nobody will reach. A page is the queue's first PAGE jobs, Jev's
+        best, all scored before it shows; when the queue is short of a page, Jev reads the next postings into it. The
+        progress is said on one line, which the next count replaces."""
         session = self.session
+        store = session.store
+        said = self.query_one(Said)
         await session.priced()
-        before = SPEND.total
-        if not session.store.all():
-            self.say("Reading the best postings; a minute or two.")
-        # What the reader is short of, counted once: a pass pays that and no more, wherever the scores land in the list.
-        need = LOOKAHEAD - self.scored_ahead()
-        while need > 0:
-            waiting = session.store.with_status("shortlisted")
-            if not waiting:
-                if not session.store.with_status("new"):
-                    break
+        while len(self.pages) < self.page + 2:
+            said.say(f"Preparing page {len(self.pages) + 1}…", again=True)
+            paged = {job_id for page in self.pages for job_id in page}
+            batch = [item for item in store.queue() if item.job.id not in paged]
+            while len(batch) < PAGE and store.with_status("new"):
                 await session.funnel(self.say, lambda _: None)
-                self.refresh_jobs()
-                continue
-            chunk = waiting[: min(CHUNK, need)]
-            await session.score(chunk, self.refresh_jobs, self.say)
-            need -= len(chunk)
-        spent = await session.settled() - before
-        if spent:
-            self.say(f"{self.scored_ahead()} to read, {money(spent)}.")
+                batch = [item for item in store.queue() if item.job.id not in paged]
+            batch = batch[:PAGE]
+            if not batch:
+                break
+            number = len(self.pages) + 1
+            before = SPEND.total
+            done = 0
+
+            def counted(number: int = number, size: int = len(batch)) -> None:
+                nonlocal done
+                done += 1
+                said.say(f"Preparing page {number}… {done} of {size}", again=True)
+
+            said.say(f"Preparing page {number}… 0 of {len(batch)}", again=True)
+            await session.score(batch, counted, self.say)
+            ids = {item.job.id for item in batch}
+            # Sorted once, now: the scored by their score, one the judge could not read below them.
+            self.pages.append([item.job.id for item in store.all() if item.job.id in ids])
+            spent = await session.settled() - before
+            said.say(f"Page {number} ready" + (f", {money(spent)}." if spent else "."), again=True)
+            if self.wanted == len(self.pages) - 1:
+                self.wanted = None
+                self.page = len(self.pages) - 1
+                self.query_one(DataTable).move_cursor(row=0)
+            self.refresh_jobs()
+
+    def turn(self, step: int, at_end: bool = False) -> None:
+        """To the page before or after, on its first row, or on its last when the person came up from the page after. A
+        page not ready yet opens once it is; the line below says how far it is."""
+        target = self.page + step
+        if target < 0:
+            return
+        if target < len(self.pages):
+            self.page = target
+            self.wanted = None
+            self.refresh_jobs()
+            table = self.query_one(DataTable)
+            table.move_cursor(row=table.row_count - 1 if at_end else 0)
+            self.keep_ahead()
+            return
+        store = self.session.store
+        paged = {job_id for page in self.pages for job_id in page}
+        if not store.with_status("new") and all(item.job.id in paged for item in store.queue()):
+            self.say("No more jobs for this search.")
+            return
+        self.wanted = target
+        self.keep_ahead()
 
     # The keys.
 
@@ -269,8 +316,10 @@ class AIHawk(App[None]):
             self.selected.discard(item.job.id)
         else:
             self.selected.add(item.job.id)
-        self.query_one(DataTable).update_cell(item.job.id, "mark", self.row(item)[0])
-        self.query_one(DataTable).action_cursor_down()
+        table = self.query_one(DataTable)
+        table.update_cell(item.job.id, "mark", self.row(item)[0])
+        # Down a row, and no further: on the page's last row, selecting is not turning the page.
+        table.move_cursor(row=min(table.cursor_row + 1, table.row_count - 1))
 
     @on(DataTable.RowSelected)
     def row_chosen(self) -> None:
@@ -290,33 +339,20 @@ class AIHawk(App[None]):
             webbrowser.open(item.job.url)
 
     def action_more(self) -> None:
-        self.more_jobs(asked=True)
-
-    @on(DataTable.RowHighlighted)
-    def row_moved(self) -> None:
-        """The judge follows the cursor, unless an application holds the browser. The rows down to the cursor are read."""
-        row = self.query_one(DataTable).cursor_row
-        if row > 0:
-            self.read = max(self.read, row + 1)
-        if not self.applying():
-            self.keep_ahead()
+        self.turn(1)
 
     def keep_ahead(self) -> None:
-        """Fewer than LOOKAHEAD scored jobs below the cursor, and the next ones are scored, unless a flow is already at it.
-        A cursor move still queued while the app quits finds the store closed: there is nothing left to score for."""
-        if not self.is_running or any(worker.group == "flow" and worker.is_running for worker in self.workers):
+        """The page after the one shown is made, unless it is, a flow is already at it, or an application holds the
+        browser. A page turn still queued while the app quits finds the store closed: there is nothing left to score for."""
+        if not self.is_running or self.applying() or any(worker.group == "flow" and worker.is_running for worker in self.workers):
             return
         store = self.session.store
-        if self.scored_ahead() < LOOKAHEAD and (store.with_status("shortlisted") or store.with_status("new")):
+        if len(self.pages) < self.page + 2 and (store.queue() or store.with_status("new")):
             self.more_jobs()
 
     @work(exclusive=True, group="flow")
-    async def more_jobs(self, asked: bool = False) -> None:
+    async def more_jobs(self) -> None:
         try:
-            store = self.session.store
-            if asked and not (store.with_status("shortlisted") or store.with_status("new")):
-                self.say("Everything the search found has been read.")
-                return
             await self.judge()
         except Exception as error:  # noqa: BLE001  Said on the screen, as in start.
             self.failed(error)

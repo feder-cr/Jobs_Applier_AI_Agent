@@ -26,11 +26,21 @@ class Said(RichLog):
     def __init__(self, **options: Any) -> None:
         super().__init__(**options)
         self.said: list[str] = []
+        self.counting = False
         self.wrapped_for = 0
 
-    def say(self, line: str) -> None:
-        self.said.append(line)
-        self.write(line)
+    def say(self, line: str, again: bool = False) -> None:
+        """A line at the bottom. With `again`, a count that changes: it takes the place of the count before it, and the
+        log keeps one line for it, not one per step."""
+        if again and self.counting and self.said:
+            self.said[-1] = line
+            self.clear()
+            for kept in self.said:
+                self.write(kept)
+        else:
+            self.said.append(line)
+            self.write(line)
+        self.counting = again
 
     def on_resize(self, event: events.Resize) -> None:
         width = self.scrollable_content_region.width

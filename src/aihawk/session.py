@@ -17,12 +17,13 @@ from aihawk.judge import score_job
 from aihawk.llm import SPEND, explain, make_client, money, refused
 from aihawk.plugins import Plugin, always_plugins, load_plugins, plugin_for
 from aihawk.profile import ensure_account_password, import_answers_file, install_resume, save_setting
-from aihawk.shortlist import evidence, fuse, questions
+from aihawk.shortlist import MAX_POSTINGS, evidence, questions
 from aihawk.store import SENT_WORDS, SUBMITTED, Store, Stored, write_applied
 
-# The funnel: the next WIDE postings by title are weighed by the decision model, and the best JUDGED of them are scored by the judge model.
-WIDE = 100
-JUDGED = 25
+# The funnel: the next WIDE postings by title are weighed by the decision model, one full request of it, and all of them
+# join the queue the judge takes its pages from, the best by that weight first. Nothing is passed over: a person who keeps
+# turning pages gets every job judged.
+WIDE = MAX_POSTINGS
 SCORING_AT_ONCE = 5
 
 Log = Callable[[str], None]
@@ -113,8 +114,8 @@ class Session:
         return new
 
     async def funnel(self, log: Log, status: Log) -> int:
-        """Weigh the next WIDE postings by title with the decision model, and shortlist the best JUDGED by the title's fit and that evidence.
-        The others of the batch are passed over: kept, and listed below the judged ones. Returns how many are shortlisted."""
+        """Weigh the next WIDE postings by title with the decision model and put them all in the judge's queue, which the
+        title's fit and that evidence order. Returns how many joined it."""
         batch = self.store.with_status("new")[:WIDE]
         if not batch:
             return 0
@@ -145,13 +146,9 @@ class Session:
         for job, value in zip(jobs, values, strict=True):
             if value is not None:
                 self.store.set_evidence(job.id, value)
-        order = fuse([job.lexical for job in jobs], [value or 0.0 for value in values])
-        best = {jobs[index].id for index in sorted(range(len(jobs)), key=lambda index: -order[index])[:JUDGED]}
-        self.store.set_statuses([job.id for job in jobs if job.id in best], "shortlisted")
-        # A posting the judge did not read is not passed over for good: it stays new, so a later search can judge it.
-        judged_out = [job.id for job, value in zip(jobs, values, strict=True) if value is not None and job.id not in best]
-        self.store.set_statuses(judged_out, "passed_over")
-        return len(best)
+        # One Jev could not read joins too, ordered by its title alone: the judge reads it all the same.
+        self.store.set_statuses([job.id for job in jobs], "shortlisted")
+        return len(jobs)
 
     async def score(self, items: list[Stored], on_scored: Callable[[], None], log: Log) -> None:
         cv = self.config.cv.read_text(encoding="utf-8-sig")

@@ -161,7 +161,7 @@ def test_a_resume_is_all_it_takes_to_get_the_best_jobs_first(home: Path, resume:
             table = app.query_one(DataTable)
             assert table.get_row_at(0)[1] == "4.5"
             # How many jobs, on the right of the heading, and nothing about the database in the log.
-            assert str(app.query_one("#count", Static).render()) == "3 jobs"
+            assert str(app.query_one("#count", Static).render()) == "Page 1 · 3 jobs"
             assert not any("database" in line.text for line in app.query_one(RichLog).lines)
 
     asyncio.run(run())
@@ -688,6 +688,7 @@ def test_a_posting_whose_words_look_like_markup_is_shown_as_it_is(home: Path) ->
         app.session.store.add(Job("odd", "Co [/y]", "[/x] Engineer", "Milan [bold", "https://a.example/", "https://a.example/", ""))
         app.start = lambda: None  # type: ignore[method-assign]
         async with app.run_test(size=(140, 40)) as pilot:
+            app.pages = [["odd"]]
             app.refresh_jobs()
             await pilot.pause()
             row = app.query_one(DataTable).get_row_at(0)
@@ -696,34 +697,27 @@ def test_a_posting_whose_words_look_like_markup_is_shown_as_it_is(home: Path) ->
     asyncio.run(run())
 
 
-def test_a_score_arriving_while_the_person_reads_lands_ahead_of_them_and_never_moves_the_list(home: Path) -> None:
+def test_a_page_shows_whole_and_sorted_and_a_later_score_never_moves_it(home: Path) -> None:
     async def run() -> None:
         app = AIHawk(home)
         store = app.session.store
-        for n in range(6):
+        for n in range(4):
             store.add(Job(f"j{n}", f"Firm {n}", "Engineer", "Milan", f"https://a.example/{n}", f"https://a.example/{n}", "d"))
-        store.set_score("j0", 3.0, {})
-        store.set_score("j1", 2.0, {})
+        for job_id, score in (("j0", 2.0), ("j1", 4.0), ("j2", 3.0)):
+            store.set_score(job_id, score, {})
         app.start = lambda: None  # type: ignore[method-assign]
         app.keep_ahead = lambda: None  # type: ignore[method-assign]
         async with app.run_test(size=(140, 40)) as pilot:
+            app.pages = [["j1", "j2", "j0"]]
             app.refresh_jobs()
             await pilot.pause()
-            # Nothing read yet: a better job goes on top, where the cursor is.
-            store.set_score("j4", 4.0, {})
+            assert companies(app) == ["Firm 1", "Firm 2", "Firm 0"]
+            await pilot.press("down")
+            # A job scored later is not this page's: the page, and the cursor on it, stay as they are.
+            store.set_score("j3", 5.0, {})
             app.refresh_jobs()
             await pilot.pause()
-            assert companies(app)[:3] == ["Firm 4", "Firm 0", "Firm 1"] and app.current_id() == "j4"
-            await pilot.press("down", "down", "down")
-            await pilot.pause()
-            assert app.current_id() == "j2"
-            # Read down to j2: the rows down to it stay, the new score comes right after it, and the cursor stays put.
-            store.set_score("j5", 5.0, {})
-            app.refresh_jobs()
-            await pilot.pause()
-            assert companies(app)[:5] == ["Firm 4", "Firm 0", "Firm 1", "Firm 2", "Firm 5"]
-            assert app.current_id() == "j2" and app.query_one(DataTable).cursor_row == 3
-            assert app.scored_ahead() == 1
+            assert companies(app) == ["Firm 1", "Firm 2", "Firm 0"] and app.current_id() == "j2"
 
     asyncio.run(run())
 
@@ -736,6 +730,7 @@ def test_home_and_end_take_the_cursor_and_a_new_width_refits_the_columns_and_the
         app.start = lambda: None  # type: ignore[method-assign]
         app.keep_ahead = lambda: None  # type: ignore[method-assign]
         async with app.run_test(size=(140, 30)) as pilot:
+            app.pages = [[f"j{n}" for n in range(80)]]
             app.refresh_jobs()
             app.say("word " * 40)
             await pilot.pause()
@@ -912,29 +907,34 @@ def test_the_mail_question_left_with_escape_is_not_asked_again_at_the_next_start
     assert answers_of(load_config(home))["mail_provider"] == "later"
 
 
-def test_the_judge_follows_the_cursor_and_stops_at_the_lookahead(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # The judge scores what lies ahead of the person and no further, and says nothing while it does.
+def test_the_judge_makes_one_page_ahead_and_the_arrows_turn_the_pages(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A page of one job, and Jev reading two at a time: the three postings make three pages.
     import aihawk.session as session_module
 
     monkeypatch.setattr(session_module, "WIDE", 2)
-    monkeypatch.setattr(session_module, "JUDGED", 1)
-    monkeypatch.setattr(tui_module, "LOOKAHEAD", 1)
+    monkeypatch.setattr(tui_module, "PAGE", 1)
 
     async def run() -> None:
         app = scripted_app(home, resume)
         async with app.run_test(size=(140, 40)) as pilot:
             await settle(pilot, app)
-            log = logged(app)
-            assert "Scoring" not in log and "scoring" not in log
-            table = app.query_one(DataTable)
-            table.move_cursor(row=0)
-            # The lookahead is filled from where the person is.
-            assert app.scored_ahead() >= 1
-            # The cursor moving asks for the next ones, with no key but an arrow.
+            # The page shown, and the one after it, ready: no further.
+            assert len(app.pages) == 2 and len(app.session.store.with_status("scored")) == 2
+            assert app.query_one(DataTable).row_count == 1 and "Page 2 ready." in logged(app)
+            assert not any(line.startswith("Preparing page") for line in logged(app).splitlines()), "the count gave way to the result"
+            # Down from the page's last row is the next page, and it asks for the one after.
             await pilot.press("down")
             await settle(pilot, app)
-            assert len(app.session.store.with_status("scored")) == 2
-            assert not app.session.store.with_status("new") and len(app.session.store.with_status("passed_over")) == 1
+            assert app.page == 1 and len(app.pages) == 3 and len(app.session.store.with_status("scored")) == 3
+            assert str(app.query_one("#count", Static).render()) == "Page 2 · 3 jobs"
+            await pilot.press("right", "down")
+            await settle(pilot, app)
+            assert app.page == 2 and "No more jobs for this search." in logged(app)
+            # Up from the first row is the page before; the left arrow too.
+            await pilot.press("up")
+            assert app.page == 1
+            await pilot.press("left")
+            assert app.page == 0
 
     asyncio.run(run())
 
@@ -946,6 +946,6 @@ def test_m_says_so_when_there_is_nothing_left_to_read(home: Path, resume: Path) 
             await settle(pilot, app)
             await pilot.press("m")
             await settle(pilot, app)
-            assert "Everything the search found has been read." in logged(app)
+            assert "No more jobs for this search." in logged(app)
 
     asyncio.run(run())
