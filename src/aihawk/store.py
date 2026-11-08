@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from aihawk.database import Job
+from aihawk.database import Job, posting_keys
 from aihawk.secret import is_sealed, seal, unseal
 from aihawk.shortlist import fuse
 
@@ -67,6 +67,10 @@ CREATE TABLE IF NOT EXISTS answers (
 
 # new -> shortlisted | passed_over; shortlisted -> scored -> refused | blocked | failed | submitted | unconfirmed
 SUBMITTED = ("submitted", "unconfirmed")
+# How far along a job is, for keeping one of two rows that turn out to be the same posting: a sent one is never lost.
+PROGRESS = ("new", "passed_over", "shortlisted", "scored", "failed", "blocked", "refused", "unconfirmed", "submitted")
+# The store's ids follow key.sql; 2 is the key that knows a Workday or SmartRecruiters posting under any of its links.
+KEY_VERSION = 2
 # The jobs the person sees as tried, and what each status says in plain words.
 SENT_WORDS = {
     "submitted": "sent and confirmed",
@@ -162,6 +166,27 @@ class Store:
         if "cost" not in {row[1] for row in self._db.execute("PRAGMA table_info(jobs)")}:
             self._db.execute("ALTER TABLE jobs ADD COLUMN cost REAL")
             self._db.commit()
+        if self._db.execute("PRAGMA user_version").fetchone()[0] < KEY_VERSION:
+            self._rekey()
+
+    def _rekey(self) -> None:
+        """The jobs stored before a key changed, under the key their link has now. Two that turn out to be one posting are
+        one row, the one furthest along: a job sent under one link must not come back as new under the other, and be
+        sent twice. Only Workday and SmartRecruiters links changed; the others keep their ids."""
+        rows = self._db.execute("SELECT id, url, status, score FROM jobs").fetchall()
+        moved: dict[str, list[tuple[str, str, float | None]]] = {}
+        for (job_id, _, status, score), key in zip(rows, posting_keys([url for _, url, _, _ in rows]), strict=True):
+            if key != job_id and key.startswith(("workday:", "smartrecruiters:")):
+                moved.setdefault(key, []).append((job_id, status, score))
+        for key, olds in moved.items():
+            if self._db.execute("SELECT 1 FROM jobs WHERE id = ?", (key,)).fetchone():
+                olds.append((key, *self._db.execute("SELECT status, score FROM jobs WHERE id = ?", (key,)).fetchone()))
+            olds.sort(key=lambda old: (PROGRESS.index(old[1]) if old[1] in PROGRESS else 0, old[2] or 0.0), reverse=True)
+            kept, *gone = olds
+            self._db.executemany("DELETE FROM jobs WHERE id = ?", [(old[0],) for old in gone])
+            self._db.execute("UPDATE jobs SET id = ? WHERE id = ?", (key, kept[0]))
+        self._db.execute(f"PRAGMA user_version = {KEY_VERSION}")
+        self._db.commit()
 
     def close(self) -> None:
         self._db.close()

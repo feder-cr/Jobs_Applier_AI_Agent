@@ -71,6 +71,23 @@ def test_copies_that_tie_go_the_same_way_in_every_build(tmp_path: Path) -> None:
     assert row[3] == ["alpha", "beta"]
 
 
+def test_workday_and_smartrecruiters_postings_are_one_under_any_of_their_links(tmp_path: Path) -> None:
+    write_source(tmp_path, "a", [
+        ("https://acme.wd5.myworkdayjobs.com/en-US/External/job/Ankeny-IA/Sales-Rep_R-113371", "Sales Rep", "With the city"),
+        ("https://jobs.smartrecruiters.com/Acme/743999872941471-test-job?oga=true", "Test job", None),
+    ])
+    write_source(tmp_path, "b", [
+        ("https://acme.wd5.myworkdayjobs.com/External/job/Sales-Rep_R-113371/apply", "Sales Rep", "Without the city, a longer text"),
+        ("https://wd3.myworkdaysite.com/recruiting/acme/External/job/Sales-Rep_R-113371", "Sales Rep", None),
+        ("https://api.smartrecruiters.com/v1/companies/acme/postings/743999872941471", "Test job", None),
+    ])
+    counts, rows = merged(tmp_path)
+    assert counts == {"rows_in": 5, "rows_out": 2}
+    assert "Without the city, a longer text" in [row[2] for row in rows.values()], "the copy with the longest description wins"
+    keys = [row[0] for row in duckdb.connect().execute(f"SELECT key FROM read_parquet('{(tmp_path / 'out').as_posix()}/index.parquet') ORDER BY key").fetchall()]
+    assert keys == ["smartrecruiters:743999872941471", "workday:acme:r-113371"]
+
+
 def test_greenhouse_serves_one_posting_from_several_hosts(tmp_path: Path) -> None:
     write_source(tmp_path, "s", [
         ("https://boards.greenhouse.io/acme/jobs/1", "One", None),

@@ -459,6 +459,24 @@ def test_the_index_download_says_how_far_it_has_come(tmp_path: Path, monkeypatch
     assert [line.strip() for line in lines[1:]] == ["25%", "50%", "75%"]
 
 
+def test_a_store_from_before_the_key_changed_keeps_one_row_per_posting_the_one_furthest_along(tmp_path: Path) -> None:
+    import sqlite3
+
+    path = tmp_path / "jobs.db"
+    store = Store(path)
+    link = "https://acme.wd5.myworkdayjobs.com/en-US/External/job/Ankeny-IA/Sales-Rep_R-1"
+    store.add(Job("acme.wd5.myworkdayjobs.com/en-us/external/job/ankeny-ia/sales-rep_r-1", "Acme", "Sales Rep", "Ankeny", link, link, ""))
+    store.add(Job("acme.wd5.myworkdayjobs.com/external/job/sales-rep_r-1", "Acme", "Sales Rep", "", link.replace("en-US/", "").replace("Ankeny-IA/", ""), link, ""))
+    store.set_status("acme.wd5.myworkdayjobs.com/external/job/sales-rep_r-1", "submitted", "sent")
+    store.add(Job("greenhouse.io/acme/jobs/1", "Acme", "Engineer", "", "https://boards.greenhouse.io/acme/jobs/1", "u", ""))
+    store.close()
+    sqlite3.connect(path).execute("PRAGMA user_version = 1").connection.commit()
+    store = Store(path)
+    ids = {item.job.id: item.status for item in store.all()}
+    assert ids == {"workday:acme:r-1": "submitted", "greenhouse.io/acme/jobs/1": "new"}
+    store.close()
+
+
 def test_a_job_seen_again_keeps_its_score_and_status(tmp_path: Path) -> None:
     store = Store(tmp_path / "jobs.db")
     job = Job("x", "Co", "T", "L", "https://a.example/", "https://a.example/", "d")
