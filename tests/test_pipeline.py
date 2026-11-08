@@ -185,6 +185,23 @@ def test_a_board_page_is_opened_once_and_its_answer_kept(tmp_path: Path, monkeyp
     assert cache.kept == {"old": True, "k1": True, "k2": False}
 
 
+def test_a_site_mostly_made_of_copies_of_companies_forms_goes_whole(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(build, "FRONT_LEAST", 3)
+    write_full_source(tmp_path, "forms", [
+        ("https://boards.greenhouse.io/acme/jobs/1", "Engineer", "Acme", "Rome", None, None),
+        ("https://boards.greenhouse.io/beta/jobs/2", "Designer", "Beta", "Rome", None, None),
+    ])
+    write_full_source(tmp_path, "front", [
+        ("https://careers.front.example/1", "Engineer", "Acme", "Rome", None, None),
+        ("https://careers.front.example/2", "Designer", "Beta", "Rome", None, None),
+        ("https://careers.front.example/3", "Analyst", "Gamma", "Rome", None, None),
+        ("https://other.example/4", "Analyst", "Delta", "Rome", None, None),
+    ])
+    merged(tmp_path)
+    keys = [key for key, _ in index_rows(tmp_path)]
+    assert keys == ["greenhouse.io/acme/jobs/1", "greenhouse.io/beta/jobs/2", "other.example/4"], "the front's third posting goes too"
+
+
 def test_a_posting_with_no_company_is_never_merged_by_its_title(tmp_path: Path) -> None:
     write_full_source(tmp_path, "s", [
         ("https://a.example/1", "Engineer", None, "Rome", None, None),

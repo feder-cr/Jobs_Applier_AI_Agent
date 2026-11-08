@@ -99,6 +99,12 @@ AGGREGATORS = (
 # such link in their pages, and are not opened.
 LINKING_BOARDS = ("jobsch", "arbeitnow", "wellfound", "cryptojobs", "workingnomads", "arbetsformedlingen", "remotive")
 BOARD_CHECKS = "board_checks.json"
+# A site whose postings are mostly copies of jobs on companies' own forms is a front for them, a board or a company's
+# careers page in front of its ATS (careers.oracle.com, apply.ford.com): when at least FRONT_SHARE of its postings, and
+# it has at least FRONT_LEAST, merge into a form, the rest of its postings are copies too, and go. The owner's choice of
+# 2026-11-08; measured then, it named 68 sites and took 12,443 more postings.
+FRONT_SHARE = 0.3
+FRONT_LEAST = 50
 LEGAL_FORMS = (
     "inc", "llc", "ltd", "limited", "gmbh", "ag", "sa", "sas", "srl", "spa", "corp", "corporation", "co", "company", "plc",
     "bv", "nv", "oy", "ab", "as", "pty", "pvt", "lp", "llp", "kg", "group", "holdings",
@@ -650,6 +656,17 @@ def merge(connection: duckdb.DuckDBPyConnection, work: Path, sent_on: Callable[[
         FROM ranked AS copy JOIN ranked AS first ON first.print = copy.print AND first.place = 1
         WHERE copy.place > 1 AND copy.host <> first.host AND NOT copy.employer
     """)
+    # The sites that are fronts for companies' forms, a site being a board, or the host of a link with no vendor.
+    connection.execute(f"""
+        CREATE OR REPLACE TEMP TABLE fronts AS
+        SELECT site, postings, merged FROM (
+            SELECT coalesce(posting.winner.vendor, posting.winner.host) AS site, count(*) AS postings,
+                count(*) FILTER (WHERE kept.winner.employer) AS merged
+            FROM best AS posting
+            LEFT JOIN twins ON twins.key = posting.key LEFT JOIN best AS kept ON kept.key = twins.kept
+            WHERE NOT posting.winner.employer GROUP BY 1
+        ) WHERE postings >= {FRONT_LEAST} AND merged >= postings * {FRONT_SHARE}
+    """)
     merged_away, lost = connection.execute(f"""
         SELECT count(*), count(*) FILTER (WHERE kept.winner.length < {DESCRIBED} AND twin.winner.length >= {DESCRIBED})
         FROM twins JOIN best AS twin ON twin.key = twins.key JOIN best AS kept ON kept.key = twins.kept
@@ -666,6 +683,10 @@ def merge(connection: duckdb.DuckDBPyConnection, work: Path, sent_on: Callable[[
         ) AS merged ON merged.key = best.key
         WHERE best.key NOT IN (SELECT key FROM twins)
     """)
+    fronts = connection.execute("SELECT site, postings, merged FROM fronts ORDER BY postings DESC").fetchall()
+    connection.execute("DELETE FROM best WHERE NOT winner.employer AND coalesce(winner.vendor, winner.host) IN (SELECT site FROM fronts)")
+    print(f"fronts for companies' forms: {len(fronts)} sites, {sum(row[1] - row[2] for row in fronts)} more postings go: "
+          + ", ".join(f"{site} {merged}/{postings}" for site, postings, merged in fronts[:15]), flush=True)
     # A board's posting whose page sends the applicant on to a company's own form goes: `sent_on` names them.
     on_boards = connection.execute(f"SELECT key, winner.url FROM best WHERE winner.vendor IN {LINKING_BOARDS!r}").fetchall()
     sent = sent_on(on_boards)
