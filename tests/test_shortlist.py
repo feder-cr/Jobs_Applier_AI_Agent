@@ -16,7 +16,7 @@ from openai import AsyncOpenAI
 
 from aihawk.config import DEFAULT_BASE_URL, load_config
 from aihawk.database import Job
-from aihawk.judge import DESCRIPTION_CHARS, MAX_CHARS, MAX_POSTINGS, evidence, logit, questions
+from aihawk.shortlist import DESCRIPTION_CHARS, MAX_CHARS, MAX_POSTINGS, evidence, logit, questions
 
 KEY = "sk-test-key"
 JOB = Job("g:a:1", "Acme", "Python Engineer", "Rome", "u", "a", "Build Python services.")

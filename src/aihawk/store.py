@@ -13,8 +13,8 @@ from pathlib import Path
 from typing import Any
 
 from aihawk.database import Job
-from aihawk.judge import fuse
 from aihawk.secret import is_sealed, seal, unseal
+from aihawk.shortlist import fuse
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (

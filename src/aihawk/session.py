@@ -13,11 +13,11 @@ from aihawk.apply import MAILBOXES, Outcome, apply_to_job, signed_in, site_of
 from aihawk.apply import sign_in as sign_in_browser
 from aihawk.config import KEY_ENV, KEY_URL, Config, ConfigError, load_config
 from aihawk.database import built_at, description_files, search, stored_descriptions, with_description
-from aihawk.documents import score_job
-from aihawk.judge import evidence, fuse, questions
+from aihawk.judge import score_job
 from aihawk.llm import SPEND, explain, make_client, money, refused
 from aihawk.plugins import Plugin, always_plugins, load_plugins, plugin_for
 from aihawk.profile import ensure_account_password, import_answers_file, install_resume, save_setting
+from aihawk.shortlist import evidence, fuse, questions
 from aihawk.store import SENT_WORDS, SUBMITTED, Store, Stored, write_applied
 
 # The funnel: the next WIDE postings by title are weighed by the decision model, and the best JUDGED of them are scored by the judge model.

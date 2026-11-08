@@ -14,12 +14,12 @@ import httpx
 import pytest
 from openai import AsyncOpenAI
 
-from aihawk import judge as judge_module
 from aihawk import session as session_module
+from aihawk import shortlist as shortlist_module
 from aihawk.config import Config, Filters
 from aihawk.database import Job
-from aihawk.judge import fuse
 from aihawk.session import JUDGED, WIDE, Session, _places
+from aihawk.shortlist import fuse
 
 
 @pytest.fixture(autouse=True)
@@ -101,7 +101,7 @@ def test_a_failed_verdict_is_counted_once_and_the_others_are_as_they_were(tmp_pa
         return httpx.Response(200, json={"answers": {name: {"type": "noul", "noul": 0.9} for name in body["questions"]}})
 
     # The real evidence, over a scripted endpoint: a posting too large to judge alone is one failed verdict, not a crash.
-    monkeypatch.setattr(session_module, "evidence", judge_module.evidence)
+    monkeypatch.setattr(session_module, "evidence", shortlist_module.evidence)
     session = session_with(tmp_path, WIDE)
     session._client = AsyncOpenAI(base_url="https://api.orcarouter.ai/v1", api_key="sk-test", max_retries=0, http_client=httpx.AsyncClient(transport=httpx.MockTransport(scripted_endpoint)))
     said: list[str] = []
