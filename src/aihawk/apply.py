@@ -220,29 +220,82 @@ def _keep_latest_picture(messages: list[Any]) -> None:
             message["content"] = "A picture of the page was taken here; the latest one is below."
 
 
-def _fingerprint(name: str, arguments: dict[str, Any], result: str) -> str:
-    """A call and what it gave, as one string: two calls are the same when the tool, the arguments and the answer are."""
-    return hashlib.sha256(json.dumps([name, arguments, result], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+def _blocked(summary: str) -> dict[str, Any]:
+    """A run that ends before the form is ready, as finish_form would report it."""
+    return {"status": "blocked", "summary": summary, "submit_selector": ""}
 
 
-def _repeats(history: list[str], times: int) -> int:
-    """The length of the cycle of calls the history ends with, repeated `times` in a row; 0 when there is none."""
-    for cycle in range(1, LOOP_CYCLE + 1):
-        span = cycle * times
-        if len(history) >= span and all(history[-span + at] == history[-span + at % cycle] for at in range(span)):
-            return cycle
-    return 0
+@dataclass
+class _Call:
+    name: str
+    mark: str  # the tool, its arguments and its answer, as one string: two calls are the same when their marks are
+    line: str  # the call as a model reads it, to judge whether the run is stuck
 
 
-async def _stuck(client: AsyncOpenAI, model: str, trail: list[str]) -> str:
-    """Why the run is going round in circles, when a model reading its last calls is sure of it; "" otherwise."""
-    try:
-        verdict = await structured(client, model, LOOP_CHECK_SYSTEM, "\n".join(trail[-LOOP_CHECK_CALLS:]), "loop_check", LOOP_CHECK_SCHEMA)
-    except Exception:  # noqa: BLE001  A check that fails leaves the run to go on.
-        return ""
-    if verdict.get("stuck") and float(verdict.get("confidence", 0)) >= LOOP_CHECK_SURE:
-        return str(verdict.get("reason", ""))
-    return ""
+class _Watch:
+    """What ends a run that goes nowhere, since no number of steps does: a model that only talks, a third visit to the
+    mailbox, the same calls with the same answers again and again, and a loop a model reading the calls is sure of."""
+
+    def __init__(self) -> None:
+        self.calls: list[_Call] = []
+        self.idle = self.turns = self.visits = 0
+        self.warned = self.in_mailbox = False
+
+    def talked(self) -> str:
+        """A reply with no tool call; why the run ends, or ""."""
+        self.idle += 1
+        return f"The model answered {IDLE_STOP} times in a row without using the tools." if self.idle >= IDLE_STOP else ""
+
+    def turn(self) -> None:
+        self.idle = 0
+        self.turns += 1
+
+    def one_visit_too_many(self, url: str) -> bool:
+        """An address opened; True when it is an arrival at the mailbox beyond the plugins' two."""
+        at_mailbox = _is_mailbox(url)
+        arrives = at_mailbox and not self.in_mailbox
+        self.in_mailbox = at_mailbox
+        if arrives:
+            self.visits += 1
+        return arrives and self.visits > MAILBOX_VISITS
+
+    def saw(self, name: str, arguments: dict[str, Any], answer: str, pictures: str = "") -> None:
+        mark = hashlib.sha256(json.dumps([name, arguments, answer + pictures], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        self.calls.append(_Call(name, mark, f"{name} {json.dumps(arguments, ensure_ascii=False)[:200]} -> {' '.join(answer.split())[:200]}"))
+
+    def _repeats(self, times: int) -> int:
+        """The length of the cycle of calls the run ends with, repeated `times` in a row; 0 when there is none. Waiting in
+        the mailbox for a code is such a cycle, a wait and a look with nothing new: the plugins say it ends at the fifth."""
+        marks = [call.mark for call in self.calls]
+        for cycle in range(1, LOOP_CYCLE + 1):
+            span = cycle * times
+            if len(marks) >= span and all(marks[-span + at] == marks[-span + at % cycle] for at in range(span)):
+                return cycle
+        return 0
+
+    async def after(self, client: AsyncOpenAI, model: str) -> tuple[str, str]:
+        """At the end of a turn: why the run ends, and what the model is told; each "" when there is nothing."""
+        if cycle := self._repeats(LOOP_STOP):
+            calls = ", ".join(call.name for call in self.calls[-cycle:])
+            return f"Stopped going round in circles: {calls}, the same {cycle} call(s) {LOOP_STOP} times in a row with the same results.", ""
+        if self.turns >= LOOP_CHECK_AFTER and (self.turns - LOOP_CHECK_AFTER) % LOOP_CHECK_EVERY == 0 and (why := await self._stuck(client, model)):
+            return f"Stopped going round in circles: {why}", ""
+        cycle = self._repeats(LOOP_WARN)
+        warning = "" if self.warned or not cycle else (
+            f"Your last {cycle * LOOP_WARN} calls are the same {cycle} call(s) {LOOP_WARN} times, with the same results each time: "
+            "nothing on the page changes. Do something else."
+        )
+        self.warned = bool(cycle)
+        return "", warning
+
+    async def _stuck(self, client: AsyncOpenAI, model: str) -> str:
+        """Why the run is going round in circles, when a model reading its last calls is sure of it; "" otherwise."""
+        lines = "\n".join(call.line for call in self.calls[-LOOP_CHECK_CALLS:])
+        try:
+            verdict = await structured(client, model, LOOP_CHECK_SYSTEM, lines, "loop_check", LOOP_CHECK_SCHEMA)
+        except Exception:  # noqa: BLE001  A check that fails leaves the run to go on.
+            return ""
+        return str(verdict.get("reason", "")) if verdict.get("stuck") and float(verdict.get("confidence", 0)) >= LOOP_CHECK_SURE else ""
 
 
 async def _not_one(session: Browser, selector: str) -> str:
@@ -261,68 +314,48 @@ async def _not_one(session: Browser, selector: str) -> str:
 
 
 async def fill_form(session: Browser, tools: list[dict[str, Any]], client: AsyncOpenAI, model: str, brief: str, guidance: str = "", page_rules: str = "") -> dict[str, Any]:
-    """The model works on the open page until it calls finish_form; returns what it reported."""
+    """The model works on the open page until it calls finish_form; returns what it reported. There is no limit on steps:
+    a form takes the steps it needs, and the watch ends a run that goes nowhere."""
     messages: list[Any] = [{"role": "system", "content": instructions(guidance, page_rules)}, {"role": "user", "content": brief}]
-    mailbox_visits, in_mailbox = 0, False
-    history: list[str] = []  # each call and its answer, as _fingerprint writes them
-    names: list[str] = []  # the same calls, by tool name
-    trail: list[str] = []  # the same calls, as a model reads them to judge whether the run is stuck
-    warned, idle, turns = False, 0, 0
-    # No limit on steps: a form takes the steps it needs. What ends a run that goes nowhere is its repeating itself.
+    watch = _Watch()
     while True:
         response, request_id = await chat(client, model=model, messages=messages, tools=[*tools, FINISH_TOOL])
         SPEND.note(model, getattr(response, "usage", None), request_id)
         message = response.choices[0].message
         messages.append(message.model_dump(exclude_none=True))
         if not message.tool_calls:
-            idle += 1
-            if idle >= IDLE_STOP:
-                return {"status": "blocked", "summary": f"The model answered {IDLE_STOP} times in a row without using the tools.", "submit_selector": ""}
+            if why := watch.talked():
+                return _blocked(why)
             messages.append({"role": "user", "content": "Use the tools, and end with finish_form."})
             continue
-        idle = 0
-        turns += 1
+        watch.turn()
         seen: list[dict[str, Any]] = []
         for call in message.tool_calls:
+            name = call.function.name
             try:
                 arguments = json.loads(call.function.arguments or "{}")
             except ValueError:
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": "Those arguments are not valid JSON."})
                 continue
-            if call.function.name == "finish_form":
+            if name == "finish_form":
                 if arguments.get("status") == "ready" and (doubt := await _not_one(session, str(arguments.get("submit_selector", "")))):
                     messages.append({"role": "tool", "tool_call_id": call.id, "content": doubt})
-                    history.append(_fingerprint(call.function.name, arguments, doubt))
-                    names.append(call.function.name)
+                    watch.saw(name, arguments, doubt)
                     continue
                 return arguments
-            if call.function.name == "browser_navigate":
-                # The plugins say two visits; the code holds the model to it, whatever it reasons.
-                at_mailbox = _is_mailbox(str(arguments.get("url", "")))
-                if at_mailbox and not in_mailbox:
-                    mailbox_visits += 1
-                    if mailbox_visits > MAILBOX_VISITS:
-                        return {"status": "blocked", "summary": NO_CODE, "submit_selector": ""}
-                in_mailbox = at_mailbox
-            result = await session.call_tool(call.function.name, arguments)
+            # The plugins say two visits to the mailbox; the code holds the model to it, whatever it reasons.
+            if name == "browser_navigate" and watch.one_visit_too_many(str(arguments.get("url", ""))):
+                return _blocked(NO_CODE)
+            result = await session.call_tool(name, arguments)
             pictures = _images(result)
             seen += pictures
             messages.append({"role": "tool", "tool_call_id": call.id, "content": tool_text(result) or "Done: what it shows comes next."})
-            trail.append(f"{call.function.name} {json.dumps(arguments, ensure_ascii=False)[:200]} -> {' '.join(tool_text(result).split())[:200]}")
-            # Waiting in the mailbox for a code is a cycle too, a wait and a look with nothing new: the plugins say it ends
-            # at the fifth, so this is its clock.
-            history.append(_fingerprint(call.function.name, arguments, tool_text(result) + "".join(part["image_url"]["url"] for part in pictures)))
-            names.append(call.function.name)
-        if cycle := _repeats(history, LOOP_STOP):
-            calls = ", ".join(names[-cycle:])
-            return {"status": "blocked", "summary": f"Stopped going round in circles: {calls}, the same {cycle} call(s) {LOOP_STOP} times in a row with the same results.", "submit_selector": ""}
-        if (cycle := _repeats(history, LOOP_WARN)) and not warned:
-            warned = True
-            messages.append({"role": "user", "content": f"Your last {cycle * LOOP_WARN} calls are the same {cycle} call(s) {LOOP_WARN} times, with the same results each time: nothing on the page changes. Do something else."})
-        elif not _repeats(history, LOOP_WARN):
-            warned = False
-        if turns >= LOOP_CHECK_AFTER and (turns - LOOP_CHECK_AFTER) % LOOP_CHECK_EVERY == 0 and (why := await _stuck(client, model, trail)):
-            return {"status": "blocked", "summary": f"Stopped going round in circles: {why}", "submit_selector": ""}
+            watch.saw(name, arguments, tool_text(result), "".join(part["image_url"]["url"] for part in pictures))
+        why, warning = await watch.after(client, model)
+        if why:
+            return _blocked(why)
+        if warning:
+            messages.append({"role": "user", "content": warning})
         if seen:
             _keep_latest_picture(messages)
             messages.append({"role": "user", "content": seen})
@@ -354,6 +387,19 @@ async def _settled(session: Browser, before: dict[str, str] | None) -> dict[str,
     return last
 
 
+async def _address_now(session: Browser) -> str:
+    """The address the page is on now; "" when it cannot be read."""
+    with suppress(Exception):
+        return str((await _page(session) or {}).get("url", ""))
+    return ""
+
+
+async def _judge(session: Browser, client: AsyncOpenAI, model: str, guidance: str, address: str) -> tuple[str, dict[str, Any]]:
+    """The page's text, and what the verifying model makes of it after a send."""
+    text = tool_text(await session.call_tool("browser_read_text", {"selector": "body"}))
+    return text, await structured(client, model, verify_system(guidance), f"The page's address: {address}\n\n{text}", "submit_outcome", VERIFY_SCHEMA)
+
+
 async def submit_and_verify(session: Browser, client: AsyncOpenAI, model: str, selector: str, summary: str, guidance: str, shot: Path) -> Outcome:
     at = datetime.now(UTC).isoformat(timespec="seconds")
     before = None
@@ -371,28 +417,24 @@ async def submit_and_verify(session: Browser, client: AsyncOpenAI, model: str, s
             never_clicked = NOT_CLICKED in tool_text(click)
     except Exception as error:  # noqa: BLE001
         summary = f"{summary}\nThe click answered: {error}"
-    text, verdict = "", {}
+    text, verdict, address = "", {}, ""
     for _ in range(SEND_READS):
         page = await _settled(session, before)
         address = str((page or {}).get("url", ""))
         try:
-            text = tool_text(await session.call_tool("browser_read_text", {"selector": "body"}))
-            verdict = await structured(client, model, verify_system(guidance), f"The page's address: {address}\n\n{text}", "submit_outcome", VERIFY_SCHEMA)
+            text, verdict = await _judge(session, client, model, guidance, address)
         except Exception as error:  # noqa: BLE001  It was clicked: a failure to read the result is not a failure to send.
             verdict = {"outcome": "unknown", "evidence": f"the page could not be read: {error}"}
             break
-        if verdict["outcome"] != "unknown" or page in (None, before):
+        if verdict["outcome"] == "submitted" or page is None:
+            break
+        # A page that moved on after it was read is read again where it went: a Workday form showed its Review step for
+        # seconds after the click, was judged a refusal on it, and was then at the address of a completed application.
+        moved = await _address_now(session) not in ("", address)
+        if not moved and (verdict["outcome"] == "rejected" or page == before):
             break
         before = page
     url, screenshot = await _where(session, shot)
-    if url and url != address and verdict["outcome"] != "submitted":
-        # The page moved on after it was read: a Workday form showed its Review step for seconds after the click, was
-        # judged on it, and was then at its address for a completed application. What it says now decides.
-        with suppress(Exception):
-            address = url
-            text = tool_text(await session.call_tool("browser_read_text", {"selector": "body"}))
-            verdict = await structured(client, model, verify_system(guidance), f"The page's address: {address}\n\n{text}", "submit_outcome", VERIFY_SCHEMA)
-            url, screenshot = await _where(session, shot)
     proof = Proof(at, url, verdict["outcome"], verdict["evidence"], text[:PAGE_CHARS], screenshot)
     if verdict["outcome"] == "submitted":
         return Outcome("submitted", f"{summary}\nConfirmed: {verdict['evidence']}", proof=proof)
