@@ -31,6 +31,8 @@ jobs:
           df -h /
       - run: pip install duckdb huggingface_hub
       - run: python pipeline/build.py --out work
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}  # the private cache of the sources not changed since the last build
       - run: python pipeline/publish.py --out work/out
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}

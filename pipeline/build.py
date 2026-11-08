@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -31,6 +32,9 @@ import duckdb
 HF = "https://huggingface.co/datasets"
 HF_API = "https://huggingface.co/api/datasets"
 RAW = "https://raw.githubusercontent.com"
+JOBHIVE = "https://storage.stapply.ai/jobhive/v1/all.parquet"
+# The private dataset that keeps each source as the last build read it, with the version it was read at.
+SOURCES_DATASET = "feder-cr/jobs-sources"
 # Files of about 128 MB and row groups of 2048 rows: small row groups let a search read only the rows it needs over HTTP.
 # A group is a whole description column chunk, which DuckDB cannot write below 2048 rows.
 # Postings to a description file: about 120 MB at the measured 590 bytes a posting, under GitHub's 2 GiB a file, and small
@@ -194,7 +198,7 @@ def _clean_up(work: Path) -> None:
 
 SOURCES = (
     Source("jobhive", "https://github.com/kalil0321/ats-scrapers", "not stated", lambda _: select(
-        "read_parquet('https://storage.stapply.ai/jobhive/v1/all.parquet')",
+        f"read_parquet('{JOBHIVE}')",
         url="coalesce(apply_url, url)", ats="ats_type", country="country_iso", remote="is_remote",
         salary_min="salary_min", salary_max="salary_max", salary_currency="salary_currency",
         description="description", posted_at="posted_at",
@@ -266,6 +270,122 @@ def connect(work: Path) -> duckdb.DuckDBPyConnection:
     # with the default limit used 12.4 GiB of 12.4 and stopped.
     connection.execute("SET memory_limit = '9GB'")
     return connection
+
+
+def _git_head(repo: str) -> str:
+    """The commit a GitHub repository's default branch is at, by git itself: it has no API limit."""
+    done = subprocess.run(["git", "ls-remote", f"https://github.com/{repo}", "HEAD"], check=True, capture_output=True, text=True, timeout=60)
+    return done.stdout.split()[0]
+
+
+def _hf_revision(dataset: str) -> str:
+    """The commit a Hugging Face dataset is at."""
+    with urllib.request.urlopen(f"{HF_API}/{dataset}/revision/main", timeout=60) as response:
+        return json.load(response)["sha"]
+
+
+def _file_version(url: str) -> str | None:
+    """What a server says of a file without sending it: its ETag, or its date and size; None when it says neither."""
+    # Named: Cloudflare, in front of jobhive's storage, refuses Python's own user agent.
+    request = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "AIHawk-pipeline (+https://github.com/feder-cr/Jobs_Applier_AI_Agent)"})
+    with urllib.request.urlopen(request, timeout=60) as response:
+        etag, modified, size = (response.headers.get(name, "") for name in ("ETag", "Last-Modified", "Content-Length"))
+    return etag or (f"{modified} {size}" if modified else None)
+
+
+# Where a source's data is not its home's latest commit: the file's own headers, or None, read every build. Riley's file is
+# a release asset, which a release changes without a commit; it takes seconds to read.
+VERSIONS: dict[str, Callable[[], str | None]] = {"jobhive": lambda: _file_version(JOBHIVE), "riley": lambda: None}
+
+
+def version_of(source: Source) -> str | None:
+    """What the source's data is as of now, to tell whether it changed since the last build; None when that cannot be
+    known, and the source is read."""
+    try:
+        if source.name in VERSIONS:
+            return VERSIONS[source.name]()
+        if source.home.startswith("https://github.com/"):
+            return _git_head(source.home.removeprefix("https://github.com/"))
+        if source.home.startswith(f"{HF}/"):
+            return _hf_revision(source.home.removeprefix(f"{HF}/"))
+    except Exception:  # noqa: BLE001  A version that cannot be had only means the source is read.
+        return None
+    return None
+
+
+class SourceCache:
+    """The sources as the last build read them, kept in the private dataset SOURCES_DATASET: a source whose version has
+    not changed is taken from there instead of read again. A build that cannot reach it reads every source."""
+
+    def __init__(self, api: object, versions: dict[str, dict]) -> None:
+        self.api, self.versions = api, versions
+
+    @classmethod
+    def open(cls) -> SourceCache | None:
+        token = os.environ.get("HF_TOKEN", "")
+        if not token:
+            return None
+        try:
+            from huggingface_hub import HfApi, hf_hub_download  # imported here: only the published build needs it
+
+            api = HfApi(token=token)
+            api.create_repo(SOURCES_DATASET, repo_type="dataset", private=True, exist_ok=True)
+            try:
+                versions = json.loads(Path(hf_hub_download(SOURCES_DATASET, "versions.json", repo_type="dataset", token=token)).read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001  The first build with a cache: nothing kept yet.
+                versions = {}
+            return cls(api, versions)
+        except Exception as error:  # noqa: BLE001  No cache is a slower build, not a failed one.
+            print(f"source cache: not used: {error}", file=sys.stderr, flush=True)
+            return None
+
+    def take(self, name: str, version: str, path: Path) -> dict | None:
+        """The source's report, its file put at `path`, when the cache holds it at this version; None otherwise."""
+        kept = self.versions.get(name)
+        if not kept or kept["version"] != version:
+            return None
+        try:
+            from huggingface_hub import hf_hub_download
+
+            shutil.copyfile(hf_hub_download(SOURCES_DATASET, f"sources/{name}.parquet", repo_type="dataset", token=self.api.token), path)
+        except Exception:  # noqa: BLE001  A file that cannot be had is read from the source instead.
+            return None
+        return kept["report"]
+
+    def keep(self, fresh: list[tuple[str, str, dict]], work: Path) -> None:
+        """The sources read this build, at their versions, in one commit; the history squashed, so old copies do not pile up."""
+        from huggingface_hub import CommitOperationAdd
+
+        versions = {**self.versions, **{name: {"version": version, "report": report} for name, version, report in fresh}}
+        (work / "versions.json").write_text(json.dumps(versions, indent=1), encoding="utf-8")
+        operations = [CommitOperationAdd(f"sources/{name}.parquet", str(work / "sources" / f"{name}.parquet")) for name, _, _ in fresh]
+        operations.append(CommitOperationAdd("versions.json", str(work / "versions.json")))
+        try:
+            self.api.create_commit(SOURCES_DATASET, repo_type="dataset", operations=operations, commit_message=f"{len(fresh)} sources read again")
+            self.api.super_squash_history(SOURCES_DATASET, repo_type="dataset")
+        except Exception as error:  # noqa: BLE001  The build is done; the next one reads these sources again.
+            print(f"source cache: not kept: {error}", file=sys.stderr, flush=True)
+
+
+def read_all(connection: duckdb.DuckDBPyConnection, chosen: list[Source], work: Path, cache: SourceCache | None) -> list[dict]:
+    """Every chosen source into work/sources, each one taken from the cache when its version has not changed since the
+    last build, and read from its home otherwise. The reports, in the sources' order."""
+    reports, fresh = [], []
+    for source in chosen:
+        version = version_of(source) if cache else None
+        path = work / "sources" / f"{source.name}.parquet"
+        started = time.monotonic()
+        if cache and version and (kept := cache.take(source.name, version, path)) is not None:
+            reports.append({**kept, "reused": True, "seconds": round(time.monotonic() - started)})
+            print(f"{source.name}: unchanged since the last build, {kept.get('rows')} rows taken from the cache", flush=True)
+            continue
+        report = read_source(connection, source, work)
+        reports.append(report)
+        if cache and version and "error" not in report:
+            fresh.append((source.name, version, report))
+    if cache and fresh:
+        cache.keep(fresh, work)
+    return reports
 
 
 def read_source(connection: duckdb.DuckDBPyConnection, source: Source, work: Path) -> dict[str, object]:
@@ -377,12 +497,12 @@ def main() -> None:
     connection = connect(work)
     started = time.monotonic()
     chosen = [source for source in SOURCES if not arguments.only or source.name in arguments.only]
-    reports = []
-    for source in chosen:
-        if arguments.reuse and (work / "sources" / f"{source.name}.parquet").exists():
-            reports.append({"name": source.name, "home": source.home, "license": source.license, "reused": True})
-            continue
-        reports.append(read_source(connection, source, work))
+    if arguments.reuse:
+        kept = [source for source in chosen if (work / "sources" / f"{source.name}.parquet").exists()]
+        reports = [{"name": source.name, "home": source.home, "license": source.license, "reused": True} for source in kept]
+        reports += read_all(connection, [source for source in chosen if source not in kept], work, None)
+    else:
+        reports = read_all(connection, chosen, work, SourceCache.open())
     _clean_up(work)
     counts = merge(connection, work)
     out = work / "out"

@@ -201,3 +201,51 @@ def test_a_column_the_previous_index_lacks_changes_every_posting_once(tmp_path: 
 def test_a_build_is_named_by_its_manifest_or_by_the_end_of_its_address() -> None:
     assert publish.build_of({"base_url": "https://github.com/o/r/releases/download/jobs-20261107-103405"}) == "jobs-20261107-103405"
     assert publish.build_of({"build": "jobs-20261107-153405", "base_url": "x"}) == "jobs-20261107-153405"
+
+
+def test_a_source_is_versioned_by_its_homes_commit_or_by_its_files_headers(monkeypatch: pytest.MonkeyPatch) -> None:
+    asked: list[str] = []
+    monkeypatch.setattr(build, "_git_head", lambda repo: asked.append(f"git {repo}") or "c1")
+    monkeypatch.setattr(build, "_hf_revision", lambda dataset: asked.append(f"hf {dataset}") or "h1")
+    monkeypatch.setattr(build, "VERSIONS", {**build.VERSIONS, "jobhive": lambda: asked.append("file") or "e1"})
+    by_name = {source.name: source for source in build.SOURCES}
+    assert build.version_of(by_name["rolebase"]) == "c1" and asked[-1] == "git chandranshB/roleBase"
+    assert build.version_of(by_name["scholarweave"]) == "h1" and asked[-1] == "hf scholarweave/Jobs-Dataset-v2"
+    assert build.version_of(by_name["jobhive"]) == "e1" and asked[-1] == "file"
+    assert build.version_of(by_name["riley"]) is None
+
+
+def test_a_version_that_cannot_be_had_means_the_source_is_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    def down(_: str) -> str:
+        raise OSError("no answer")
+
+    monkeypatch.setattr(build, "_git_head", down)
+    assert build.version_of(next(source for source in build.SOURCES if source.name == "rolebase")) is None
+
+
+class _Cache:
+    def __init__(self, versions: dict[str, str]) -> None:
+        self.versions, self.kept = versions, []
+
+    def take(self, name: str, version: str, path: Path) -> dict | None:
+        if self.versions.get(name) != version:
+            return None
+        write_source(path.parent.parent, name, [("https://a.example/kept", "Kept", None)])
+        return {"name": name, "rows": 1}
+
+    def keep(self, fresh: list, work: Path) -> None:
+        self.kept = [name for name, _, _ in fresh]
+
+
+def test_a_source_unchanged_since_the_last_build_is_taken_from_the_cache_and_a_changed_one_is_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sources = [build.Source(name, f"https://github.com/o/{name}", "MIT", lambda _: "SELECT 'https://a.example/read' AS url, 'Read' AS title") for name in ("same", "changed", "unknown")]
+    versions = {"same": "v1", "changed": "v2", "unknown": None}
+    monkeypatch.setattr(build, "version_of", lambda source: versions[source.name])
+    read: list[str] = []
+    monkeypatch.setattr(build, "read_source", lambda connection, source, work: read.append(source.name) or {"name": source.name, "rows": 1})
+    cache = _Cache({"same": "v1", "changed": "v1"})
+    (tmp_path / "sources").mkdir()
+    reports = build.read_all(duckdb.connect(), sources, tmp_path, cache)  # type: ignore[arg-type]
+    assert read == ["changed", "unknown"]
+    assert [report.get("reused", False) for report in reports] == [True, False, False]
+    assert cache.kept == ["changed"], "a source with no version is not kept: it is read every build"
