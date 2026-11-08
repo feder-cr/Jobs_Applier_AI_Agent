@@ -110,8 +110,6 @@ class Session:
         )
         self.description_files = description_files(manifest, self.config.database)
         new = sum(self.store.add(job) for job in jobs)
-        # Said for anyone, not for who builds the database: how many jobs, and, from the second search on, how many are new.
-        log(f"{len(jobs):,} jobs found for you" + (f", {new:,} new." if new != len(jobs) else "."))
         return new
 
     async def funnel(self, log: Log, status: Log) -> int:
