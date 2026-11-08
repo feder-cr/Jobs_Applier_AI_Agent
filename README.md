@@ -34,13 +34,6 @@ Give it your resume. The job search finds the postings that fit, you pick, and i
 | **5. Applies** | A real Firefox opens the company's form, fills every required field, attaches your CV and sends. |
 | **6. Keeps the answer** | What each page said, with a screenshot, for every application. |
 
-## Why AIHawk
-
-- **The company's own form.** No LinkedIn account and no Easy Apply: it applies where the company takes applications.
-- **Every posting is tried.** There is no list of sites it refuses, and a site can be taught in one Markdown file: [what has been confirmed](docs/sites.md).
-- **A browser built to look like yours.** [invisible-playwright-mcp](https://github.com/feder-cr/invisible_playwright_mcp) is a real Firefox with a person's hands, in a window you can watch.
-- **One command.** It installs what it needs, and everything else happens on the screen.
-
 ---
 
 ## Install
