@@ -31,18 +31,18 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out the script (main)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: main
 
       - name: Check out the badges branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: badges
           path: badges
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
