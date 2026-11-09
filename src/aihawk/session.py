@@ -42,6 +42,7 @@ class Session:
         self._client: AsyncOpenAI | None = None
         # The job database on this computer, which a search reads and the chunks still coming add to.
         self.library = Library(self.config.data_dir / "library")
+        self.library.days = self.config.max_age_days
         # How many jobs the whole database holds, once its manifest has been read.
         self.database_jobs = 0
 
@@ -110,6 +111,8 @@ class Session:
         still missing, one by one. `arrived` is told after each that changes what a search finds, `progress` how many chunks
         are here of how many. Both are told on the loop, which alone touches the screen."""
         loop = asyncio.get_running_loop()
+        # The days of this search, which may have changed in the settings since the last time.
+        self.library.days = self.config.max_age_days
         manifest = await asyncio.to_thread(load_manifest, self.config.database)
         self.database_jobs = int(manifest.get("rows_out") or 0)
         # The index and the description files read in place, before 2026-11-09: nothing reads them any more.

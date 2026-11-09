@@ -1,6 +1,6 @@
 """The job database on this computer: the chunks of one build, downloaded one after the other, the newest postings first,
-and the deltas of the builds after it. A search reads what has come so far, so a person who has just come sees the jobs
-grow instead of waiting for all of them; nothing is read over the network once a chunk is here.
+and the deltas of the builds after it: of a build, only the chunks a search over the person's days reads, all of them before
+it runs. Nothing is read over the network once a chunk is here.
 
 A posting is its newest version: the one in the latest delta that names its address, else the one in the chunks; a
 delta's `drop` takes it away. The chunks can come before or after the deltas that change them, and the answer is the same,
@@ -15,6 +15,7 @@ import shutil
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
@@ -26,9 +27,6 @@ COLUMNS = ("url", "title", "company", "location", "country", "posted_at", "descr
 STATE = "state.json"
 # Deltas kept apart before they are merged into one: a search reads them all, and a computer used every day gets five.
 DELTAS_APART = 8
-# The share of the database's postings on this computer before a search is worth showing: the owner's decision of
-# 2026-11-09. Over the first chunk alone the best matches for a search were three, and poor ones.
-READY_SHARE = 0.2
 
 
 class LibraryError(Exception):
@@ -46,6 +44,9 @@ class Library:
         self.chunks = folder / "chunks"
         self.deltas = folder / "deltas"
         self.state: dict[str, Any] = {}
+        # The days a search looks back: only the chunks holding postings that new are downloaded, all of them before a
+        # search runs. None: every chunk. The owner's decision of 2026-11-09, with 15 days by default.
+        self.days: int | None = None
         if (folder / STATE).is_file():
             try:
                 self.state = json.loads((folder / STATE).read_text(encoding="utf-8"))
@@ -68,18 +69,31 @@ class Library:
         have = set(self.state.get("have", []))
         return sum(int(chunk.get("rows", 0)) for chunk in self.state.get("chunks", []) if chunk["name"] in have)
 
+    def needed(self) -> list[dict[str, Any]]:
+        """The chunks a search over `days` reads: those holding a posting that new. The chunks go newest first, so these
+        are the first ones of each kind."""
+        chunks = self.state.get("chunks", [])
+        if self.days is None:
+            return chunks
+        since = (datetime.now(UTC) - timedelta(days=self.days)).replace(tzinfo=None).isoformat()
+        return [chunk for chunk in chunks if not chunk.get("newest") or chunk["newest"] >= since]
+
     def complete(self) -> bool:
-        return bool(self.state.get("chunks")) and len(self.chunk_files()) == len(self.state["chunks"])
+        """Whether every chunk a search over `days` reads is here."""
+        have = set(self.state.get("have", []))
+        return bool(self.state.get("chunks")) and all(chunk["name"] in have for chunk in self.needed())
 
     def readiness(self) -> float:
-        """How near this computer is to having READY_SHARE of the postings, from 0 to 1: 1 is enough to search."""
-        total = sum(int(chunk.get("rows", 0)) for chunk in self.state.get("chunks", []))
-        if self.complete() or (total and self.postings_here() >= total * READY_SHARE):
-            return 1.0
-        return self.postings_here() / (total * READY_SHARE) if total else 0.0
+        """How much of what a search over `days` reads is here, from 0 to 1: a search runs at 1."""
+        if not self.state.get("chunks"):
+            return 0.0
+        have = set(self.state.get("have", []))
+        needed = self.needed()
+        total = sum(int(chunk.get("rows", 0)) or 1 for chunk in needed)
+        return sum(int(chunk.get("rows", 0)) or 1 for chunk in needed if chunk["name"] in have) / total if total else 1.0
 
     def ready(self) -> bool:
-        return self.readiness() >= 1.0
+        return self.complete()
 
     def view(self, connection: duckdb.DuckDBPyConnection) -> bool:
         """`postings`, in this connection: every posting here at its newest, with `described` saying whether it has a text.
@@ -135,9 +149,10 @@ class Library:
         self.state["at"] = manifest["build"]
         self._save()
         self._merge_deltas()
-        total = len(self.state["chunks"])
-        progress(len(self.chunk_files()), total)
-        for chunk in self.state["chunks"]:
+        needed = self.needed()
+        total = len(needed)
+        progress(sum(1 for chunk in needed if chunk["name"] in self.state["have"]), total)
+        for chunk in needed:
             if chunk["name"] in self.state["have"]:
                 continue
             try:
@@ -152,7 +167,7 @@ class Library:
                 return
             self.state["have"].append(chunk["name"])
             self._save()
-            progress(len(self.chunk_files()), total)
+            progress(sum(1 for each in needed if each["name"] in self.state["have"]), total)
             arrived()
 
     def _chain(self, manifest: dict[str, Any]) -> list[dict[str, Any]] | None:

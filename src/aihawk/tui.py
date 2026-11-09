@@ -90,7 +90,7 @@ class AIHawk(App[None]):
         # again over the chunks come since the last one.
         self.progress: tuple[int, int] | None = None
         self.more_found = False
-        # The chunks this computer had when it was last short of a fifth of the database, plus one.
+        # The chunks this computer had when it was last short of the search's days, plus one.
         self.ready_at = 0
         self.signing_in = False
         self.columns_for = 0
@@ -180,9 +180,7 @@ class AIHawk(App[None]):
             table.add_row(*self.row(item), key=item.job.id)
         # The whole database's jobs, not the search's: what AIHawk looks through for the person.
         total = self.session.database_jobs
-        # While the chunks come, how many jobs are here of the database's: the person sees them grow.
-        here = self.session.library.postings_here()
-        found = (f"{here:,} of " if here < total and not self.session.library.complete() else "") + f"{total:,} job" + ("" if total == 1 else "s") if total else ""
+        found = f"{total:,} job" + ("" if total == 1 else "s") if total else ""
         self.query_one("#count", Static).update(" · ".join(part for part in (f"Page {self.page + 1}" if self.pages else "", found) if part))
         ids = [item.job.id for item in page]
         if current in ids:
@@ -234,8 +232,8 @@ class AIHawk(App[None]):
             scored = [item.job.id for item in session.store.all() if item.score is not None]
             self.pages = [scored[start : start + PAGE] for start in range(0, len(scored), PAGE)]
             self.refresh_jobs()
-            # The jobs come in the background, a chunk at a time. Until a fifth of them is here nothing is searched: over
-            # the first chunk alone the best matches were few and poor. From there, each chunk that comes searches again.
+            # The jobs come in the background, a chunk at a time: those of the days the search looks back, all of them
+            # before anything is searched, so the first matches are the best ones.
             self.bring_jobs()
             if not session.library.ready():
                 self.show_progress()
@@ -278,7 +276,7 @@ class AIHawk(App[None]):
                 self.refresh_jobs()
 
     def chunks_came(self, done: int, size: int) -> None:
-        # Whether the person was waiting for the first fifth: told by the count before this chunk, not by this one's.
+        # Whether the person was waiting for the jobs: told by the count before this chunk, not by this one's.
         waiting = self.progress is not None and self.progress[0] < self.ready_at
         self.progress = (done, size)
         if not self.session.library.ready():
@@ -294,7 +292,7 @@ class AIHawk(App[None]):
 
     def found_more(self) -> None:
         """New jobs on this computer: the search runs again over them, once for however many came while it ran. Not
-        before a fifth of the database is here."""
+        before every chunk of the search's days is here."""
         if not self.session.library.ready():
             return
         self.more_found = True
@@ -336,12 +334,12 @@ class AIHawk(App[None]):
 
     def show_progress(self) -> None:
         """How far the page the person waits for is, on one line: only while they wait, the first page or one turned to.
-        Until a fifth of the database is on this computer, how far that is."""
+        Until the jobs of the search's days are on this computer, how far that is."""
         if self.wanted is None and len(self.pages) > self.page and self.session.library.ready():
             return
         said = self.query_one(Said)
         if not self.session.library.ready():
-            said.say(f"Getting the jobs ready, only the first time… {int(self.session.library.readiness() * 100)}%", again=True)
+            said.say(f"Getting the jobs ready… {int(self.session.library.readiness() * 100)}%", again=True)
             return
         said.say(f"Preparing page {(self.wanted if self.wanted is not None else self.page) + 1}…", again=True)
 
