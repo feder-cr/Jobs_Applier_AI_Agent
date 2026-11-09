@@ -61,9 +61,14 @@ MAX_AGE_DAYS = 60
 # A posting its source does not date is dated by the database: the day a build first saw it, kept from build to build,
 # so that it ages and goes like any other. The owner's decision of 2026-11-09: 1.48 million postings with a description,
 # half the database, had no date, and a search kept them whatever its days. The first build to date them had no day
-# seen for them: it dated each between BACKDATED days ago, by its address, so the first download is light and a second
-# run of that build gives the same dates.
+# seen for them: it dated them between BACKDATED days ago, so the first download is light, by their site, not one by
+# one: a site's postings, alike in their texts, stay together in a chunk and compress together. Dated one by one, they
+# took the chunks with text from 1.91 GB to 2.46 GB (measured on 2026-11-09). A second run of that build gives the
+# same dates.
 BACKDATED = (15, 60)
+# The manifest's mark that its builds date every posting, by the rule above: a manifest without it, or with another,
+# has its undated postings backdated again.
+FIRST_SEEN = 2
 # The manifest of the database now published, whose chunks say the day each posting was dated.
 LIBRARY = "https://huggingface.co/datasets/feder-cr/jobs/resolve/main/library/manifest.json"
 # What a remote posting's location says when it does not narrow the job to a place; the database says "Remote" instead.
@@ -762,7 +767,7 @@ def merge(
     if not connection.execute("SELECT count(*) FROM duckdb_tables() WHERE table_name = 'seen'").fetchone()[0]:
         connection.execute("CREATE TEMP TABLE seen (url VARCHAR, posted_at TIMESTAMP)")
     low, high = BACKDATED
-    first = f"now()::TIMESTAMP - to_days(CAST({low} + hash(best.winner.url) % {high - low + 1} AS INTEGER))" if backdate else "now()::TIMESTAMP"
+    first = f"now()::TIMESTAMP - to_days(CAST({low} + hash(best.winner.host) % {high - low + 1} AS INTEGER))" if backdate else "now()::TIMESTAMP"
     connection.execute(f"""
         CREATE OR REPLACE TEMP TABLE dated AS
         SELECT best.key, coalesce(best.winner.posted, seen.posted_at, {first}) AS posted, best.winner.length >= {DESCRIBED} AS described
@@ -812,7 +817,7 @@ def seen_dates(connection: duckdb.DuckDBPyConnection) -> bool:
             raise
         print(f"seen dates: no database published yet ({error.code})", flush=True)
         return False
-    if not manifest.get("first_seen"):
+    if manifest.get("first_seen") != FIRST_SEEN:
         return False
     files = [f"{manifest['base_url']}/{chunk['name']}" for chunk in manifest["chunks"]]
     connection.execute("CREATE OR REPLACE TEMP TABLE seen AS SELECT url, posted_at FROM read_parquet(?)", [files])
@@ -827,7 +832,8 @@ def write_chunk(folder: Path, out: Path) -> None:
     part = int(folder.name.split("=")[1])
     name = f"titles_{part - TITLES_PART}.parquet" if part >= TITLES_PART else f"jobs_{part}.parquet"
     table = pq.read_table([path.as_posix() for path in sorted(folder.glob("*.parquet"))], columns=list(CHUNK_COLUMNS))
-    table = table.sort_by([("posted_at", "descending"), ("url", "ascending")])
+    # By address within the chunk: a site's postings side by side compress together, 4 to 8% smaller than by date.
+    table = table.sort_by([("url", "ascending")])
     # Statistics on the date alone: a search for the last 60 days skips the groups of older postings. Those of the other
     # columns made the footer ten times larger.
     pq.write_table(table, out / name, row_group_size=CHUNK_GROUP, compression="zstd", compression_level=CHUNK_LEVEL, write_statistics=["posted_at"])
@@ -883,7 +889,7 @@ def main() -> None:
         "columns": list(CHUNK_COLUMNS),
         "chunks": [chunk_entry(connection, path) for path in sorted(out.glob("*.parquet"), key=chunk_order)],
         # Every posting is dated: by its source, or by the day a build first saw it.
-        "first_seen": True,
+        "first_seen": FIRST_SEEN,
         "sources": reports,
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
