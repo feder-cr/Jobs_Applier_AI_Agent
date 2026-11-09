@@ -12,6 +12,7 @@ from openai import AsyncOpenAI
 from aihawk.apply import MAILBOXES, Outcome, apply_to_job, signed_in, site_of
 from aihawk.apply import sign_in as sign_in_browser
 from aihawk.config import KEY_ENV, KEY_URL, Config, ConfigError, load_config
+from aihawk.counter import count
 from aihawk.database import description_files, search, stored_descriptions
 from aihawk.llm import SPEND, explain, make_client, money, refused
 from aihawk.plugins import Plugin, always_plugins, load_plugins, plugin_for
@@ -200,6 +201,8 @@ class Session:
             self.store.set_account(host, email)
         self.store.set_status(item.job.id, outcome.status, outcome.summary)
         self.store.set_proof(item.job.id, outcome.proof)
+        # One more application sent, in the count of all AIHawk's users: see counter.py.
+        count(outcome.status)
         await SPEND.settle(self.client)
         self.store.set_cost(item.job.id, SPEND.total - before)
         # The file for the person outside the app. One that another program holds open must not stop the next send.

@@ -9,6 +9,8 @@
 </picture>
 <h3 align="center">An AI job application bot: automated job search, then it auto-applies to the jobs that match your resume, while you sleep.</h3>
 
+<a href="#the-count"><img alt="Applications sent with AIHawk, by all its users" src="https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/badges/docs/badges/applications.svg"></a>
+
 <sub>FEATURED IN</sub><br>
 <a href="https://www.businessinsider.com/aihawk-applies-jobs-for-you-linkedin-risks-inaccuracies-mistakes-2024-11"><b>Business Insider</b></a> ·
 <a href="https://techcrunch.com/2024/10/10/a-reporter-used-ai-to-apply-to-2843-jobs/"><b>TechCrunch</b></a> ·
@@ -51,6 +53,10 @@ curl -LsSf https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main
 ```
 
 You need a key: [get one from OrcaRouter](https://www.orcarouter.ai/ref/ref_accd17afb78fc95ac4d7).
+
+## The count
+
+Each application AIHawk finishes downloads one small file from GitHub, named after how it went: sent and confirmed, sent without a confirmation, refused by the form, blocked, or failed. GitHub counts the downloads, and that is how we know how many applications AIHawk sends; the number is the badge above. Nothing about you or the job goes with it: the file is the same for everyone. The count is always on.
 
 
 ---
