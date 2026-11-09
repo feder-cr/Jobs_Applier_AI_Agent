@@ -285,8 +285,8 @@ class AIHawk(App[None]):
             return
         self.refresh_jobs()
         if waiting and self.session.library.ready():
-            # The count of the wait gives way: the person sees it is over, and that more is coming.
-            self.query_one(Said).say("Ready. More jobs keep arriving in the background.", again=True)
+            # The count of the wait gives way: the person sees it is over.
+            self.query_one(Said).say("Ready.", again=True)
         else:
             self.show_progress()
 
