@@ -2,8 +2,8 @@
 manifest that names them, so a reader never sees a half-replaced database.
 
 Everything is under `library/`: the chunks of a build in `library/builds/<tag>/`, the deltas in `library/deltas/`, the
-manifest at `library/manifest.json`. The layout before it, an index and description files read in place, stays where it
-was at the dataset's root, as its last build left it, for an AIHawk not yet updated.
+manifest at `library/manifest.json`. The layout before it, an index and description files read in place at the dataset's
+root, is removed by the first commit that finds it: AIHawk brings itself up to date at every start, and nothing reads it.
 
 A database much smaller than the one before it is refused: losing a big source must not silently empty everyone's search.
 The last KEEP builds stay, so a reader still downloading one does not lose its chunks. Each build also publishes the delta
@@ -30,6 +30,8 @@ import duckdb
 DATASET = "feder-cr/jobs"
 FOLDER = "library"
 RESOLVE = f"https://huggingface.co/datasets/{DATASET}/resolve/main/{FOLDER}"
+# The layout before 2026-11-09, at the dataset's root: removed. The owner's decision of 2026-11-09.
+OLD_LAYOUT = ("builds", "deltas", "manifest.json")
 # The columns of a chunk, which a delta carries too, after its `op`: the address is the key.
 COLUMNS = ("url", "title", "company", "location", "country", "posted_at", "description")
 KEEP = 6  # five-hourly builds: about 30 hours, more than a slow line takes to download one
@@ -139,6 +141,8 @@ def main() -> None:
     operations = [CommitOperationAdd(path_in_repo=path, path_or_fileobj=str(local)) for path, local in adds]
     operations += [CommitOperationDelete(path_in_repo=f"{folder}/", is_folder=True) for folder in removed]
     operations += [CommitOperationDelete(path_in_repo=path) for path in old_deltas]
+    root = {item.path for item in api.list_repo_tree(DATASET, repo_type="dataset")}
+    operations += [CommitOperationDelete(path_in_repo=f"{path}/" if "." not in path else path, is_folder="." not in path) for path in OLD_LAYOUT if path in root]
     api.create_commit(DATASET, repo_type="dataset", operations=operations, commit_message=f"{tag}: {manifest['rows_out']} postings")
     api.super_squash_history(DATASET, repo_type="dataset", commit_message=f"The job database as of {tag}")
     print(f"published {tag}: {manifest['rows_out']} postings, {len(adds)} files; removed {len(removed)} old builds and {len(old_deltas)} old deltas")

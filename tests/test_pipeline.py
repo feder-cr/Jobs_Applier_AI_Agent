@@ -437,3 +437,12 @@ def test_a_source_unchanged_since_the_last_build_is_taken_from_the_cache_and_a_c
     assert read == ["changed", "unknown"]
     assert [report.get("reused", False) for report in reports] == [True, False, False]
     assert cache.kept == ["changed"], "a source with no version is not kept: it is read every build"
+
+
+def test_a_country_is_its_two_letters_whatever_a_source_writes(tmp_path: Path) -> None:
+    (tmp_path / "tmp").mkdir()
+    connection = build.connect(tmp_path)
+    written = ["UNITED STATES", "Italia", "DEU", "it", "UK", "Côte d'Ivoire", "日本", "Remote", "PARIS", "XX", "", None]
+    codes = [row[0] for row in connection.execute("SELECT country_code(c) FROM unnest(?) WITH ORDINALITY AS t(c, n) ORDER BY n", [written]).fetchall()]
+    assert codes == ["US", "IT", "DE", "IT", "GB", "CI", "JP", None, None, None, None, None]
+
