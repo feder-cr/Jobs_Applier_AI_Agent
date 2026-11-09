@@ -272,6 +272,35 @@ def test_space_space_a_then_enter_sends_each_selected_job_once_and_asks_no_quest
     assert Path(calls[0]["cv_file"]).is_file()
 
 
+def test_every_application_sent_is_counted_once_by_how_it_ended_and_a_dry_run_is_not(
+    home: Path, resume: Path, restored_apply: Any, counted: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    from aihawk.counter import COUNTER
+
+    async def send(keys: list[str], outcomes: list[Outcome]) -> None:
+        app = scripted_app(home, resume)
+        fake_apply(app, outcomes, [])
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
+            await pilot.press(*keys, "a")
+            await wait_for_screen(pilot, SendBatch)
+            await pilot.press("enter")
+            await wait_for_apply(pilot, app)
+        for thread in threading.enumerate():
+            if thread.name == "usage-counter":
+                thread.join()
+
+    asyncio.run(send(["space", "space"], [Outcome("submitted", "sent"), Outcome("refused", "phone is required")]))
+    assert counted == [COUNTER.format(outcome="submitted"), COUNTER.format(outcome="refused")]
+    assert counted[0] == "https://github.com/feder-cr/Jobs_Applier_AI_Agent/releases/download/usage-counter/submitted.txt"
+    # A dry run fills the form and sends nothing: nothing is counted.
+    monkeypatch.setenv("AIHAWK_DRY_RUN", "1")
+    asyncio.run(send(["down", "down", "space"], [Outcome("blocked", "Dry run: nothing sent.")]))
+    assert len(counted) == 2
+
+
 def test_escape_on_the_batch_sends_none_and_the_selection_stays(home: Path, resume: Path, restored_apply: Any) -> None:
     calls: list[Any] = []
 

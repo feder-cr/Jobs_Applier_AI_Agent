@@ -1,0 +1,55 @@
+"""The applications' count is recorded by GitHub Actions, never by a machine of ours: a scheduled workflow, the script it
+runs, and the arithmetic of the history."""
+
+from __future__ import annotations
+
+import datetime as dt
+import importlib.util
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+spec = importlib.util.spec_from_file_location("usage_counters", ROOT / "scripts" / "usage_counters.py")
+counters = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+sys.modules["usage_counters"] = counters
+spec.loader.exec_module(counters)  # type: ignore[union-attr]
+
+WORKFLOW = ROOT / ".github" / "workflows" / "counters.yml"
+
+
+def test_the_snapshot_is_a_scheduled_workflow_with_no_personal_secret() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "schedule:" in text and "cron:" in text
+    assert "scripts/usage_counters.py" in text
+    assert "ref: badges" in text and "HEAD:badges" in text
+    assert "secrets." not in text, "it must run on the built-in token alone"
+
+
+def test_the_app_and_the_snapshot_count_the_same_files() -> None:
+    from aihawk import counter
+
+    assert counter.OUTCOMES == counters.OUTCOMES
+    assert counter.COUNTER == f"https://github.com/{counters.REPO}/releases/download/{counters.COUNTER_TAG}/{{outcome}}.txt"
+
+
+def test_the_selftest_passes() -> None:
+    assert counters.selftest() == 0
+
+
+def test_a_day_is_the_difference_of_two_snapshots_and_the_badge_shows_the_applications_sent(tmp_path: Path) -> None:
+    totals = iter([
+        {"submitted": 10, "unconfirmed": 2, "refused": 1, "blocked": 0, "failed": 0},
+        {"submitted": 25, "unconfirmed": 3, "refused": 4, "blocked": 1, "failed": 2},
+    ])
+
+    def api(path: str) -> object:
+        if path.endswith("/releases/tags/usage-counter"):
+            return {"assets": [{"name": f"{name}.txt", "download_count": value} for name, value in next(totals).items()]}
+        return {"stargazers_count": 3}
+
+    history, daily, badges = tmp_path / "history.csv", tmp_path / "daily.csv", tmp_path / "badges"
+    counters.run(api, history, daily, badges, dt.date(2026, 11, 9))
+    counters.run(api, history, daily, badges, dt.date(2026, 11, 10))
+    rows = daily.read_text(encoding="utf-8").splitlines()
+    assert rows == ["day_utc,sent,submitted,unconfirmed,refused,blocked,failed", "2026-11-09,16,15,1,3,1,2"]
+    assert b"applications sent: 28" in (badges / "applications.svg").read_bytes()
