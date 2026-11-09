@@ -221,6 +221,21 @@ def test_a_vendor_has_one_name_and_is_read_from_the_link_when_a_source_does_not_
     assert [vendor for (vendor,) in vendors] == ["ashby", None, "paylocity"]
 
 
+def test_the_links_host_names_the_vendor_before_a_sources_label(tmp_path: Path) -> None:
+    write_full_source(tmp_path, "s", [
+        ("https://www.linkedin.com/jobs/view/1", "One", "A", "X", "datastax", None),
+        ("https://boards.greenhouse.io/acme/jobs/2", "Two", "B", "Y", "workday", None),
+        ("https://nobody.example/3", "Three", "C", "Z", "datastax", None),
+        ("https://sjobs.brassring.com/TGnewUI/4", "Four", "D", "W", None, None),
+    ])
+    (tmp_path / "tmp").mkdir()
+    connection = build.connect(tmp_path)
+    vendors = connection.execute(f"SELECT vendor(ats, url) FROM read_parquet('{(tmp_path / 'sources' / 's.parquet').as_posix()}') ORDER BY url").fetchall()
+    # LinkedIn's posting labelled "datastax" is LinkedIn's, and goes; "datastax" names no vendor.
+    assert [vendor for (vendor,) in vendors] == ["greenhouse", None, "brassring", "linkedin"]
+    assert build.merge(connection, tmp_path)["rows_out"] == 3
+
+
 def test_greenhouse_serves_one_posting_from_several_hosts(tmp_path: Path) -> None:
     write_source(tmp_path, "s", [
         ("https://boards.greenhouse.io/acme/jobs/1", "One", None),
