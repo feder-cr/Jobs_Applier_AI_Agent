@@ -446,3 +446,32 @@ def test_a_country_is_its_two_letters_whatever_a_source_writes(tmp_path: Path) -
     codes = [row[0] for row in connection.execute("SELECT country_code(c) FROM unnest(?) WITH ORDINALITY AS t(c, n) ORDER BY n", [written]).fetchall()]
     assert codes == ["US", "IT", "DE", "IT", "GB", "CI", "JP", None, None, None, None, None]
 
+
+def dates_out(tmp_path: Path) -> dict[str, datetime]:
+    return dict(duckdb.connect().execute(f"SELECT title, posted_at FROM read_parquet('{(tmp_path / 'out').as_posix()}/*.parquet')").fetchall())
+
+
+def test_a_posting_no_source_dates_keeps_the_day_a_build_first_saw_it_and_a_new_one_is_dated_today(tmp_path: Path) -> None:
+    write_dated(tmp_path, "s", [("https://a.example/1", "Seen before", text("Work")), ("https://a.example/2", "New", text("Work")),
+                                 ("https://a.example/3", "Dated", text("Work"), days_ago(3))])
+    (tmp_path / "tmp").mkdir()
+    connection = build.connect(tmp_path)
+    connection.execute("CREATE TEMP TABLE seen AS SELECT 'https://a.example/1' AS url, now()::TIMESTAMP - INTERVAL 20 DAY AS posted_at")
+    build.merge(connection, tmp_path)
+    dates = dates_out(tmp_path)
+    assert abs((datetime.now() - dates["Seen before"]).days - 20) <= 1
+    assert (datetime.now() - dates["New"]).total_seconds() < 3600
+    assert abs((datetime.now() - dates["Dated"]).days - 3) <= 1, "a source's own date wins"
+
+
+def test_the_first_build_to_date_them_backdates_each_between_15_and_60_days_by_its_address(tmp_path: Path) -> None:
+    write_dated(tmp_path, "s", [(f"https://a.example/{n}", f"Job {n}", text("Work")) for n in range(40)])
+    (tmp_path / "tmp").mkdir()
+    build.merge(build.connect(tmp_path), tmp_path, backdate=True)
+    first = dates_out(tmp_path)
+    ages = [(datetime.now() - posted).days for posted in first.values()]
+    # The oldest may fall on the 60th day exactly, past the database's 60: those go.
+    assert all(14 <= age <= 60 for age in ages) and len(set(ages)) > 5
+    build.merge(build.connect(tmp_path), tmp_path, backdate=True)
+    assert {title: posted.date() for title, posted in dates_out(tmp_path).items()} == {title: posted.date() for title, posted in first.items()}, "the same dates every run"
+
