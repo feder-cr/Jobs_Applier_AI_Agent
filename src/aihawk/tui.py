@@ -16,6 +16,7 @@ from textual.widgets import DataTable, Footer, Static
 from aihawk.apply import MAILBOXES, Outcome, mail_provider
 from aihawk.config import KEY_ENV, KEY_URL, ConfigError
 from aihawk.database import DatabaseError
+from aihawk.library import LibraryError
 from aihawk.llm import explain, refused
 from aihawk.screens import WIDE_ENOUGH, JobDetails, Rows, Said, SendBatch, SentDetails, SentList, Settings, SignIn, TextPrompt
 from aihawk.session import Session
@@ -85,8 +86,10 @@ class AIHawk(App[None]):
         self.pages: list[list[str]] = []
         self.page = 0
         self.wanted: int | None = None
-        # The descriptions read so far of the round under way, and of how many.
+        # The chunks of the database on this computer, and of how many, while they come; and whether a search has to run
+        # again over the chunks come since the last one.
         self.progress: tuple[int, int] | None = None
+        self.more_found = False
         self.signing_in = False
         self.columns_for = 0
         self.with_location = True
@@ -175,7 +178,9 @@ class AIHawk(App[None]):
             table.add_row(*self.row(item), key=item.job.id)
         # The whole database's jobs, not the search's: what AIHawk looks through for the person.
         total = self.session.database_jobs
-        found = f"{total:,} job" + ("" if total == 1 else "s") if total else ""
+        # While the chunks come, how many jobs are here of the database's: the person sees them grow.
+        here = self.session.library.postings_here()
+        found = (f"{here:,} of " if here < total and not self.session.library.complete() else "") + f"{total:,} job" + ("" if total == 1 else "s") if total else ""
         self.query_one("#count", Static).update(" · ".join(part for part in (f"Page {self.page + 1}" if self.pages else "", found) if part))
         ids = [item.job.id for item in page]
         if current in ids:
@@ -223,6 +228,8 @@ class AIHawk(App[None]):
                 self.show_heading()
             if not session.mail()[1]:
                 await self.set_up_mail()
+            # The jobs come in the background, a chunk at a time, and each one that comes searches again.
+            self.bring_jobs()
             await session.find(self.say)
             # The jobs scored before, by an earlier search: the first pages, sorted as they are.
             scored = [item.job.id for item in session.store.all() if item.score is not None]
@@ -238,24 +245,53 @@ class AIHawk(App[None]):
 
     async def score(self) -> None:
         """Pages, PAGE jobs each, up to the one after the page shown, and a round of scored jobs no page holds yet in
-        reserve: Jev reads the next round while the person reads, so a page they turn to is there. A round's wait is its
-        descriptions' download, half a minute; it is counted on the line below only while the person waits for a page."""
+        reserve: Jev reads the next round while the person reads, so a page they turn to is there. A round takes Jev a few
+        seconds; until the first jobs are on this computer, the line below counts the chunks coming."""
         session = self.session
         store = session.store
         while True:
             self.make_pages()
             if not store.with_status("new") or (len(self.pages) >= self.page + 2 and len(self.spare()) >= AHEAD):
                 break
+            self.show_progress()
+            await session.read(self.say)
+        self.make_pages()
+
+    @work(exclusive=True, group="library")
+    async def bring_jobs(self) -> None:
+        """The database brought to this computer, the newest jobs first; each chunk that comes is searched."""
+        try:
+            await self.session.sync(self.chunks_came, self.found_more)
+        except (LibraryError, DatabaseError) as error:
+            self.say(str(error))
+        except Exception as error:  # noqa: BLE001  Said on the screen, as in start.
+            self.failed(error)
+        finally:
             self.progress = None
+            if self.is_running:
+                self.refresh_jobs()
+
+    def chunks_came(self, done: int, size: int) -> None:
+        self.progress = (done, size)
+        if self.is_running:
+            self.refresh_jobs()
             self.show_progress()
 
-            def counted(done: int, size: int) -> None:
-                self.progress = (done, size)
-                self.show_progress()
+    def found_more(self) -> None:
+        """New jobs on this computer: the search runs again over them, once for however many came while it ran."""
+        self.more_found = True
+        if self.is_running and not any(worker.group == "find" and worker.is_running for worker in self.workers):
+            self.find_again()
 
-            await session.read(self.say, counted)
-            self.progress = None
-        self.make_pages()
+    @work(group="find")
+    async def find_again(self) -> None:
+        try:
+            while self.more_found and self.is_running:
+                self.more_found = False
+                await self.session.find(self.say)
+                self.keep_ahead()
+        except DatabaseError as error:
+            self.say(str(error))
 
     def spare(self) -> list[str]:
         """The scored jobs no page holds yet, the best first."""
@@ -281,12 +317,15 @@ class AIHawk(App[None]):
             self.refresh_jobs()
 
     def show_progress(self) -> None:
-        """How far the page the person waits for is, on one line: only while they wait, the first page or one turned to."""
+        """How far the page the person waits for is, on one line: only while they wait, the first page or one turned to.
+        Before the first jobs are on this computer, the chunks coming are counted."""
         if self.wanted is None and len(self.pages) > self.page:
             return
-        number = (self.wanted if self.wanted is not None else self.page) + 1
-        counted = f" {self.progress[0]} of {self.progress[1]}" if self.progress else ""
-        self.query_one(Said).say(f"Preparing page {number}…{counted}", again=True)
+        said = self.query_one(Said)
+        if not self.pages and self.progress and not self.session.store.all():
+            said.say(f"Getting the jobs ready… {self.progress[0]} of {self.progress[1]}", again=True)
+            return
+        said.say(f"Preparing page {(self.wanted if self.wanted is not None else self.page) + 1}…", again=True)
 
     def turn(self, step: int) -> None:
         """To the page before or after, on its first row. A page not ready yet opens once it is; the line below says how
@@ -304,7 +343,9 @@ class AIHawk(App[None]):
             return
         store = self.session.store
         paged = {job_id for page in self.pages for job_id in page}
-        if not store.with_status("new") and all(item.job.id in paged for item in store.all() if item.score is not None):
+        nothing_left = not store.with_status("new") and all(item.job.id in paged for item in store.all() if item.score is not None)
+        # Unless more are on their way: the page opens when the chunks still coming bring its jobs.
+        if nothing_left and self.session.library.complete():
             self.say("No more jobs for this search.")
             return
         self.wanted = target

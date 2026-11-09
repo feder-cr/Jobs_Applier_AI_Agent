@@ -73,6 +73,9 @@ PROGRESS = ("new", "passed_over", "shortlisted", "scored", "failed", "blocked", 
 KEY_VERSION = 2
 # 3: Jev alone scores; the jobs an earlier version left to its judge are new again.
 JEV_ONLY = 3
+# 4: a job's id is its address, as the database's since 2026-11-09, and its key is kept beside it: the same posting under
+# another of its links is known by the key, and never comes back as new, to be sent twice.
+URL_IDS = 4
 # The jobs the person sees as tried, and what each status says in plain words.
 SENT_WORDS = {
     "submitted": "sent and confirmed",
@@ -165,9 +168,14 @@ class Store:
         self._db.execute(ANSWERS_SCHEMA)
         self._db.execute(ACCOUNTS_SCHEMA)
         # A store from before the cost was kept gets the column; the rows keep their nulls.
-        if "cost" not in {row[1] for row in self._db.execute("PRAGMA table_info(jobs)")}:
+        columns = {row[1] for row in self._db.execute("PRAGMA table_info(jobs)")}
+        if "cost" not in columns:
             self._db.execute("ALTER TABLE jobs ADD COLUMN cost REAL")
             self._db.commit()
+        if "key" not in columns:
+            self._db.execute("ALTER TABLE jobs ADD COLUMN key TEXT")
+            self._db.commit()
+        self._db.execute("CREATE INDEX IF NOT EXISTS jobs_key ON jobs (key)")
         if self._db.execute("PRAGMA user_version").fetchone()[0] < KEY_VERSION:
             self._rekey()
         if self._db.execute("PRAGMA user_version").fetchone()[0] < JEV_ONLY:
@@ -175,6 +183,25 @@ class Store:
             self._db.execute("UPDATE jobs SET status = 'new' WHERE status IN ('shortlisted', 'passed_over') AND score IS NULL")
             self._db.execute(f"PRAGMA user_version = {JEV_ONLY}")
             self._db.commit()
+        if self._db.execute("PRAGMA user_version").fetchone()[0] < URL_IDS:
+            self._by_address()
+
+    def _by_address(self) -> None:
+        """Each job under its address, its key kept beside it. Two jobs with one address are one row, the one furthest along."""
+        rows = self._db.execute("SELECT id, url, status, score FROM jobs").fetchall()
+        rows.sort(key=lambda row: (PROGRESS.index(row[2]) if row[2] in PROGRESS else 0, row[3] or 0.0), reverse=True)
+        self._db.execute("UPDATE jobs SET key = id WHERE key IS NULL")
+        taken: set[str] = set()
+        for job_id, url, _, _ in rows:
+            if url in taken:
+                self._db.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+                continue
+            taken.add(url)
+            if job_id != url:
+                self._db.execute("DELETE FROM jobs WHERE id = ?", (url,))
+                self._db.execute("UPDATE jobs SET id = ? WHERE id = ?", (url, job_id))
+        self._db.execute(f"PRAGMA user_version = {URL_IDS}")
+        self._db.commit()
 
     def _rekey(self) -> None:
         """The jobs stored before a key changed, under the key their link has now. Two that turn out to be one posting are
@@ -200,14 +227,26 @@ class Store:
 
     def add(self, job: Job) -> bool:
         """Record a job seen in a search; True when it is new. A known job keeps its status and score."""
+        return self.add_all([job]) == 1
+
+    def add_all(self, jobs: list[Job]) -> int:
+        """Record the jobs a search found; how many are new. A known job keeps its status and score, and so does one
+        known under another of its links: the same key is the same posting, and is not added again."""
         now = _now()
-        cursor = self._db.execute(
-            "INSERT OR IGNORE INTO jobs (id, company, title, location, url, apply_url, description, lexical, first_seen, updated)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (job.id, job.company, job.title, job.location, job.url, job.apply_url, job.description, job.lexical, now, now),
-        )
+        new = 0
+        for job, key in zip(jobs, posting_keys([job.url for job in jobs]), strict=True):
+            # Only a link has a key worth comparing: another address entirely is another job.
+            known = "SELECT 1 FROM jobs WHERE id = ? OR (key = ? AND url LIKE 'http%')" if job.url.startswith("http") else "SELECT 1 FROM jobs WHERE id = ?"
+            if self._db.execute(known, (job.id, key) if job.url.startswith("http") else (job.id,)).fetchone():
+                continue
+            self._db.execute(
+                "INSERT INTO jobs (id, key, company, title, location, url, apply_url, description, lexical, first_seen, updated)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (job.id, key, job.company, job.title, job.location, job.url, job.apply_url, job.description, job.lexical, now, now),
+            )
+            new += 1
         self._db.commit()
-        return cursor.rowcount == 1
+        return new
 
     @staticmethod
     def _job(row: sqlite3.Row) -> Job:

@@ -9,29 +9,27 @@ import json
 import socket
 import textwrap
 import urllib.error
+from dataclasses import replace
 from pathlib import Path
 
 import duckdb
 import pytest
 
 from aihawk.config import Arc, ConfigError, Filters, Form, Node, Plan, load_config
-from aihawk.database import (
-    INDEX_COLUMNS,
-    UNDESCRIBED,
-    DatabaseError,
-    Job,
-    _apply,
-    _chain,
-    description_files,
-    local_index,
-    rarity,
-    search,
-    stored_descriptions,
-)
+from aihawk.database import RECALL, UNDESCRIBED, DatabaseError, Job, load_manifest, rarity, search
+from aihawk.library import Library, LibraryError
 from aihawk.store import COLUMNS, Proof, Store, said, sent_word, write_applied
 from fakes import publish
 
 JOB = Job("g:a:1", "Acme", "Senior Python Engineer", "Rome, Italy", "u", "a", "d")
+
+
+def found(location: str, filters: Filters, max_age_days: int, cache: Path, limit: int = RECALL) -> list[Job]:
+    """The search over the database at `location`, brought to this computer first, each job named by its row's key."""
+    library = Library(cache / "library")
+    library.sync(load_manifest(location), location)
+    keys = json.loads(Path(location).with_name("keys.json").read_text(encoding="utf-8"))
+    return [replace(job, id=keys.get(job.url, job.id)) for job in search(library, filters, max_age_days, limit)]
 
 
 def database(tmp_path: Path) -> str:
@@ -57,7 +55,7 @@ def database(tmp_path: Path) -> str:
     ],
 )
 def test_search_keeps_what_the_filters_say_and_leaves_out_what_is_old(tmp_path: Path, filters: Filters, titles: list[str]) -> None:
-    _, jobs = search(database(tmp_path), filters, 60, tmp_path)
+    jobs = found(database(tmp_path), filters, 60, tmp_path)
     assert [job.title for job in jobs] == titles
 
 
@@ -76,7 +74,7 @@ def test_a_title_holding_the_rare_node_comes_before_one_holding_only_the_common_
     connection.executemany("INSERT INTO t VALUES (?, 'https://a.example/', ?, 'c', 'Rome', 'd', NULL)", rows)
     path = publish(connection, tmp_path, 4)
     plan = Plan((Node("role", 1.0, (Form("Engineer"),)), Node("skill", 1.5, (Form("Fortran"),))))
-    _, jobs = search(path, Filters(plan=plan), 60, tmp_path, limit=3)
+    jobs = found(path, Filters(plan=plan), 60, tmp_path, limit=3)
     assert jobs[0].id in {"rare", "both"} and jobs[1].id in {"rare", "both"}
     # A node counts once, however many times a title says it: the two score the same.
     assert jobs[0].lexical == jobs[1].lexical == 1.0
@@ -86,7 +84,7 @@ def test_a_title_holding_the_rare_node_comes_before_one_holding_only_the_common_
 def test_a_node_holds_its_best_wording_and_wordings_never_add_up(tmp_path: Path) -> None:
     path = catalogue(tmp_path, [("both", "Engineer Developer", "A", "Rome"), ("dev", "Developer", "B", "Rome"), ("eng", "Engineer", "C", "Rome")])
     plan = Plan((Node("role", 1.0, (Form("Engineer"), Form("Developer"))),))
-    _, jobs = search(path, Filters(plan=plan), 60, tmp_path)
+    jobs = found(path, Filters(plan=plan), 60, tmp_path)
     # Each title holds one wording of the node as rare as any other: all three score the same, and "both" is no higher.
     assert {job.id: job.lexical for job in jobs} == {"both": 1.0, "dev": 1.0, "eng": 1.0}
 
@@ -95,7 +93,7 @@ def test_a_node_holds_its_best_wording_and_wordings_never_add_up(tmp_path: Path)
 def test_a_wording_weight_changes_the_order(tmp_path: Path, weights: tuple[float, float], order: list[str]) -> None:
     path = catalogue(tmp_path, [("e", "Engineer", "A", "Rome"), ("d", "Developer", "B", "Rome")])
     plan = Plan((Node("role", 1.0, (Form("Engineer", weights[0]), Form("Developer", weights[1]))),))
-    _, jobs = search(path, Filters(plan=plan), 60, tmp_path)
+    jobs = found(path, Filters(plan=plan), 60, tmp_path)
     assert [job.title for job in jobs] == order
 
 
@@ -103,14 +101,14 @@ def test_a_rare_wording_beats_a_common_one(tmp_path: Path) -> None:
     rows = [(f"common-{number}", "Engineer", f"Firm {number}", "Rome") for number in range(50)] + [("rare", "Fortran", "Lab", "Rome")]
     path = catalogue(tmp_path, rows)
     plan = Plan((Node("role", 1.0, (Form("Engineer"),)), Node("skill", 1.0, (Form("Fortran"),))))
-    _, jobs = search(path, Filters(plan=plan), 60, tmp_path, limit=1)
+    jobs = found(path, Filters(plan=plan), 60, tmp_path, limit=1)
     assert jobs[0].id == "rare"
 
 
 def test_a_when_arc_on_a_phrase_scales_the_whole_title_down(tmp_path: Path) -> None:
     path = catalogue(tmp_path, [("human", "Nurse", "Clinic", "Rome"), ("vet", "Veterinary Nurse", "Vets", "Rome")])
     plan = Plan((Node("role", 1.0, (Form("Nurse"),)),), (Arc((("*", 0.2),), when="Veterinary"),))
-    _, jobs = search(path, Filters(plan=plan), 60, tmp_path)
+    jobs = found(path, Filters(plan=plan), 60, tmp_path)
     assert [job.id for job in jobs] == ["human", "vet"]
     assert jobs[1].lexical == pytest.approx(0.2)
 
@@ -118,7 +116,7 @@ def test_a_when_arc_on_a_phrase_scales_the_whole_title_down(tmp_path: Path) -> N
 def test_an_unless_arc_scales_the_titles_that_lack_the_phrase(tmp_path: Path) -> None:
     path = catalogue(tmp_path, [("plain", "Engineer", "A", "Rome"), ("senior", "Senior Engineer", "B", "Rome")])
     plan = Plan((Node("role", 1.0, (Form("Engineer"),)),), (Arc((("*", 0.3),), unless="Senior"),))
-    _, jobs = search(path, Filters(plan=plan), 60, tmp_path)
+    jobs = found(path, Filters(plan=plan), 60, tmp_path)
     assert [job.id for job in jobs] == ["senior", "plain"]
     assert jobs[1].lexical == pytest.approx(0.3)
 
@@ -129,7 +127,7 @@ def test_a_node_of_weight_zero_scores_nothing_but_still_fires_an_arc(tmp_path: P
         (Node("role", 1.0, (Form("Engineer"),)), Node("remote", 0.0, (Form("Remote"),))),
         (Arc((("role", 2.0),), when="remote"),),
     )
-    _, jobs = search(path, Filters(plan=plan), 60, tmp_path)
+    jobs = found(path, Filters(plan=plan), 60, tmp_path)
     # The remote title's engineer is boosted by the arc; a title holding only the weight-0 node is not brought in.
     assert [job.id for job in jobs] == ["remote", "plain"]
 
@@ -137,9 +135,9 @@ def test_a_node_of_weight_zero_scores_nothing_but_still_fires_an_arc(tmp_path: P
 def test_an_arc_multiplier_is_clamped_to_three_at_most_and_a_twentieth_at_least(tmp_path: Path) -> None:
     path = catalogue(tmp_path, [("senior", "Senior Nurse", "A", "Rome"), ("plain", "Nurse", "B", "Rome")])
     role = Node("role", 1.0, (Form("Nurse"),))
-    _, boosted = search(path, Filters(plan=Plan((role,), (Arc((("*", 100.0),), when="Senior"),))), 60, tmp_path)
+    boosted = found(path, Filters(plan=Plan((role,), (Arc((("*", 100.0),), when="Senior"),))), 60, tmp_path)
     assert {job.id: job.lexical for job in boosted}["plain"] == pytest.approx(1 / 3)
-    _, damped = search(path, Filters(plan=Plan((role,), (Arc((("*", 0.0),), when="Senior"),))), 60, tmp_path)
+    damped = found(path, Filters(plan=Plan((role,), (Arc((("*", 0.0),), when="Senior"),))), 60, tmp_path)
     assert {job.id: job.lexical for job in damped}["senior"] == pytest.approx(0.05)
 
 
@@ -196,7 +194,7 @@ def test_a_place_is_found_by_its_word_by_its_country_code_or_by_a_remote_posting
     ]
     connection.executemany("INSERT INTO t VALUES (?, 'https://a.example/', 'Engineer', ?, ?, ?, ?, 'd', NULL)", [(row[0], *row) for row in rows])
     path = publish(connection, tmp_path, 4)
-    _, jobs = search(path, Filters(include=("Engineer",), locations=("Milano", "Italy"), countries=("IT",)), 60, tmp_path)
+    jobs = found(path, Filters(include=("Engineer",), locations=("Milano", "Italy"), countries=("IT",)), 60, tmp_path)
     assert {job.id for job in jobs} == {"word", "code", "spelled", "open-remote"}
 
 
@@ -210,7 +208,7 @@ def test_the_titles_a_person_reads_are_the_first_wordings_not_the_ids() -> None:
 def test_a_place_word_is_a_whole_part_of_the_location_not_a_word_inside_a_longer_name(tmp_path: Path) -> None:
     # The Australian posting has no country, so only its location can keep it out of a search for Wales.
     path = catalogue(tmp_path, [("au", "Engineer", "Firm", "Moorebank, New South Wales, Australia"), ("uk", "Engineer", "Firm", "Cardiff, Wales, GB")])
-    _, jobs = search(path, Filters(include=("Engineer",), locations=("Wales",)), 60, tmp_path)
+    jobs = found(path, Filters(include=("Engineer",), locations=("Wales",)), 60, tmp_path)
     assert [job.id for job in jobs] == ["uk"]
 
 
@@ -220,7 +218,7 @@ def test_a_place_starts_the_location_or_follows_a_separator_a_dash_or_a_number_n
     # Each posting has its own company: one job per title and company would keep only one of them.
     path = catalogue(tmp_path, [(location, "Engineer", location, location) for location in kept + refused])
     places = ("London", "Milan", "Milano", "Dallas", "Berlin", "Rome", "Italy", "Wales")
-    _, jobs = search(path, Filters(include=("Engineer",), locations=places), 60, tmp_path)
+    jobs = found(path, Filters(include=("Engineer",), locations=places), 60, tmp_path)
     assert {job.id for job in jobs} == set(kept)
 
 
@@ -237,7 +235,7 @@ def test_the_own_city_comes_first_and_every_posting_stands_one_per_place(tmp_pat
     ]
     connection.executemany("INSERT INTO t VALUES (?, 'https://a.example/', ?, ?, ?, 'd', NULL)", rows)
     path = publish(connection, tmp_path, 4)
-    _, jobs = search(path, Filters(include=("Engineer",), locations=("Italy",), cities=("Milano",)), 60, tmp_path)
+    jobs = found(path, Filters(include=("Engineer",), locations=("Italy",), cities=("Milano",)), 60, tmp_path)
     assert jobs[0].id == "milan"
     assert {job.id for job in jobs} == {"rome", "milan", "other", "no-name-1", "no-name-2"}
 
@@ -258,7 +256,7 @@ def test_filters_match_whole_words_and_keep_symbols_literal(tmp_path: Path) -> N
     path = publish(connection, tmp_path, 4)
 
     def keys(filters: Filters) -> set[str]:
-        return {job.id for job in search(path, filters, 60, tmp_path)[1]}
+        return {job.id for job in found(path, filters, 60, tmp_path)}
 
     assert keys(Filters(include=("java",))) == {"1", "3"}
     assert keys(Filters(include=("java",), locations=("roma",))) == {"1"}
@@ -267,28 +265,33 @@ def test_filters_match_whole_words_and_keep_symbols_literal(tmp_path: Path) -> N
 
 
 def test_names_come_without_html_entities(tmp_path: Path) -> None:
-    _, jobs = search(database(tmp_path), Filters(include=("accountant",)), 60, tmp_path)
+    jobs = found(database(tmp_path), Filters(include=("accountant",)), 60, tmp_path)
     assert [(job.title, job.company) for job in jobs] == [("Accountant & Clerk", "B&A")]
 
 
 def test_search_needs_titles_and_says_so(tmp_path: Path) -> None:
     with pytest.raises(DatabaseError, match="no job titles"):
-        search(database(tmp_path), Filters(), 60, tmp_path)
+        found(database(tmp_path), Filters(), 60, tmp_path)
 
 
 def test_a_database_that_cannot_be_read_says_so(tmp_path: Path) -> None:
-    with pytest.raises(DatabaseError, match="manifest"):
-        search(str(tmp_path / "none.json"), Filters(include=("x",)), 60, tmp_path)
+    with pytest.raises(DatabaseError, match="cannot be read"):
+        load_manifest(str(tmp_path / "none.json"))
 
 
-def test_a_database_that_cannot_be_reached_says_so_in_plain_words_and_keeps_the_detail(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    def no_network(*args: object, **kwargs: object) -> None:
+def test_a_database_that_cannot_be_reached_says_so_in_plain_words_and_keeps_the_detail(monkeypatch: pytest.MonkeyPatch) -> None:
+    def down(*_: object, **__: object) -> None:
         raise urllib.error.URLError(socket.gaierror(11001, "getaddrinfo failed"))
 
-    monkeypatch.setattr("aihawk.database.urllib.request.urlopen", no_network)
-    with pytest.raises(DatabaseError, match="cannot be reached: check your internet connection") as error:
-        search("https://example.test/manifest.json", Filters(include=("x",)), 60, tmp_path)
-    assert "<urlopen error [Errno 11001] getaddrinfo failed>" in str(error.value)
+    monkeypatch.setattr("urllib.request.urlopen", down)
+    with pytest.raises(DatabaseError) as raised:
+        load_manifest("https://example.test/manifest.json")
+    assert str(raised.value).startswith("The job database cannot be reached: check your internet connection")
+    assert "getaddrinfo failed" in str(raised.value)
+
+
+def test_nothing_here_yet_finds_nothing(tmp_path: Path) -> None:
+    assert search(Library(tmp_path / "library"), Filters(include=("python",)), 60) == []
 
 
 def test_a_posting_with_no_description_needs_a_title_twice_as_fitting(tmp_path: Path) -> None:
@@ -298,42 +301,22 @@ def test_a_posting_with_no_description_needs_a_title_twice_as_fitting(tmp_path: 
         ("bare", "https://a.example/1", "Bare Co", ""),
         ("told", "https://a.example/2", "Told Co", "Builds Python services. " * 20),
     ])
-    _, jobs = search(publish(connection, tmp_path, 2), Filters(include=("python",)), 60, tmp_path)
+    jobs = found(publish(connection, tmp_path, 2), Filters(include=("python",)), 60, tmp_path)
     assert [job.id for job in jobs] == ["told", "bare"]
     assert jobs[1].lexical == pytest.approx(UNDESCRIBED)
 
 
-def files_of(location: str) -> tuple[tuple[str, str, str], ...]:
-    return description_files(json.loads(Path(location).read_text(encoding="utf-8")), location)
-
-
-def test_many_descriptions_come_in_order_and_empty_where_there_is_no_key(tmp_path: Path) -> None:
-    location = database(tmp_path)
-    _, jobs = search(location, Filters(include=("python",)), 60, tmp_path)
-    keys = [job.id for job in jobs] + ["", "no-such-key"]
-    counts: list[int] = []
-    texts = stored_descriptions(keys, files_of(location), done=counts.append)
-    assert texts == [stored_descriptions([key], files_of(location))[0] for key in keys[:-2]] + ["", ""]
-    assert sorted(texts[:-2]) == ["Build", "Learn"] and counts[-1] == len(keys)
-
-
-def test_a_database_that_cannot_be_read_is_reported_once_and_the_search_has_no_descriptions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    location = database(tmp_path)
-    _, jobs = search(location, Filters(include=("python",)), 60, tmp_path)
-    keys = [job.id for job in jobs]
-    files = files_of(location)
-
-    class Unreadable:
-        def execute(self, *args: object) -> None:
-            raise duckdb.Error("the extension cannot be downloaded")
-
-        def close(self) -> None:
-            pass
-
-    monkeypatch.setattr(duckdb, "connect", lambda: Unreadable())
-    reported: list[str] = []
-    assert stored_descriptions(keys, files, problem=reported.append) == [""] * len(keys)
-    assert len(reported) == 1 and "job database" in reported[0]
+def test_descriptions_come_in_order_from_this_computer_and_empty_where_there_is_none(tmp_path: Path) -> None:
+    connection = duckdb.connect()
+    connection.execute("CREATE TABLE t (key VARCHAR, url VARCHAR, title VARCHAR, company VARCHAR, location VARCHAR, description VARCHAR, posted_at VARCHAR)")
+    connection.executemany("INSERT INTO t VALUES (?, ?, 'Python Engineer', 'Co', 'Rome', ?, NULL)", [
+        ("told", "https://a.example/1", "Build Python services. " * 12), ("short", "https://a.example/2", "Too short"),
+    ])
+    location = publish(connection, tmp_path, 2)
+    library = Library(tmp_path / "library")
+    library.sync(load_manifest(location), location)
+    urls = ["https://a.example/2", "https://a.example/1", "https://no.such/posting"]
+    assert library.descriptions(urls) == ["", "Build Python services. " * 12, ""]
 
 
 def test_what_was_tried_is_listed_newest_first_in_plain_words_with_what_the_page_said(tmp_path: Path) -> None:
@@ -437,27 +420,19 @@ def test_a_posting_whose_address_is_not_the_webs_is_left_out(tmp_path: Path) -> 
         [("web", "HTTPS://a.example/1", "a"), ("disk", "file:///home/me/.aihawk/key", "b"), ("app", "javascript:alert(1)", "c")],
     )
     path = publish(connection, tmp_path, 4)
-    assert [job.id for job in search(path, Filters(include=("java",)), 60, tmp_path)[1]] == ["web"]
+    assert [job.id for job in found(path, Filters(include=("java",)), 60, tmp_path)] == ["web"]
 
 
-def test_a_full_disk_while_the_index_downloads_says_the_disk_is_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_full_disk_while_the_jobs_download_says_the_disk_is_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     class Unreadable(io.BytesIO):
         def read(self, *_: object) -> bytes:
             raise OSError(errno.ENOSPC, "No space left on device")
 
     monkeypatch.setattr("urllib.request.urlopen", lambda *_, **__: Unreadable())
-    manifest = {"index": {"name": "index.parquet", "bytes": 740_000_000}, "built_at": "2026-11-05T00:00:00+00:00", "base_url": "https://a.example"}
-    with pytest.raises(DatabaseError, match="The disk is full: the job index needs 740 MB"):
-        local_index(manifest, "https://a.example/manifest.json", tmp_path)
-    assert not list(tmp_path.glob("*.part"))
-
-
-def test_the_index_download_says_how_far_it_has_come(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("urllib.request.urlopen", lambda *_, **__: io.BytesIO(b"x" * (4 << 20)))
-    manifest = {"index": {"name": "index.parquet", "bytes": 4 << 20}, "built_at": "2026-11-05T00:00:00+00:00", "base_url": "https://a.example"}
-    lines: list[str] = []
-    assert local_index(manifest, "https://a.example/manifest.json", tmp_path, lines.append).read_bytes() == b"x" * (4 << 20)
-    assert [line.strip() for line in lines[1:]] == ["25%", "50%", "75%"]
+    manifest = {"build": "b1", "chunks": [{"name": "jobs_0.parquet", "rows": 1}], "deltas": [], "base_url": "https://a.example/b1"}
+    with pytest.raises(LibraryError, match="The disk is full"):
+        Library(tmp_path).sync(manifest, "https://a.example/manifest.json")
+    assert not list(tmp_path.rglob("*.part"))
 
 
 def test_a_store_from_before_the_key_changed_keeps_one_row_per_posting_the_one_furthest_along(tmp_path: Path) -> None:
@@ -466,15 +441,35 @@ def test_a_store_from_before_the_key_changed_keeps_one_row_per_posting_the_one_f
     path = tmp_path / "jobs.db"
     store = Store(path)
     link = "https://acme.wd5.myworkdayjobs.com/en-US/External/job/Ankeny-IA/Sales-Rep_R-1"
-    store.add(Job("acme.wd5.myworkdayjobs.com/en-us/external/job/ankeny-ia/sales-rep_r-1", "Acme", "Sales Rep", "Ankeny", link, link, ""))
-    store.add(Job("acme.wd5.myworkdayjobs.com/external/job/sales-rep_r-1", "Acme", "Sales Rep", "", link.replace("en-US/", "").replace("Ankeny-IA/", ""), link, ""))
-    store.set_status("acme.wd5.myworkdayjobs.com/external/job/sales-rep_r-1", "submitted", "sent")
-    store.add(Job("greenhouse.io/acme/jobs/1", "Acme", "Engineer", "", "https://boards.greenhouse.io/acme/jobs/1", "u", ""))
+    # The rows as a store of that time held them: one posting under two keys, each its own row.
+    old = [
+        ("acme.wd5.myworkdayjobs.com/en-us/external/job/ankeny-ia/sales-rep_r-1", link, "new"),
+        ("acme.wd5.myworkdayjobs.com/external/job/sales-rep_r-1", link.replace("en-US/", "").replace("Ankeny-IA/", ""), "submitted"),
+        ("greenhouse.io/acme/jobs/1", "https://boards.greenhouse.io/acme/jobs/1", "new"),
+    ]
+    store._db.executemany(
+        "INSERT INTO jobs (id, company, title, location, url, apply_url, description, status, first_seen, updated) VALUES (?, 'Acme', 'T', '', ?, 'u', '', ?, 'x', 'x')", old
+    )
+    store._db.execute("UPDATE jobs SET key = NULL")
+    store._db.commit()
     store.close()
     sqlite3.connect(path).execute("PRAGMA user_version = 1").connection.commit()
     store = Store(path)
+    # One row per posting, the one furthest along, now under its address.
     ids = {item.job.id: item.status for item in store.all()}
-    assert ids == {"workday:acme:r-1": "submitted", "greenhouse.io/acme/jobs/1": "new"}
+    assert ids == {link.replace("en-US/", "").replace("Ankeny-IA/", ""): "submitted", "https://boards.greenhouse.io/acme/jobs/1": "new"}
+    store.close()
+
+
+def test_a_posting_already_known_under_another_of_its_links_is_not_added_again(tmp_path: Path) -> None:
+    store = Store(tmp_path / "jobs.db")
+    link = "https://acme.wd5.myworkdayjobs.com/External/job/Sales-Rep_R-7"
+    assert store.add(Job(link, "Acme", "Sales Rep", "", link, link, "")) is True
+    store.set_status(link, "submitted", "sent")
+    # The same Workday posting under its other address: the same key, so the job sent is not offered again.
+    other = "https://wd3.myworkdaysite.com/recruiting/acme/External/job/Sales-Rep_R-7"
+    assert store.add_all([Job(other, "Acme", "Sales Rep", "", other, other, "")]) == 0
+    assert [item.job.id for item in store.all()] == [link]
     store.close()
 
 
@@ -491,99 +486,76 @@ def test_a_job_seen_again_keeps_its_score_and_status(tmp_path: Path) -> None:
 
 def test_a_new_folder_defaults_to_the_published_database(tmp_path: Path) -> None:
     config = load_config(tmp_path)
-    assert config.model == "deepseek/deepseek-v4.1-flash" and config.database == "https://huggingface.co/datasets/feder-cr/jobs/resolve/main/manifest.json"
+    assert config.model == "deepseek/deepseek-v4.1-flash" and config.database == "https://huggingface.co/datasets/feder-cr/jobs/resolve/main/library/manifest.json"
+    # A settings file that names the layout before 2026-11-09 reads the new one.
+    (tmp_path / "aihawk.yaml").write_text("database: https://huggingface.co/datasets/feder-cr/jobs/resolve/main/manifest.json\n", encoding="utf-8")
+    assert load_config(tmp_path).database.endswith("/library/manifest.json")
 
 
 
-def _index_rows(path: Path, rows: list[tuple[str, str]]) -> None:
+def chunk(path: Path, rows: list[tuple[str, str, str | None]]) -> None:
+    """A chunk, or a delta when the rows start with their `op`: (url, title, description), or (op, url, title, description)."""
     connection = duckdb.connect()
-    connection.execute(f"CREATE TABLE i ({', '.join(f'{column} VARCHAR' for column in INDEX_COLUMNS)})")
-    connection.executemany("INSERT INTO i (key, url, title) VALUES (?, ?, ?)", [(key, f"https://{key}", title) for key, title in rows])
-    connection.execute(f"COPY i TO '{path.as_posix()}' (FORMAT parquet)")
+    ops = len(rows[0]) == 4
+    connection.execute(f"CREATE TABLE c ({'op VARCHAR, ' if ops else ''}url VARCHAR, title VARCHAR, company VARCHAR, location VARCHAR, country VARCHAR, posted_at TIMESTAMP, description VARCHAR)")
+    connection.executemany(f"INSERT INTO c ({'op, ' if ops else ''}url, title, description) VALUES ({', '.join('?' for _ in rows[0])})", rows)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    connection.execute(f"COPY c TO '{path.as_posix()}' (FORMAT parquet)")
 
 
-def _delta_rows(path: Path, rows: list[tuple[str, str, str | None]]) -> None:
+def titles_here(library: Library) -> dict[str, str]:
     connection = duckdb.connect()
-    columns = ", ".join(f"{column} VARCHAR" for column in INDEX_COLUMNS)
-    connection.execute(f"CREATE TABLE d (op VARCHAR, {columns})")
-    connection.executemany("INSERT INTO d (op, key, url, title) VALUES (?, ?, ?, ?)",
-                           [(op, key, f"https://{key}" if title else None, title) for op, key, title in rows])
-    connection.execute(f"COPY d TO '{path.as_posix()}' (FORMAT parquet)")
+    try:
+        return dict(connection.execute("SELECT url, title FROM postings").fetchall()) if library.view(connection) else {}
+    finally:
+        connection.close()
 
 
-def test_the_chain_of_deltas_is_followed_from_the_build_this_computer_has() -> None:
-    deltas = [{"build": "b2", "after": "b1"}, {"build": "b3", "after": "b2"}, {"build": "b4", "after": "b3"}]
-    assert _chain(deltas, "b2") == deltas[1:]
-    assert _chain(deltas, "b4") == []
-    assert _chain(deltas, "b0") is None
-    assert _chain([{"build": "b2", "after": "b1"}, {"build": "b4", "after": "b3"}], "b1") is None
+def test_the_chunks_come_one_by_one_and_a_search_reads_what_has_come(tmp_path: Path) -> None:
+    site = tmp_path / "site" / "b1"
+    chunk(site / "jobs_0.parquet", [("https://a/1", "Newest", "x" * 300)])
+    chunk(site / "titles_0.parquet", [("https://a/2", "No text", None)])
+    manifest = {"build": "b1", "base_url": site.as_posix(), "deltas": [],
+                "chunks": [{"name": "jobs_0.parquet", "rows": 1}, {"name": "titles_0.parquet", "rows": 1}]}
+    library = Library(tmp_path / "here")
+    seen: list[dict[str, str]] = []
+    told: list[tuple[int, int]] = []
+    library.sync(manifest, "unused", lambda done, size: told.append((done, size)), lambda: seen.append(titles_here(library)))
+    assert seen == [{"https://a/1": "Newest"}, {"https://a/1": "Newest", "https://a/2": "No text"}], "a search reads each chunk as it comes"
+    assert told == [(0, 2), (1, 2), (2, 2)] and library.complete() and library.postings_here() == 2
+    # A second start downloads nothing.
+    library.sync(manifest, "unused", arrived=lambda: seen.append({}))
+    assert len(seen) == 2
 
 
-def test_deltas_are_applied_in_one_rewrite_and_the_newest_action_on_a_key_wins(tmp_path: Path) -> None:
-    index = tmp_path / "index.parquet"
-    _index_rows(index, [("a", "Old A"), ("b", "B"), ("c", "C")])
-    # First delta: a changes, d arrives. Second: d goes again, e arrives, b goes.
-    _delta_rows(tmp_path / "delta-jobs-20261107-010000.parquet", [("add", "a", "New A"), ("add", "d", "D")])
-    _delta_rows(tmp_path / "delta-jobs-20261107-060000.parquet", [("drop", "d", None), ("add", "e", "E"), ("drop", "b", None)])
-    chain = [{"url": (tmp_path / "delta-jobs-20261107-010000.parquet").as_posix()}, {"url": (tmp_path / "delta-jobs-20261107-060000.parquet").as_posix()}]
-    _apply(index, chain)
-    rows = duckdb.connect().execute(f"SELECT key, title FROM read_parquet('{index.as_posix()}') ORDER BY key").fetchall()
-    assert rows == [("a", "New A"), ("c", "C"), ("e", "E")]
-
-
-def test_an_index_kept_from_before_a_column_was_added_takes_the_delta_that_brings_it(tmp_path: Path) -> None:
-    path = tmp_path / "index.parquet"
-    _index_rows(path, [("a", "A"), ("b", "B")])
+def test_the_deltas_after_the_build_here_bring_it_up_to_date_and_the_newest_action_on_an_address_wins(tmp_path: Path) -> None:
+    site = tmp_path / "site"
+    chunk(site / "b1" / "jobs_0.parquet", [("https://a/1", "Old title", "x" * 300), ("https://a/2", "Gone", "y" * 300), ("https://a/3", "Same", "z" * 300)])
+    chunk(site / "d2.parquet", [("add", "https://a/1", "New title", "x" * 300), ("drop", "https://a/2", None, None)])
+    chunk(site / "d3.parquet", [("add", "https://a/4", "Added", None), ("add", "https://a/2", "Back again", "w" * 300)])
+    first = {"build": "b1", "base_url": (site / "b1").as_posix(), "deltas": [], "chunks": [{"name": "jobs_0.parquet", "rows": 3}]}
+    library = Library(tmp_path / "here")
+    library.sync(first, "unused")
+    deltas = [{"build": "b2", "after": "b1", "url": (site / "d2.parquet").as_posix()}, {"build": "b3", "after": "b2", "url": (site / "d3.parquet").as_posix()}]
+    # Named as the dataset names them: the newest last.
+    deltas[0]["url"], deltas[1]["url"] = (site / "delta-b2.parquet").as_posix(), (site / "delta-b3.parquet").as_posix()
+    (site / "d2.parquet").replace(site / "delta-b2.parquet")
+    (site / "d3.parquet").replace(site / "delta-b3.parquet")
+    library.sync({**first, "build": "b3", "deltas": deltas}, "unused")
+    assert titles_here(library) == {"https://a/1": "New title", "https://a/2": "Back again", "https://a/3": "Same", "https://a/4": "Added"}
     connection = duckdb.connect()
-    connection.execute(f"COPY (SELECT * EXCLUDE (described) FROM read_parquet('{path.as_posix()}')) TO '{(tmp_path / 'old.parquet').as_posix()}' (FORMAT parquet)")
-    (tmp_path / "old.parquet").replace(path)
-    _delta_rows(tmp_path / "delta.parquet", [("add", "b", "B"), ("add", "c", "C")])
-    _apply(path, [{"url": (tmp_path / "delta.parquet").as_posix()}])
-    rows = connection.execute(f"SELECT key FROM read_parquet('{path.as_posix()}') ORDER BY key").fetchall()
-    assert rows == [("a",), ("b",), ("c",)]
-    assert "described" in {row[0] for row in connection.execute(f"DESCRIBE SELECT * FROM read_parquet('{path.as_posix()}')").fetchall()}
+    library.view(connection)
+    assert dict(connection.execute("SELECT url, described FROM postings").fetchall())["https://a/4"] is False
 
 
-def test_a_description_is_found_by_its_key_in_the_file_whose_range_holds_it(tmp_path: Path) -> None:
-    connection = duckdb.connect()
-    for name, rows in (("jobs_0.parquet", [("a/1", "First"), ("a/2", "Second")]), ("jobs_1.parquet", [("b/1", "Third")])):
-        connection.execute("CREATE OR REPLACE TABLE t (key VARCHAR, description VARCHAR)")
-        connection.executemany("INSERT INTO t VALUES (?, ?)", rows)
-        connection.execute(f"COPY (SELECT * FROM t ORDER BY key) TO '{(tmp_path / name).as_posix()}' (FORMAT parquet)")
-    manifest = {"base_url": tmp_path.as_posix(), "files": [
-        {"name": "jobs_1.parquet", "first_key": "b/1", "last_key": "b/1"},
-        {"name": "jobs_0.parquet", "first_key": "a/1", "last_key": "a/2"},
-    ]}
-    files = description_files(manifest, "unused")
-    assert [first for first, _, _ in files] == ["a/1", "b/1"]
-    assert stored_descriptions(["b/1", "a/2", "zz/9", ""], files) == ["Third", "Second", "", ""]
-
-
-def test_an_index_kept_here_is_downloaded_once_then_brought_up_to_date_by_its_deltas(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    release = tmp_path / "release"
-    release.mkdir()
-    snapshot = release / "index.parquet"
-    _index_rows(snapshot, [("a", "A"), ("b", "B")])
-    downloads: list[str] = []
-
-    def served(url: str, *_: object, **__: object) -> io.BytesIO:
-        downloads.append(url)
-        return io.BytesIO(snapshot.read_bytes())
-
-    monkeypatch.setattr("urllib.request.urlopen", served)
-    cache = tmp_path / "cache"
-    first = {"build": "b1", "deltas": [], "index": {"name": "index.parquet", "bytes": snapshot.stat().st_size},
-             "built_at": "2026-11-07T01:00:00+00:00", "base_url": "https://a.example/b1"}
-    path = local_index(first, "https://a.example/manifest.json", cache)
-    assert duckdb.connect().execute(f"SELECT count(*) FROM read_parquet('{path.as_posix()}')").fetchone()[0] == 2
-    assert len(downloads) == 1
-    _delta_rows(release / "delta-jobs-b2.parquet", [("add", "c", "C"), ("drop", "a", None)])
-    second = {**first, "build": "b2", "base_url": "https://a.example/b2",
-              "deltas": [{"build": "b2", "after": "b1", "url": (release / "delta-jobs-b2.parquet").as_posix(), "adds": 1, "drops": 1}]}
-    lines: list[str] = []
-    path = local_index(second, "https://a.example/manifest.json", cache, lines.append)
-    assert len(downloads) == 1, "the whole index is never downloaded again"
-    assert lines == ["Getting the latest jobs."]
-    keys = [row[0] for row in duckdb.connect().execute(f"SELECT key FROM read_parquet('{path.as_posix()}') ORDER BY key").fetchall()]
-    assert keys == ["b", "c"]
-    assert local_index(second, "https://a.example/manifest.json", cache) == path and len(downloads) == 1
+def test_a_chain_that_cannot_be_followed_starts_over_from_the_newest_build(tmp_path: Path) -> None:
+    site = tmp_path / "site"
+    chunk(site / "b1" / "jobs_0.parquet", [("https://a/1", "From b1", "x" * 300)])
+    chunk(site / "b9" / "jobs_0.parquet", [("https://a/9", "From b9", "x" * 300)])
+    library = Library(tmp_path / "here")
+    library.sync({"build": "b1", "base_url": (site / "b1").as_posix(), "deltas": [], "chunks": [{"name": "jobs_0.parquet", "rows": 1}]}, "unused")
+    # b9's deltas start after b5: nothing leads there from b1.
+    later = {"build": "b9", "base_url": (site / "b9").as_posix(), "chunks": [{"name": "jobs_0.parquet", "rows": 1}],
+             "deltas": [{"build": "b9", "after": "b5", "url": "unused"}]}
+    library.sync(later, "unused")
+    assert titles_here(library) == {"https://a/9": "From b9"}

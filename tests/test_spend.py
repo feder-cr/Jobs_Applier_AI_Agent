@@ -47,7 +47,7 @@ def test_a_store_from_before_costs_were_kept_gets_the_column_and_an_application_
     )
     old.execute(
         "INSERT INTO jobs (id, company, title, location, url, apply_url, description, status, first_seen, updated)"
-        " VALUES ('a', 'Co', 'Eng', 'Rome', 'u', 'u', 'd', 'submitted', 't', 't')"
+        " VALUES ('a', 'Co', 'Eng', 'Rome', 'a', 'u', 'd', 'submitted', 't', 't')"
     )
     old.commit()
     old.close()

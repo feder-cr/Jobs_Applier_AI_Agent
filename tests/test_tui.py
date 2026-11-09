@@ -127,10 +127,10 @@ class ScriptedModelForApp:
 
 
 async def settle(pilot: Any, app: AIHawk) -> None:
-    """Until the flow's workers are done or waiting on the person."""
+    """Until the flow's workers are done or waiting on the person: the scoring, the jobs coming and the searches over them."""
     for _ in range(200):
         await pilot.pause(0.05)
-        running = [worker for worker in app.workers if worker.is_running and worker.group == "flow"]
+        running = [worker for worker in app.workers if worker.is_running and worker.group in ("flow", "library", "find")]
         if not running or isinstance(app.screen, (TextPrompt, SendBatch)):
             return
     raise AssertionError("the flow never settled")
@@ -313,7 +313,7 @@ def test_escape_on_the_batch_sends_none_and_the_selection_stays(home: Path, resu
             await wait_for_screen(pilot, SendBatch)
             await pilot.press("escape")
             await wait_for_apply(pilot, app)
-            assert app.selected == {"high"}
+            assert app.selected == {"https://jobs.lever.co/beta/2"}, "a job is known by its address"
             assert str(app.query_one(DataTable).get_row_at(0)[0]) == "●"
 
     asyncio.run(run())
@@ -795,8 +795,9 @@ def test_a_posting_with_no_description_is_judged_on_its_title_and_no_page_is_rea
         raise AssertionError("a page was read from the person's computer")
 
     monkeypatch.setattr("urllib.request.urlopen", no_page)
-    monkeypatch.setattr(session_module, "stored_descriptions", lambda keys, files, done, problem: ["Stored text." if key == "told" else "" for key in keys])
-    asyncio.run(session.read(lambda _: None, lambda done, size: None))
+    # The descriptions come from the jobs on this computer, by address.
+    monkeypatch.setattr(session.library, "descriptions", lambda urls: ["Stored text." if url.endswith("/2") else "" for url in urls])
+    asyncio.run(session.read(lambda _: None))
     assert session.store.get("bare").score is not None and session.store.get("bare").job.description == ""  # type: ignore[union-attr]
     asked = json.dumps(session._client.posts)  # type: ignore[union-attr]
     assert "Stored text." in asked
