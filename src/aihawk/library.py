@@ -26,6 +26,9 @@ COLUMNS = ("url", "title", "company", "location", "country", "posted_at", "descr
 STATE = "state.json"
 # Deltas kept apart before they are merged into one: a search reads them all, and a computer used every day gets five.
 DELTAS_APART = 8
+# The share of the database's postings on this computer before a search is worth showing: the owner's decision of
+# 2026-11-09. Over the first chunk alone the best matches for a search were three, and poor ones.
+READY_SHARE = 0.2
 
 
 class LibraryError(Exception):
@@ -67,6 +70,16 @@ class Library:
 
     def complete(self) -> bool:
         return bool(self.state.get("chunks")) and len(self.chunk_files()) == len(self.state["chunks"])
+
+    def readiness(self) -> float:
+        """How near this computer is to having READY_SHARE of the postings, from 0 to 1: 1 is enough to search."""
+        total = sum(int(chunk.get("rows", 0)) for chunk in self.state.get("chunks", []))
+        if self.complete() or (total and self.postings_here() >= total * READY_SHARE):
+            return 1.0
+        return self.postings_here() / (total * READY_SHARE) if total else 0.0
+
+    def ready(self) -> bool:
+        return self.readiness() >= 1.0
 
     def view(self, connection: duckdb.DuckDBPyConnection) -> bool:
         """`postings`, in this connection: every posting here at its newest, with `described` saying whether it has a text.
