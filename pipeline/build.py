@@ -54,8 +54,9 @@ CHUNK_LEVEL = 12
 CHUNK_THREADS = 4
 # The part number of the first `titles_N` chunk: the `jobs_N` ones count from 0.
 TITLES_PART = 1_000_000
-# A posting older than this is not published: nobody applies to it, and a search is for the last 60 days by default.
-MAX_AGE_DAYS = 180
+# A posting older than this is not published: a search is for the last 60 days by default, and the owner chose on
+# 2026-11-09 to keep no more. Measured then: 763,000 postings with a description, about 0.42 GB of the database's 2.62.
+MAX_AGE_DAYS = 60
 # A posting with no date sorts as if it were this old: many sources have none, and most of what they publish is current.
 UNDATED_DAYS = 30
 # What a remote posting's location says when it does not narrow the job to a place; the database says "Remote" instead.
