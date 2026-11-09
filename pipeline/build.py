@@ -6,9 +6,9 @@
 Scheduled every five hours in .github/workflows/jobs-database.yml, which publishes work/out to the Hugging Face dataset feder-cr/jobs. Each source is read into
 work/sources/<name>.parquet in the columns of COMMON. A source that fails is left out of that build's database and named in
 the manifest; publish.py refuses a database that lost too much of itself. Postings are the same posting when their links
-are the same after `posting_key` (src/aihawk/key.sql), and of those the row with the longest description is kept, the other rows adding their source's
-name. The output is cut in files of ROWS_PER_FILE postings, with index.parquet beside them: every posting without its
-description, and where to find that description. A search reads the index; only the jobs being judged read descriptions.
+are the same after `posting_key` (src/aihawk/key.sql), and of those the row with the longest description is kept. The
+output is cut in chunks of CHUNK_ROWS complete postings, the newest first, which AIHawk downloads one after the other:
+every column it reads and nothing else, the posting's address being its key.
 """
 
 from __future__ import annotations
@@ -45,11 +45,11 @@ SOURCES_DATASET = "feder-cr/jobs-sources"
 CHUNK_ROWS = 50_000
 # DuckDB cannot write row groups under 2048 rows: the parts it writes are rewritten by pyarrow into the chunks.
 ROW_GROUP = 2048
-# A chunk's row group: a reader asking for a posting by its address downloads and unpacks its whole group, and a batch of
-# 200 postings spread over the chunks touches 200 groups: at 1024 rows that is about 100 MB, at 100,000 the whole database.
-CHUNK_GROUP = 1024
-# zstd 12 took a chunk's file from 2.33 GB to 2.20 GB in all against level 6, measured on 2026-11-09, for about 40 seconds
-# a chunk, on four threads.
+# A chunk's row group. A chunk is downloaded whole, so nothing reads a single group over the network: groups of 10,000
+# rows compress like one of 100,000 (1.85 GB for the whole database at zstd 12 against 2.20 GB in groups of 256, measured
+# on 2026-11-09), and a search on this computer still skips the groups of postings older than it asks for.
+CHUNK_GROUP = 10_000
+# zstd 12: 1.85 GB against 2.04 at level 6 and 1.62 at 19, which took ten times as long to write. Measured on 2026-11-09.
 CHUNK_LEVEL = 12
 CHUNK_THREADS = 4
 # The part number of the first `titles_N` chunk: the `jobs_N` ones count from 0.
