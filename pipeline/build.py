@@ -646,7 +646,9 @@ def merge(connection: duckdb.DuckDBPyConnection, work: Path, sent_on: Callable[[
         FROM (
             SELECT {KEY} AS key, regexp_extract(filename, '([^/\\\\]+)\\.parquet$', 1) AS source, filename, file_row_number,
                 length(coalesce(description, '')) AS length, vendor(ats, url) AS vendor, job_print(company, title, location) AS print,
-                regexp_extract(posting_link(url), '^[^/]+') AS host, url, TRY_CAST(posted_at AS TIMESTAMP) AS posted
+                regexp_extract(posting_link(url), '^[^/]+') AS host, url,
+                -- A date after the build is a source's mistake: the posting is as new as one posted now, and no newer.
+                least(TRY_CAST(posted_at AS TIMESTAMP), now()::TIMESTAMP) AS posted
             FROM {every_row}
             -- No LinkedIn posting is kept, whatever source carried it: the owner's decision of 2026-11-08.
             WHERE url LIKE 'http%' AND coalesce(title, '') <> '' AND vendor(ats, url) IS DISTINCT FROM 'linkedin'
