@@ -559,3 +559,21 @@ def test_a_chain_that_cannot_be_followed_starts_over_from_the_newest_build(tmp_p
              "deltas": [{"build": "b9", "after": "b5", "url": "unused"}]}
     library.sync(later, "unused")
     assert titles_here(library) == {"https://a/9": "From b9"}
+
+
+def test_many_deltas_become_one_and_a_search_finds_the_same(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import aihawk.library as library_module
+
+    monkeypatch.setattr(library_module, "DELTAS_APART", 2)
+    site = tmp_path / "site"
+    chunk(site / "b0" / "jobs_0.parquet", [("https://a/1", "First", "x" * 300)])
+    deltas = []
+    for number, rows in enumerate([[("add", "https://a/1", "Second", "x" * 300)], [("add", "https://a/2", "Other", None)], [("drop", "https://a/1", None, None)]], 1):
+        chunk(site / f"delta-b{number}.parquet", rows)
+        deltas.append({"build": f"b{number}", "after": f"b{number - 1}", "url": (site / f"delta-b{number}.parquet").as_posix()})
+    library = Library(tmp_path / "here")
+    library.sync({"build": "b0", "base_url": (site / "b0").as_posix(), "deltas": [], "chunks": [{"name": "jobs_0.parquet", "rows": 1}]}, "unused")
+    library.sync({"build": "b3", "base_url": (site / "b0").as_posix(), "deltas": deltas, "chunks": [{"name": "jobs_0.parquet", "rows": 1}]}, "unused")
+    assert [path.name for path in library.delta_files()] == ["delta-b3.parquet"]
+    assert titles_here(library) == {"https://a/2": "Other"}, "the posting dropped last stays gone"
+

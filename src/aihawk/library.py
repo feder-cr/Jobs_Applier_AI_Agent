@@ -24,6 +24,8 @@ import duckdb
 # What each posting row holds, in the chunks and in the deltas, after a delta's `op`.
 COLUMNS = ("url", "title", "company", "location", "country", "posted_at", "description")
 STATE = "state.json"
+# Deltas kept apart before they are merged into one: a search reads them all, and a computer used every day gets five.
+DELTAS_APART = 8
 
 
 class LibraryError(Exception):
@@ -119,6 +121,7 @@ class Library:
             arrived()
         self.state["at"] = manifest["build"]
         self._save()
+        self._merge_deltas()
         total = len(self.state["chunks"])
         progress(len(self.chunk_files()), total)
         for chunk in self.state["chunks"]:
@@ -152,6 +155,29 @@ class Library:
         if chain[-1]["build"] != manifest["build"] or any(later["after"] != earlier["build"] for earlier, later in pairwise(chain)):
             return None
         return chain
+
+    def _merge_deltas(self) -> None:
+        """Past DELTAS_APART, the deltas become one, each address at its newest action, under the newest one's name: what a
+        search reads is the same, and it reads one file."""
+        deltas = self.delta_files()
+        if len(deltas) <= DELTAS_APART:
+            return
+        merged = deltas[-1].with_suffix(".merging")
+        connection = duckdb.connect()
+        try:
+            connection.execute(f"""
+                COPY (
+                    SELECT * EXCLUDE (filename, newest) FROM (
+                        SELECT *, row_number() OVER (PARTITION BY url ORDER BY filename DESC) AS newest
+                        FROM read_parquet({_literal(deltas)}, filename = true, union_by_name = true)
+                    ) WHERE newest = 1
+                ) TO '{merged.as_posix()}' (FORMAT parquet, COMPRESSION zstd)
+            """)
+        finally:
+            connection.close()
+        for delta in deltas:
+            delta.unlink()
+        merged.replace(deltas[-1])
 
     def _start(self, manifest: dict[str, Any], base: str) -> None:
         """Everything here forgotten, and the manifest's build the one to download."""
