@@ -1,41 +1,34 @@
-"""The job database AIHawk reads, as published on Hugging Face: read in place, so a search downloads only what it needs."""
+"""The search over the job database on this computer (library.py): the postings that best fit, by their titles."""
 
 from __future__ import annotations
 
-import errno
 import html
 import json
 import math
 import re
 import urllib.request
-from bisect import bisect_right
-from collections.abc import Callable, Iterable
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from importlib import resources
-from itertools import pairwise
 from pathlib import Path
 from typing import Any, NamedTuple
 
 import duckdb
 
 from aihawk.config import Arc, Filters, Form, Node, Plan
+from aihawk.library import Library
 
 # How many postings a search brings back to be judged. Past these, a title fits the search too little to be worth a look.
 RECALL = 600
-# Description files read at once: each read waits on the network, not on this computer.
-FILES_AT_ONCE = 8
 # What being in the person's own city is worth, against a node of the plan: about as much as a named skill.
 CITY_WEIGHT = 1.5
 # What a posting with no description keeps of its score: judged on its title alone, it needs a title twice as fitting to
-# come before one that has a description. The pipeline marks which have one.
+# come before one that has a description.
 UNDESCRIBED = 0.5
-# The columns of the index that a delta carries and an index kept on this computer is read by. A description is found by
-# the posting's key, in the description file whose range holds it.
-INDEX_COLUMNS = ("key", "url", "title", "company", "ats", "location", "country", "remote", "salary_min", "salary_max", "salary_currency", "posted_at", "described")
-# What a remote posting's location says when it does not narrow the job to a place.
-NO_PLACE = ("", "remote", "anywhere", "worldwide", "global")
+# What a remote posting's location says when it does not narrow the job to a place: the database writes "Remote" for one
+# flagged remote that names no place.
+NO_PLACE = ("remote", "anywhere", "worldwide", "global")
 
 
 class DatabaseError(Exception):
@@ -67,69 +60,6 @@ def posting_keys(urls: list[str]) -> list[str]:
         connection.close()
 
 
-def description_files(manifest: dict[str, Any], location: str) -> tuple[tuple[str, str, str], ...]:
-    """Where a description is found by its posting's key: each file's first key, last key and address, in key order."""
-    base = _base(manifest, location)
-    found = [(item["first_key"], item["last_key"], f"{base}/{item['name']}") for item in manifest.get("files", []) if "first_key" in item]
-    return tuple(sorted(found))
-
-
-def _holder(key: str, files: tuple[tuple[str, str, str], ...]) -> str | None:
-    """The file whose range of keys holds this one, or None."""
-    at = bisect_right([first for first, _, _ in files], key) - 1
-    return files[at][2] if at >= 0 and key <= files[at][1] else None
-
-
-def stored_descriptions(
-    keys: list[str],
-    files: tuple[tuple[str, str, str], ...],
-    done: Callable[[int], None] = lambda _: None,
-    problem: Callable[[str], None] = lambda _: None,
-) -> list[str]:
-    """The descriptions the database holds for these postings, by their keys, in order; empty where its sources published
-    none. One query per file, FILES_AT_ONCE files at a time, each on its own connection: a key read in a file in key order
-    reads only the row group that can hold it, and every read waits on the network. On Hugging Face's servers one file
-    took 3 to 4 seconds, and 25 of them one after the other 249.
-    `done` is told how many have been read, as each file is. A file that cannot be read is told once to `problem`, and
-    the others are still read: the search goes on with what it has.
-    """
-    texts = [""] * len(keys)
-    by_file: dict[str, list[tuple[int, str]]] = {}
-    count = 0
-    for position, key in enumerate(keys):
-        if key and (file := _holder(key, files)):
-            by_file.setdefault(file, []).append((position, key))
-        else:
-            count += 1
-            done(count)
-
-    def read(file: str, held: list[tuple[int, str]]) -> dict[str, str] | None:
-        connection = duckdb.connect()
-        try:
-            connection.execute("INSTALL httpfs; LOAD httpfs;")
-            # Constants, not a subquery: that is what lets the reader skip every row group whose range cannot hold them.
-            marks = ", ".join("?" for _ in held)
-            return dict(connection.execute(f"SELECT key, description FROM read_parquet(?) WHERE key IN ({marks})", [file, *(key for _, key in held)]).fetchall())
-        except duckdb.Error:
-            return None
-        finally:
-            connection.close()
-
-    failed = False
-    with ThreadPoolExecutor(FILES_AT_ONCE) as pool:
-        reads = {pool.submit(read, file, held): held for file, held in by_file.items()}
-        for finished in as_completed(reads):
-            found, held = finished.result(), reads[finished]
-            failed = failed or found is None
-            for position, key in held:
-                texts[position] = (found or {}).get(key) or ""
-            count += len(held)
-            done(count)
-    if failed:
-        problem("Some job descriptions could not be read from the job database, so those postings are judged without them.")
-    return texts
-
-
 def unreachable(error: BaseException) -> str:
     """What a database that cannot be downloaded says: in plain words, the detail kept after them."""
     return f"The job database cannot be reached: check your internet connection, then start AIHawk again. ({error})"
@@ -145,111 +75,6 @@ def load_manifest(location: str) -> dict[str, Any]:
         if isinstance(error, OSError) and location.startswith(("http://", "https://")):
             raise DatabaseError(unreachable(error)) from error
         raise DatabaseError(f"the job database's manifest at {location} cannot be read: {error}") from error
-
-
-def built_at(manifest: dict[str, Any]) -> datetime:
-    """When the database was built, as the manifest says: a time with no zone is UTC, as the pipeline's is."""
-    built = datetime.fromisoformat(manifest["built_at"])
-    return built if built.tzinfo else built.replace(tzinfo=UTC)
-
-
-def _base(manifest: dict[str, Any], location: str) -> str:
-    """Where the database's files are: the release the manifest names, or beside the manifest."""
-    return manifest.get("base_url") or location.rsplit("/", 1)[0].rsplit("\\", 1)[0]
-
-
-def local_index(manifest: dict[str, Any], location: str, cache: Path, log: Callable[[str], None] = lambda _: None) -> Path:
-    """The index on this computer, as of the manifest's build: downloaded whole once, then kept up to date by applying the
-    deltas it has not seen, in order. A database on this computer is read where it is."""
-    source = f"{_base(manifest, location)}/{manifest['index']['name']}"
-    if not source.startswith(("http://", "https://")):
-        return Path(source)
-    cache.mkdir(parents=True, exist_ok=True)
-    path = cache / "index.parquet"
-    state = cache / "index.build"
-    build = manifest.get("build") or manifest["built_at"]
-    have = state.read_text(encoding="utf-8").strip() if path.is_file() and state.is_file() else ""
-    if have == build:
-        return path
-    chain = _chain(manifest.get("deltas", []), have) if have else None
-    if chain is not None:
-        log("Getting the latest jobs.")
-        _apply(path, chain)
-    else:
-        # The first time, or a gap no delta covers: the whole index, once.
-        _download(manifest, source, path, log)
-    state.write_text(build, encoding="utf-8")
-    return path
-
-
-def _chain(deltas: list[dict[str, Any]], have: str) -> list[dict[str, Any]] | None:
-    """The deltas that lead from the build this computer has to the newest, in order: none when it has the newest already,
-    None when they cannot be followed."""
-    if deltas and deltas[-1]["build"] == have:
-        return []
-    start = next((at for at, delta in enumerate(deltas) if delta["after"] == have), None)
-    if start is None:
-        return None
-    chain = deltas[start:]
-    if any(later["after"] != earlier["build"] for earlier, later in pairwise(chain)):
-        return None
-    return chain
-
-
-def _apply(path: Path, chain: list[dict[str, Any]]) -> None:
-    """Apply the deltas to the index in one rewrite. A key in several deltas takes its newest row, as Delta Lake's log does:
-    the last action on a key is its state, so a posting added, then changed, then gone, ends gone."""
-    columns = ", ".join(INDEX_COLUMNS)
-    partial = path.with_suffix(".applying")
-    connection = duckdb.connect()
-    try:
-        connection.execute("INSTALL httpfs; LOAD httpfs;")
-        # A column added since this index was kept is NULL in it, until a delta brings the posting with it.
-        held = {row[0] for row in connection.execute("DESCRIBE SELECT * FROM read_parquet(?)", [path.as_posix()]).fetchall()}
-        kept = ", ".join(column if column in held else f"NULL AS {column}" for column in INDEX_COLUMNS)
-        connection.execute(
-            """CREATE TABLE changes AS
-               SELECT * EXCLUDE (filename, newest) FROM (
-                   SELECT *, row_number() OVER (PARTITION BY key ORDER BY filename DESC) AS newest
-                   FROM read_parquet(?, filename = true, union_by_name = true)
-               ) WHERE newest = 1""",
-            [[delta["url"] for delta in chain]],
-        )
-        connection.execute(f"""
-            COPY (
-                SELECT {kept} FROM read_parquet(?) WHERE key NOT IN (SELECT key FROM changes)
-                UNION ALL
-                SELECT {columns} FROM changes WHERE op = 'add'
-            ) TO '{partial.as_posix()}' (FORMAT parquet, COMPRESSION zstd)
-        """, [path.as_posix()])
-    except duckdb.Error as error:
-        partial.unlink(missing_ok=True)
-        raise DatabaseError(f"the job index could not be brought up to date: {error}") from error
-    finally:
-        connection.close()
-    partial.replace(path)
-
-
-def _download(manifest: dict[str, Any], source: str, path: Path, log: Callable[[str], None]) -> None:
-    """The release's whole index into `path`, in one rename at the end, saying how far it has come."""
-    log(f"Getting the jobs ready, only the first time ({manifest['index']['bytes'] // 1_000_000} MB).")
-    partial = path.with_suffix(".part")
-    try:
-        with urllib.request.urlopen(source, timeout=120) as response, partial.open("wb") as out:
-            copied = told = 0
-            while chunk := response.read(1 << 20):
-                out.write(chunk)
-                copied += len(chunk)
-                # A quarter at a time: this takes minutes on a slow line, and must not look stuck.
-                if copied * 4 // manifest["index"]["bytes"] > told and copied < manifest["index"]["bytes"]:
-                    told = copied * 4 // manifest["index"]["bytes"]
-                    log(f"  {told * 25}%")
-    except OSError as error:
-        partial.unlink(missing_ok=True)
-        if error.errno == errno.ENOSPC:
-            raise DatabaseError(f"The disk is full: the job index needs {manifest['index']['bytes'] // 1_000_000} MB free in {path.parent}. Free some space, then start AIHawk again.") from error
-        raise DatabaseError(unreachable(error)) from error
-    partial.replace(path)
 
 
 def _word_pattern(words: tuple[str, ...]) -> str:
@@ -274,7 +99,6 @@ def rarity(postings: int, holding: int) -> float:
 
 
 class _Posting(NamedTuple):
-    key: str
     company: str
     title: str
     location: str
@@ -318,10 +142,10 @@ def _place_and_age(filters: Filters, max_age_days: int) -> tuple[list[str], list
     if places:
         # A remote posting that names no place could be open to anyone, and its description will say.
         unnamed = ", ".join(repr(word) for word in NO_PLACE)
-        places.append(f"(remote AND coalesce(country, '') = '' AND lower(trim(coalesce(location, ''))) IN ({unnamed}))")
+        places.append(f"(coalesce(country, '') = '' AND lower(trim(coalesce(location, ''))) IN ({unnamed}))")
         clauses.append("(" + " OR ".join(places) + ")")
     # A posting with no date is kept: many sources have none.
-    clauses.append(f"(TRY_CAST(posted_at AS TIMESTAMP) IS NULL OR TRY_CAST(posted_at AS TIMESTAMP) >= now()::TIMESTAMP - INTERVAL {int(max_age_days)} DAY)")
+    clauses.append(f"(posted_at IS NULL OR posted_at >= now()::TIMESTAMP - INTERVAL {int(max_age_days)} DAY)")
     return clauses, parameters
 
 
@@ -376,15 +200,12 @@ def _rank(score: float, posting: _Posting) -> tuple[float, bool, datetime]:
     return score, posting.posted is not None, posting.posted or datetime.min
 
 
-def search(
-    location: str, filters: Filters, max_age_days: int, cache: Path, log: Callable[[str], None] = lambda _: None, limit: int = RECALL
-) -> tuple[dict[str, Any], list[Job]]:
-    """The postings that best fit the search, by their titles, the best first, with the manifest they came from.
+def search(library: Library, filters: Filters, max_age_days: int, limit: int = RECALL) -> list[Job]:
+    """The postings here that best fit the search, by their titles, the best first: none while nothing has come.
 
     The plan's nodes score a title by their best wording that it holds, weighted by how rare the wording is among the
     postings of this place: "Python" tells more than "Engineer". Arcs then scale the title, and the person's own city adds
-    to it. The same title at the same company, posted once per place, is one job, in its best place. The description
-    stays in the database until a job is judged.
+    to it. A posting is known by its address. Its description is read when a job is judged, not here.
     """
     plan = _plan_of(filters)
     nodes = tuple(node for node in plan.nodes if node.forms)
@@ -393,8 +214,6 @@ def search(
     mean = sum(node.weight for node in nodes) / len(nodes)
     if mean <= 0:
         raise DatabaseError("the plan weighs nothing: give a node a weight above 0")
-    manifest = load_manifest(location)
-    index = str(local_index(manifest, location, cache, log))
     texts = tuple(dict.fromkeys(form.text for node in nodes for form in node.forms))
     patterns = {text: _whole_words((text,)) for text in texts}
     cities = _whole_words(filters.cities) if filters.cities else None
@@ -411,20 +230,19 @@ def search(
 
     connection = duckdb.connect()
     try:
-        (postings,) = connection.execute(
-            f"SELECT count(*) FROM read_parquet(?) WHERE {' AND '.join(place_clauses)}", [index, *place_parameters]
-        ).fetchone()
+        if not library.view(connection):
+            return []
+        (postings,) = connection.execute(f"SELECT count(*) FROM postings WHERE {' AND '.join(place_clauses)}", place_parameters).fetchone()
         rows = [
             _Posting(*row)
             for row in connection.execute(
-                f"""SELECT key, coalesce(company, ''), title, coalesce(location, ''), url,
-                        TRY_CAST(posted_at AS TIMESTAMP), coalesce(described, true)
-                    FROM read_parquet(?) WHERE {' AND '.join(clauses)}""",
-                [index, *parameters],
+                f"""SELECT coalesce(company, ''), title, coalesce(location, ''), url, posted_at, described
+                    FROM postings WHERE {' AND '.join(clauses)}""",
+                parameters,
             ).fetchall()
         ]
     except duckdb.Error as error:
-        raise DatabaseError(f"the job index cannot be read: {error}") from error
+        raise DatabaseError(f"the jobs on this computer cannot be read: {error}") from error
     finally:
         connection.close()
 
@@ -436,21 +254,10 @@ def search(
         in_city = cities is not None and cities.search(row.location) is not None
         scored.append((_score(nodes, evidence, document, in_city, mean) * (1.0 if row.described else UNDESCRIBED), row))
 
-    # Every posting stands: the database already made one of a job carried by several sites.
     ranked = sorted(scored, key=lambda item: _rank(*item), reverse=True)[:limit]
-
     best = max((score for score, _ in ranked), default=1.0) or 1.0
     # Some sources publish their names with HTML entities still in them.
-    return manifest, [
-        Job(
-            row.key,
-            html.unescape(row.company),
-            html.unescape(row.title),
-            html.unescape(row.location),
-            row.url,
-            row.url,
-            "",
-            score / best,
-        )
+    return [
+        Job(row.url, html.unescape(row.company), html.unescape(row.title), html.unescape(row.location), row.url, row.url, "", score / best)
         for score, row in ranked
     ]

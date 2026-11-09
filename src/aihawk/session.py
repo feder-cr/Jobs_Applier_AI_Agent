@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from pathlib import Path
@@ -13,7 +14,8 @@ from aihawk.apply import MAILBOXES, Outcome, apply_to_job, signed_in, site_of
 from aihawk.apply import sign_in as sign_in_browser
 from aihawk.config import KEY_ENV, KEY_URL, Config, ConfigError, load_config
 from aihawk.counter import count
-from aihawk.database import description_files, search, stored_descriptions
+from aihawk.database import load_manifest, search
+from aihawk.library import Library
 from aihawk.llm import SPEND, explain, make_client, money, refused
 from aihawk.plugins import Plugin, always_plugins, load_plugins, plugin_for
 from aihawk.profile import ensure_account_password, import_answers_file, install_resume, save_setting
@@ -38,9 +40,9 @@ class Session:
         import_answers_file(self.config, self.store)
         ensure_account_password(self.store)
         self._client: AsyncOpenAI | None = None
-        # Where descriptions are found by key, from the database the last search read.
-        self.description_files: tuple[tuple[str, str, str], ...] = ()
-        # How many jobs the whole database holds, once a search has read it.
+        # The job database on this computer, which a search reads and the chunks still coming add to.
+        self.library = Library(self.config.data_dir / "library")
+        # How many jobs the whole database holds, once its manifest has been read.
         self.database_jobs = 0
 
     def close(self) -> None:
@@ -103,28 +105,34 @@ class Session:
         await SPEND.settle(self.client)
         return SPEND.total
 
-    async def find(self, log: Log) -> int:
-        """Bring the postings for this search from the job database into the store; how many are new."""
+    async def sync(self, progress: Callable[[int, int], None], arrived: Callable[[], None]) -> None:
+        """The job database on this computer brought to the newest build: what is new since the last time, then the chunks
+        still missing, one by one. `arrived` is told after each that changes what a search finds, `progress` how many chunks
+        are here of how many. Both are told on the loop, which alone touches the screen."""
         loop = asyncio.get_running_loop()
-        index = self.config.data_dir / "index"
-        # search runs in a thread, and the screen may be touched only from the loop: its lines are handed over to it.
-        manifest, jobs = await asyncio.to_thread(
-            search, self.config.database, self.config.filters, self.config.max_age_days, index, lambda line: loop.call_soon_threadsafe(log, line)
-        )
-        self.description_files = description_files(manifest, self.config.database)
+        manifest = await asyncio.to_thread(load_manifest, self.config.database)
         self.database_jobs = int(manifest.get("rows_out") or 0)
-        new = sum(self.store.add(job) for job in jobs)
-        return new
+        # The index and the description files read in place, before 2026-11-09: nothing reads them any more.
+        await asyncio.to_thread(shutil.rmtree, self.config.data_dir / "index", True)
+        await asyncio.to_thread(
+            self.library.sync, manifest, self.config.database,
+            lambda done, size: loop.call_soon_threadsafe(progress, done, size), lambda: loop.call_soon_threadsafe(arrived),
+        )
 
-    async def read(self, log: Log, status: Callable[[int, int], None]) -> int:
+    async def find(self, log: Log) -> int:
+        """Bring the postings for this search, of those on this computer, into the store; how many are new."""
+        jobs = await asyncio.to_thread(search, self.library, self.config.filters, self.config.max_age_days)
+        return self.store.add_all(jobs)
+
+    async def read(self, log: Log) -> int:
         """Jev reads the next WIDE postings the search ranked best and scores each one by how sure it is that the job is in
-        line with the candidate. `status` is told the descriptions read so far, of how many. A posting Jev gave no answer for
-        is set aside, not asked again and again. Returns how many were scored."""
+        line with the candidate. A posting Jev gave no answer for is set aside, not asked again and again. Returns how
+        many were scored."""
         batch = self.store.with_status("new")[:WIDE]
         if not batch:
             return 0
-        # By key: that reaches jobs found in any earlier build too.
-        texts = await _read_descriptions([item.job.id for item in batch], self.description_files, lambda done: status(done, len(batch)), log)
+        # From this computer, by the posting's address: a job kept from an earlier build has its text there too.
+        texts = await asyncio.to_thread(self.library.descriptions, [item.job.url for item in batch])
         for item, text in zip(batch, texts, strict=True):
             self.store.set_description(item.job.id, text)
         jobs = [replace(item.job, description=text) for item, text in zip(batch, texts, strict=True)]
@@ -211,20 +219,6 @@ class Session:
         except OSError as error:
             log(f"applied.csv was not written: {error}")
         return outcome
-
-
-async def _read_descriptions(keys: list[str], files: tuple[tuple[str, str, str], ...], status: Callable[[int], None], log: Log) -> list[str]:
-    """The descriptions the database holds; the count of those read is told as each file is read, and a failure is logged."""
-    loop = asyncio.get_running_loop()
-
-    def shown(done: int) -> None:
-        # The read runs in a thread: its count is handed to the loop, which alone touches the screen.
-        loop.call_soon_threadsafe(status, done)
-
-    def problem(text: str) -> None:
-        loop.call_soon_threadsafe(log, text)
-
-    return await asyncio.to_thread(stored_descriptions, keys, files, shown, problem)
 
 
 def _places(config: Config) -> str:

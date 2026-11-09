@@ -6,9 +6,9 @@
 Scheduled every five hours in .github/workflows/jobs-database.yml, which publishes work/out to the Hugging Face dataset feder-cr/jobs. Each source is read into
 work/sources/<name>.parquet in the columns of COMMON. A source that fails is left out of that build's database and named in
 the manifest; publish.py refuses a database that lost too much of itself. Postings are the same posting when their links
-are the same after `posting_key` (src/aihawk/key.sql), and of those the row with the longest description is kept, the other rows adding their source's
-name. The output is cut in files of ROWS_PER_FILE postings, with index.parquet beside them: every posting without its
-description, and where to find that description. A search reads the index; only the jobs being judged read descriptions.
+are the same after `posting_key` (src/aihawk/key.sql), and of those the row with the longest description is kept. The
+output is cut in chunks of CHUNK_ROWS complete postings, the newest first, which AIHawk downloads one after the other:
+every column it reads and nothing else, the posting's address being its key.
 """
 
 from __future__ import annotations
@@ -38,20 +38,31 @@ RAW = "https://raw.githubusercontent.com"
 JOBHIVE = "https://storage.stapply.ai/jobhive/v1/all.parquet"
 # The private dataset that keeps each source as the last build read it, with the version it was read at.
 SOURCES_DATASET = "feder-cr/jobs-sources"
-# Files of about 128 MB and row groups of 2048 rows: small row groups let a search read only the rows it needs over HTTP.
-# A group is a whole description column chunk, which DuckDB cannot write below 2048 rows.
-# Postings to a description file: about 120 MB at the measured 590 bytes a posting, under GitHub's 2 GiB a file, and small
-# enough that one file is sorted by key in memory.
-ROWS_PER_FILE = 200_000
+# The database is a list of chunks, each CHUNK_ROWS complete postings, the newest first: AIHawk downloads them one after the
+# other and searches what it has, so a person who has just come sees jobs arrive instead of waiting for all of them. A
+# posting with a description of at least DESCRIBED characters is in a `jobs_N` chunk; the others, whose text says nothing a
+# title does not, are in `titles_N` chunks, which come last and which a search puts below the rest.
+CHUNK_ROWS = 50_000
+# DuckDB cannot write row groups under 2048 rows: the parts it writes are rewritten by pyarrow into the chunks.
 ROW_GROUP = 2048
-# A description file's row group: a reader asking for one posting downloads its whole group. At 2048 rows that was about
-# 700 KB a posting; at 256, with statistics on the key alone (the other columns' made the footer ten times larger), a batch
-# of postings downloads about a quarter of the bytes. DuckDB cannot write groups this small, so pyarrow writes these files.
-DESCRIPTION_GROUP = 256
-DESCRIPTION_COLUMNS = ("key", "description", "sources")
-INDEX = "index.parquet"
-# A description shorter than this says nothing a title does not: the index marks the posting as having none, and a search
-# puts it below one that has.
+# A chunk's row group. A chunk is downloaded whole, so nothing reads a single group over the network: groups of 10,000
+# rows compress like one of 100,000 (1.85 GB for the whole database at zstd 12 against 2.20 GB in groups of 256, measured
+# on 2026-11-09), and a search on this computer still skips the groups of postings older than it asks for.
+CHUNK_GROUP = 10_000
+# zstd 12: 1.85 GB against 2.04 at level 6 and 1.62 at 19, which took ten times as long to write. Measured on 2026-11-09.
+CHUNK_LEVEL = 12
+CHUNK_THREADS = 4
+# The part number of the first `titles_N` chunk: the `jobs_N` ones count from 0.
+TITLES_PART = 1_000_000
+# A posting older than this is not published: nobody applies to it, and a search is for the last 60 days by default.
+MAX_AGE_DAYS = 180
+# A posting with no date sorts as if it were this old: many sources have none, and most of what they publish is current.
+UNDATED_DAYS = 30
+# What a remote posting's location says when it does not narrow the job to a place; the database says "Remote" instead.
+NO_PLACE = ("", "remote", "anywhere", "worldwide", "global")
+# What a chunk holds: nothing AIHawk does not read. The posting's address is its key.
+CHUNK_COLUMNS = ("url", "title", "company", "location", "country", "posted_at", "description")
+# A description shorter than this says nothing a title does not: it is not published, and the posting is a `titles_N` one.
 DESCRIBED = 200
 
 COMMON = (
@@ -628,13 +639,16 @@ def merge(connection: duckdb.DuckDBPyConnection, work: Path, sent_on: Callable[[
             -- came out changed in a delta though nothing about them had.
             arg_max(
                 struct_pack(filename := filename, row := file_row_number, length := length, source := source, print := print,
-                    employer := vendor IS NOT NULL AND vendor NOT IN {AGGREGATORS!r}, host := host, vendor := vendor, url := url),
+                    employer := vendor IS NOT NULL AND vendor NOT IN {AGGREGATORS!r}, host := host, vendor := vendor, url := url,
+                    posted := posted),
                 struct_pack(length := length, source := source, row := -file_row_number)
             ) AS winner
         FROM (
             SELECT {KEY} AS key, regexp_extract(filename, '([^/\\\\]+)\\.parquet$', 1) AS source, filename, file_row_number,
                 length(coalesce(description, '')) AS length, vendor(ats, url) AS vendor, job_print(company, title, location) AS print,
-                regexp_extract(posting_link(url), '^[^/]+') AS host, url
+                regexp_extract(posting_link(url), '^[^/]+') AS host, url,
+                -- A date after the build is a source's mistake: the posting is as new as one posted now, and no newer.
+                least(TRY_CAST(posted_at AS TIMESTAMP), now()::TIMESTAMP) AS posted
             FROM {every_row}
             -- No LinkedIn posting is kept, whatever source carried it: the owner's decision of 2026-11-08.
             WHERE url LIKE 'http%' AND coalesce(title, '') <> '' AND vendor(ats, url) IS DISTINCT FROM 'linkedin'
@@ -694,67 +708,78 @@ def merge(connection: duckdb.DuckDBPyConnection, work: Path, sent_on: Callable[[
         connection.execute("CREATE OR REPLACE TEMP TABLE sent AS SELECT unnest(?) AS key", [sorted(sent)])
         connection.execute("DELETE FROM best WHERE key IN (SELECT key FROM sent)")
     print(f"boards: {len(sent)} of {len(on_boards)} postings checked send the applicant on to a company's form, and go", flush=True)
-    rows_in, rows_out_expected = connection.execute("SELECT sum(copies), count(*) FROM best").fetchone()
+    rows_in = connection.execute("SELECT sum(copies) FROM best").fetchone()[0]
     out = work / "out"
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
-    columns = ", ".join("vendor(row.ats, row.url) AS ats" if column == "ats" else f"row.{column}" for column in COMMON)
-    # The files are in key order, so a reader that asks for a posting by its key reads the one row group that can hold it,
-    # whatever build it came from. Sorting ten million rows with their descriptions at once ran a runner out of memory,
-    # so only the keys are sorted, into ranges of ROWS_PER_FILE; the rows go to their range's part in one pass; and each
-    # part, a file's worth, is sorted alone.
-    connection.execute(f"CREATE OR REPLACE TEMP TABLE ranges AS SELECT key, (row_number() OVER (ORDER BY key) - 1) // {ROWS_PER_FILE} AS part FROM best")
+    # A remote posting that names no place says "Remote": the database has no column for it, and a search takes it for
+    # one open to anyone, as it took one flagged remote with no place.
+    unnamed = ", ".join(repr(word) for word in NO_PLACE)
+    location = f"CASE WHEN row.remote AND coalesce(row.country, '') = '' AND lower(trim(coalesce(row.location, ''))) IN ({unnamed}) THEN 'Remote' ELSE row.location END"
+    # Sorting ten million rows with their descriptions at once ran a runner out of memory, so only the keys are sorted: the
+    # newest first, into chunks of CHUNK_ROWS, the described ones apart from the others; the rows go to their chunk's part in
+    # one pass; and each part is sorted alone. A posting older than MAX_AGE_DAYS is not kept.
+    connection.execute(f"""
+        CREATE OR REPLACE TEMP TABLE ranges AS
+        SELECT key, CASE WHEN winner.length >= {DESCRIBED} THEN 0 ELSE {TITLES_PART} END
+            + (row_number() OVER (
+                PARTITION BY winner.length >= {DESCRIBED}
+                ORDER BY coalesce(winner.posted, now()::TIMESTAMP - INTERVAL {UNDATED_DAYS} DAY) DESC, key
+            ) - 1) // {CHUNK_ROWS} AS part
+        FROM best
+        WHERE winner.posted IS NULL OR winner.posted >= now()::TIMESTAMP - INTERVAL {MAX_AGE_DAYS} DAY
+    """)
     parts = work / "tmp" / "parts"
     shutil.rmtree(parts, ignore_errors=True)
     connection.execute(f"""
         COPY (
-            SELECT best.key, {columns}, best.sources, ranges.part
+            SELECT row.url, row.title, row.company, {location} AS location, row.country, best.winner.posted AS posted_at,
+                CASE WHEN best.winner.length >= {DESCRIBED} THEN row.description END AS description, ranges.part
             FROM {every_row} AS row
             JOIN best ON row.filename = best.winner.filename AND row.file_row_number = best.winner.row
             JOIN ranges ON ranges.key = best.key
         ) TO '{parts.as_posix()}' (
-            -- One open file a range, each holding a row group in memory: small row groups keep fifty of them light.
+            -- One open file a part, each holding a row group in memory: small row groups keep a hundred of them light.
             FORMAT parquet, COMPRESSION zstd, PARTITION_BY (part), ROW_GROUP_SIZE {ROW_GROUP}
         )
     """)
-    ordered = work / "tmp" / "ordered"
-    shutil.rmtree(ordered, ignore_errors=True)
-    ordered.mkdir(parents=True)
-    for part in sorted(parts.glob("part=*"), key=lambda folder: int(folder.name.split("=")[1])):
-        number = part.name.split("=")[1]
-        connection.execute(f"""
-            COPY (SELECT * FROM read_parquet('{part.as_posix()}/*.parquet', hive_partitioning = false) ORDER BY key)
-            TO '{(ordered / f"{number}.parquet").as_posix()}' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE {ROW_GROUP})
-        """)
-        shutil.rmtree(part)
-        description_file(ordered / f"{number}.parquet", out / f"jobs_{number}.parquet")
-    rows_out = connection.execute(f"SELECT count(*) FROM read_parquet('{out.as_posix()}/jobs_*.parquet')").fetchone()[0]
-    if rows_out != rows_out_expected:
-        raise SystemExit(f"{rows_out_expected} postings chosen and {rows_out} written")
-    # Every posting without its description, which a reader finds by the key in the file whose range holds it.
-    connection.execute(f"""
-        COPY (
-            SELECT key, url, title, company, ats, location, country, remote, salary_min, salary_max, salary_currency, posted_at,
-                length(coalesce(description, '')) >= {DESCRIBED} AS described
-            FROM read_parquet('{ordered.as_posix()}/*.parquet')
-        ) TO '{(out / INDEX).as_posix()}' (FORMAT parquet, COMPRESSION zstd, COMPRESSION_LEVEL 9)
-    """)
-    shutil.rmtree(ordered)
+    folders = sorted(parts.glob("part=*"), key=lambda folder: int(folder.name.split("=")[1]))
+    with ThreadPoolExecutor(CHUNK_THREADS) as pool:
+        list(pool.map(lambda folder: write_chunk(folder, out), folders))
+    rows_out = connection.execute(f"SELECT count(*) FROM read_parquet('{out.as_posix()}/*.parquet')").fetchone()[0]
+    expected = connection.execute("SELECT count(*) FROM ranges").fetchone()[0]
+    if rows_out != expected:
+        raise SystemExit(f"{expected} postings chosen and {rows_out} written")
     return {"rows_in": int(rows_in), "rows_out": rows_out}
 
 
-def description_file(ordered: Path, out: Path) -> None:
-    """A part's descriptions, as a reader looks them up: by key alone, so the other columns stay in the index."""
+def write_chunk(folder: Path, out: Path) -> None:
+    """A part as a chunk: its postings newest first, in row groups of CHUNK_GROUP, and the part's folder gone."""
     import pyarrow.parquet as pq  # imported here: only the build writes these files
 
-    table = pq.read_table(ordered, columns=list(DESCRIPTION_COLUMNS))
-    pq.write_table(table, out, row_group_size=DESCRIPTION_GROUP, compression="zstd", write_statistics=["key"])
+    part = int(folder.name.split("=")[1])
+    name = f"titles_{part - TITLES_PART}.parquet" if part >= TITLES_PART else f"jobs_{part}.parquet"
+    table = pq.read_table([path.as_posix() for path in sorted(folder.glob("*.parquet"))], columns=list(CHUNK_COLUMNS))
+    table = table.sort_by([("posted_at", "descending"), ("url", "ascending")])
+    # Statistics on the date alone: a search for the last 60 days skips the groups of older postings. Those of the other
+    # columns made the footer ten times larger.
+    pq.write_table(table, out / name, row_group_size=CHUNK_GROUP, compression="zstd", compression_level=CHUNK_LEVEL, write_statistics=["posted_at"])
+    shutil.rmtree(folder)
 
 
-def file_entry(connection: duckdb.DuckDBPyConnection, path: Path) -> dict[str, object]:
-    """A description file as the manifest names it: its size, and the first and last key it holds."""
-    first, last = connection.execute("SELECT min(key), max(key) FROM read_parquet(?)", [path.as_posix()]).fetchone()
-    return {"name": path.name, "bytes": path.stat().st_size, "first_key": first, "last_key": last}
+def chunk_entry(connection: duckdb.DuckDBPyConnection, path: Path) -> dict[str, object]:
+    """A chunk as the manifest names it: its size, its postings, the dates it spans, and whether its postings have no text."""
+    rows, newest, oldest = connection.execute("SELECT count(*), max(posted_at), min(posted_at) FROM read_parquet(?)", [path.as_posix()]).fetchone()
+    return {
+        "name": path.name, "bytes": path.stat().st_size, "rows": rows, "titles_only": path.name.startswith("titles_"),
+        "newest": newest.isoformat() if newest else None, "oldest": oldest.isoformat() if oldest else None,
+    }
+
+
+def chunk_order(path: Path) -> tuple[int, int]:
+    """The order AIHawk downloads them in: the `jobs_N` chunks, then the `titles_N` ones, each the newest first."""
+    kind, _, number = path.stem.partition("_")
+    return (kind == "titles", int(number))
 
 
 def main() -> None:
@@ -781,19 +806,18 @@ def main() -> None:
     counts = merge(connection, work, board_check(cache, work))
     out = work / "out"
     manifest = {
-        # 2: the description files are in key order and say their first and last key, and the dataset carries a
-        # delta of the index for each build. Everything schema 1 had is still here, for an AIHawk not yet updated.
-        "schema": 2,
+        # 3: the database is a list of chunks of complete postings, the newest first, which AIHawk downloads one after the
+        # other, and a delta of the postings added, changed or gone for each build.
+        "schema": 3,
         "built_at": datetime.now(UTC).isoformat(timespec="seconds"),
         **counts,
         "seconds": round(time.monotonic() - started),
-        "columns": list(DESCRIPTION_COLUMNS),
-        "index": {"name": INDEX, "bytes": (out / INDEX).stat().st_size},
-        "files": [file_entry(connection, path) for path in sorted(out.glob("jobs_*.parquet"))],
+        "columns": list(CHUNK_COLUMNS),
+        "chunks": [chunk_entry(connection, path) for path in sorted(out.glob("*.parquet"), key=chunk_order)],
         "sources": reports,
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
-    print(f"{counts['rows_in']} rows in, {counts['rows_out']} postings out, {len(manifest['files'])} files, {manifest['seconds']} s")
+    print(f"{counts['rows_in']} rows in, {counts['rows_out']} postings out, {len(manifest['chunks'])} chunks, {manifest['seconds']} s")
 
 
 if __name__ == "__main__":

@@ -24,7 +24,9 @@ DEFAULT_QUICK_MODEL = "google/gemini-3.5-flash"
 # Answers, for each posting, whether it is in line with the candidate, and how sure it is: that is the posting's score.
 DEFAULT_DECISION_MODEL = "typesafe/jev-1.14"
 # The Hugging Face dataset the pipeline publishes to. It was GitHub's releases until 2026-11-08: see pipeline/publish.py.
-DEFAULT_DATABASE = "https://huggingface.co/datasets/feder-cr/jobs/resolve/main/manifest.json"
+DEFAULT_DATABASE = "https://huggingface.co/datasets/feder-cr/jobs/resolve/main/library/manifest.json"
+# The manifest of the layout before 2026-11-09, which a settings file may still name: it means the default now.
+OLD_DATABASE = "https://huggingface.co/datasets/feder-cr/jobs/resolve/main/manifest.json"
 DEFAULT_MAX_AGE_DAYS = 60
 
 
@@ -240,7 +242,7 @@ def load_config(workspace: Path) -> Config:
         workspace=workspace,
         name=str(raw.get("name") or ""),
         goals=str(raw.get("goals") or ""),
-        database=str(raw.get("database") or DEFAULT_DATABASE),
+        database=DEFAULT_DATABASE if str(raw.get("database") or OLD_DATABASE) == OLD_DATABASE else str(raw["database"]),
         max_age_days=_days(raw.get("max_age_days", DEFAULT_MAX_AGE_DAYS), "max_age_days"),
         model=str(raw.get("model") or DEFAULT_MODEL),
         quick_model=str(raw.get("quick_model") or DEFAULT_QUICK_MODEL),

@@ -24,7 +24,7 @@ What the forms are told about you beyond the CV (email, phone, location, links, 
 |---|---|---|
 | `name` | empty | Your name for this search, shown at the top of the list. |
 | `goals` | empty | What you are looking for, in your own words. Jev reads it. |
-| `database` | `https://huggingface.co/datasets/feder-cr/jobs/resolve/main/manifest.json` | Where the job database is: the URL of its `manifest.json`, or the path of a local one. The files it names sit beside it, unless its `base_url` says otherwise. |
+| `database` | `https://huggingface.co/datasets/feder-cr/jobs/resolve/main/library/manifest.json` | Where the job database is: the URL of its `manifest.json`, or the path of a local one. AIHawk downloads its chunks into `data/library`, the newest jobs first, and searches the ones that have come; after that, only what changed. About 2 GB in all. |
 | `max_age_days` | `60` | Postings posted more than this many days ago are left out. A posting with no date is kept. |
 | `model` | `deepseek/deepseek-v4.1-flash` | Fills the application forms. |
 | `quick_model` | `google/gemini-3.5-flash` | Writes the search plan from your CV, and the other short calls of a search. |

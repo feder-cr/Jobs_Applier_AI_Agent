@@ -65,14 +65,27 @@ class ScriptedBrowser:
 
 
 def publish(connection: Any, folder: Path, rows_out: int) -> str:
-    """Table t as the pipeline publishes it: a description file in key order whose range the manifest names, the index
-    beside it, the manifest. Returns the manifest's path."""
+    """Table t as the pipeline publishes it: a chunk of the postings with a description of 200 characters or more, one of
+    the others with none, and the manifest naming them. A posting is known by its address: rows that share one get their
+    key added to it. `keys.json` beside the manifest says each address's key, for the tests that name postings by it.
+    Returns the manifest's path."""
     connection.execute("ALTER TABLE t ADD COLUMN IF NOT EXISTS country VARCHAR; ALTER TABLE t ADD COLUMN IF NOT EXISTS remote BOOLEAN")
-    connection.execute(f"COPY (SELECT * FROM t ORDER BY key) TO '{(folder / 'jobs_0.parquet').as_posix()}' (FORMAT parquet)")
-    connection.execute(f"""COPY (SELECT * EXCLUDE (description), length(coalesce(description, '')) >= 200 AS described FROM t)
-        TO '{(folder / 'index.parquet').as_posix()}' (FORMAT parquet)""")
-    first, last = connection.execute("SELECT min(key), max(key) FROM t").fetchone()
-    manifest = {"schema": 2, "rows_out": rows_out, "built_at": "2026-11-04T00:00:00", "index": {"name": "index.parquet", "bytes": 1},
-                "files": [{"name": "jobs_0.parquet", "first_key": first, "last_key": last}]}
+    connection.execute("""CREATE OR REPLACE TABLE posted AS SELECT key,
+        CASE WHEN count(*) OVER (PARTITION BY url) > 1 THEN url || key ELSE url END AS url, title, company,
+        CASE WHEN remote AND coalesce(country, '') = '' AND lower(trim(coalesce(location, ''))) IN ('', 'remote', 'anywhere', 'worldwide', 'global')
+            THEN 'Remote' ELSE location END AS location,
+        country, TRY_CAST(posted_at AS TIMESTAMP) AS posted_at, description FROM t""")
+    chunks = []
+    for name, described in (("jobs_0.parquet", True), ("titles_0.parquet", False)):
+        test = "length(coalesce(description, '')) >= 200"
+        rows = connection.execute(f"SELECT count(*) FROM posted WHERE {'' if described else 'NOT '}{test}").fetchone()[0]
+        if not rows:
+            continue
+        connection.execute(f"""COPY (SELECT url, title, company, location, country, posted_at, {'description' if described else 'NULL::VARCHAR AS description'}
+            FROM posted WHERE {'' if described else 'NOT '}{test}) TO '{(folder / name).as_posix()}' (FORMAT parquet)""")
+        chunks.append({"name": name, "bytes": (folder / name).stat().st_size, "rows": rows, "titles_only": not described})
+    keys = dict(connection.execute("SELECT url, key FROM posted").fetchall())
+    (folder / "keys.json").write_text(json.dumps(keys), encoding="utf-8")
+    manifest = {"schema": 3, "build": "jobs-20261104-000000", "rows_out": rows_out, "built_at": "2026-11-04T00:00:00", "chunks": chunks, "deltas": []}
     (folder / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     return str(folder / "manifest.json")
