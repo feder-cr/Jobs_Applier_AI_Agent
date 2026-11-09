@@ -24,8 +24,8 @@ What the forms are told about you beyond the CV (email, phone, location, links, 
 |---|---|---|
 | `name` | empty | Your name for this search, shown at the top of the list. |
 | `goals` | empty | What you are looking for, in your own words. Jev reads it. |
-| `database` | `https://huggingface.co/datasets/feder-cr/jobs/resolve/main/library/manifest.json` | Where the job database is: the URL of its `manifest.json`, or the path of a local one. AIHawk downloads its chunks into `data/library`, the newest jobs first, and searches the ones that have come; after that, only what changed. About 2 GB in all. |
-| `max_age_days` | `60` | Postings posted more than this many days ago are left out. A posting with no date is kept. The database holds the last 60 days, so a larger number finds nothing more. |
+| `database` | `https://huggingface.co/datasets/feder-cr/jobs/resolve/main/library/manifest.json` | Where the job database is: the URL of its `manifest.json`, or the path of a local one. AIHawk downloads into `data/library` the chunks the search's days need, the newest jobs first; after that, only what changed. |
+| `max_age_days` | `15` | How many days back a search looks; "Posted within (days)" in Settings. AIHawk downloads only the part of the database these days need, all of it before the first search. The database holds the last 60 days, so a larger number finds nothing more. A posting its source does not date is dated by the day the database first saw it. |
 | `model` | `deepseek/deepseek-v4.1-flash` | Fills the application forms. |
 | `quick_model` | `google/gemini-3.5-flash` | Writes the search plan from your CV, and the other short calls of a search. |
 | `decision_model` | `typesafe/jev-1.14` | Jev, which answers for each posting whether it is in line with you; how sure it is makes the score, from 1 to 5. |

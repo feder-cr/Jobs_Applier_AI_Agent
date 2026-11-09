@@ -22,6 +22,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.request
 import zipfile
 from collections.abc import Callable
@@ -57,8 +58,19 @@ TITLES_PART = 1_000_000
 # A posting older than this is not published: a search is for the last 60 days by default, and the owner chose on
 # 2026-11-09 to keep no more. Measured then: 763,000 postings with a description, about 0.42 GB of the database's 2.62.
 MAX_AGE_DAYS = 60
-# A posting with no date sorts as if it were this old: many sources have none, and most of what they publish is current.
-UNDATED_DAYS = 30
+# A posting its source does not date is dated by the database: the day a build first saw it, kept from build to build,
+# so that it ages and goes like any other. The owner's decision of 2026-11-09: 1.48 million postings with a description,
+# half the database, had no date, and a search kept them whatever its days. The first build to date them had no day
+# seen for them: it dated them between BACKDATED days ago, so the first download is light, by their site, not one by
+# one: a site's postings, alike in their texts, stay together in a chunk and compress together. Dated one by one, they
+# took the chunks with text from 1.91 GB to 2.46 GB (measured on 2026-11-09). A second run of that build gives the
+# same dates.
+BACKDATED = (15, 60)
+# The manifest's mark that its builds date every posting, by the rule above: a manifest without it, or with another,
+# has its undated postings backdated again.
+FIRST_SEEN = 2
+# The manifest of the database now published, whose chunks say the day each posting was dated.
+LIBRARY = "https://huggingface.co/datasets/feder-cr/jobs/resolve/main/library/manifest.json"
 # What a remote posting's location says when it does not narrow the job to a place; the database says "Remote" instead.
 NO_PLACE = ("", "remote", "anywhere", "worldwide", "global")
 # What a chunk holds: nothing AIHawk does not read. The posting's address is its key.
@@ -648,7 +660,9 @@ def read_source(connection: duckdb.DuckDBPyConnection, source: Source, work: Pat
     return report
 
 
-def merge(connection: duckdb.DuckDBPyConnection, work: Path, sent_on: Callable[[list[tuple[str, str]]], set[str]] = lambda _: set()) -> dict[str, int]:
+def merge(
+    connection: duckdb.DuckDBPyConnection, work: Path, sent_on: Callable[[list[tuple[str, str]]], set[str]] = lambda _: set(), backdate: bool = False
+) -> dict[str, int]:
     """One row per posting, cut in files. Returns how many rows went in and came out.
 
     Which row wins is decided on the keys alone, and only then are the winners' rows, descriptions included, read and
@@ -675,8 +689,9 @@ def merge(connection: duckdb.DuckDBPyConnection, work: Path, sent_on: Callable[[
             SELECT {KEY} AS key, regexp_extract(filename, '([^/\\\\]+)\\.parquet$', 1) AS source, filename, file_row_number,
                 length(coalesce(description, '')) AS length, vendor(ats, url) AS vendor, job_print(company, title, location) AS print,
                 regexp_extract(posting_link(url), '^[^/]+') AS host, url,
-                -- A date after the build is a source's mistake: the posting is as new as one posted now, and no newer.
-                least(TRY_CAST(posted_at AS TIMESTAMP), now()::TIMESTAMP) AS posted
+                -- A date after the build is a source's mistake: the posting is as new as one posted now, and no newer. Not
+                -- least(): it skips a NULL, and dated every posting with no date as now.
+                CASE WHEN TRY_CAST(posted_at AS TIMESTAMP) > now()::TIMESTAMP THEN now()::TIMESTAMP ELSE TRY_CAST(posted_at AS TIMESTAMP) END AS posted
             FROM {every_row}
             -- No LinkedIn posting is kept, whatever source carried it: the owner's decision of 2026-11-08.
             WHERE url LIKE 'http%' AND coalesce(title, '') <> '' AND vendor(ats, url) IS DISTINCT FROM 'linkedin'
@@ -747,21 +762,29 @@ def merge(connection: duckdb.DuckDBPyConnection, work: Path, sent_on: Callable[[
     # Sorting ten million rows with their descriptions at once ran a runner out of memory, so only the keys are sorted: the
     # newest first, into chunks of CHUNK_ROWS, the described ones apart from the others; the rows go to their chunk's part in
     # one pass; and each part is sorted alone. A posting older than MAX_AGE_DAYS is not kept.
+    # Each posting's date: its source's; else the day the database first saw it, from `seen`; else today, or, for the first
+    # build that dates them, a day between BACKDATED days ago.
+    if not connection.execute("SELECT count(*) FROM duckdb_tables() WHERE table_name = 'seen'").fetchone()[0]:
+        connection.execute("CREATE TEMP TABLE seen (url VARCHAR, posted_at TIMESTAMP)")
+    low, high = BACKDATED
+    first = f"now()::TIMESTAMP - to_days(CAST({low} + hash(best.winner.host) % {high - low + 1} AS INTEGER))" if backdate else "now()::TIMESTAMP"
+    connection.execute(f"""
+        CREATE OR REPLACE TEMP TABLE dated AS
+        SELECT best.key, coalesce(best.winner.posted, seen.posted_at, {first}) AS posted, best.winner.length >= {DESCRIBED} AS described
+        FROM best LEFT JOIN (SELECT url, max(posted_at) AS posted_at FROM seen GROUP BY url) AS seen ON seen.url = best.winner.url
+    """)
     connection.execute(f"""
         CREATE OR REPLACE TEMP TABLE ranges AS
-        SELECT key, CASE WHEN winner.length >= {DESCRIBED} THEN 0 ELSE {TITLES_PART} END
-            + (row_number() OVER (
-                PARTITION BY winner.length >= {DESCRIBED}
-                ORDER BY coalesce(winner.posted, now()::TIMESTAMP - INTERVAL {UNDATED_DAYS} DAY) DESC, key
-            ) - 1) // {CHUNK_ROWS} AS part
-        FROM best
-        WHERE winner.posted IS NULL OR winner.posted >= now()::TIMESTAMP - INTERVAL {MAX_AGE_DAYS} DAY
+        SELECT key, posted, CASE WHEN described THEN 0 ELSE {TITLES_PART} END
+            + (row_number() OVER (PARTITION BY described ORDER BY posted DESC, key) - 1) // {CHUNK_ROWS} AS part
+        FROM dated
+        WHERE posted >= now()::TIMESTAMP - INTERVAL {MAX_AGE_DAYS} DAY
     """)
     parts = work / "tmp" / "parts"
     shutil.rmtree(parts, ignore_errors=True)
     connection.execute(f"""
         COPY (
-            SELECT row.url, row.title, row.company, {location} AS location, country_code(row.country) AS country, best.winner.posted AS posted_at,
+            SELECT row.url, row.title, row.company, {location} AS location, country_code(row.country) AS country, ranges.posted AS posted_at,
                 CASE WHEN best.winner.length >= {DESCRIBED} THEN row.description END AS description, ranges.part
             FROM {every_row} AS row
             JOIN best ON row.filename = best.winner.filename AND row.file_row_number = best.winner.row
@@ -781,6 +804,27 @@ def merge(connection: duckdb.DuckDBPyConnection, work: Path, sent_on: Callable[[
     return {"rows_in": int(rows_in), "rows_out": rows_out}
 
 
+def seen_dates(connection: duckdb.DuckDBPyConnection) -> bool:
+    """`seen`, the date of each posting in the database now published, when its builds date every posting; False when they
+    do not yet, and the postings no source dates are to be backdated."""
+    try:
+        with urllib.request.urlopen(urllib.request.Request(LIBRARY, headers={"User-Agent": "AIHawk build"}), timeout=60) as response:
+            manifest = json.load(response)
+    except urllib.error.HTTPError as error:
+        # The first build of all has no manifest before it; any other failure stops the build, rather than date anew,
+        # and so change, every posting no source dates.
+        if error.code not in (401, 404):
+            raise
+        print(f"seen dates: no database published yet ({error.code})", flush=True)
+        return False
+    if manifest.get("first_seen") != FIRST_SEEN:
+        return False
+    files = [f"{manifest['base_url']}/{chunk['name']}" for chunk in manifest["chunks"]]
+    connection.execute("CREATE OR REPLACE TEMP TABLE seen AS SELECT url, posted_at FROM read_parquet(?)", [files])
+    print(f"seen dates: {connection.execute('SELECT count(*) FROM seen').fetchone()[0]} postings dated by {manifest['build']}", flush=True)
+    return True
+
+
 def write_chunk(folder: Path, out: Path) -> None:
     """A part as a chunk: its postings newest first, in row groups of CHUNK_GROUP, and the part's folder gone."""
     import pyarrow.parquet as pq  # imported here: only the build writes these files
@@ -788,7 +832,8 @@ def write_chunk(folder: Path, out: Path) -> None:
     part = int(folder.name.split("=")[1])
     name = f"titles_{part - TITLES_PART}.parquet" if part >= TITLES_PART else f"jobs_{part}.parquet"
     table = pq.read_table([path.as_posix() for path in sorted(folder.glob("*.parquet"))], columns=list(CHUNK_COLUMNS))
-    table = table.sort_by([("posted_at", "descending"), ("url", "ascending")])
+    # By address within the chunk: a site's postings side by side compress together, 4 to 8% smaller than by date.
+    table = table.sort_by([("url", "ascending")])
     # Statistics on the date alone: a search for the last 60 days skips the groups of older postings. Those of the other
     # columns made the footer ten times larger.
     pq.write_table(table, out / name, row_group_size=CHUNK_GROUP, compression="zstd", compression_level=CHUNK_LEVEL, write_statistics=["posted_at"])
@@ -831,7 +876,8 @@ def main() -> None:
     if not arguments.reuse:
         reports = read_all(connection, chosen, work, cache)
     _clean_up(work)
-    counts = merge(connection, work, board_check(cache, work))
+    dated = seen_dates(connection)
+    counts = merge(connection, work, board_check(cache, work), backdate=not dated)
     out = work / "out"
     manifest = {
         # 3: the database is a list of chunks of complete postings, the newest first, which AIHawk downloads one after the
@@ -842,6 +888,8 @@ def main() -> None:
         "seconds": round(time.monotonic() - started),
         "columns": list(CHUNK_COLUMNS),
         "chunks": [chunk_entry(connection, path) for path in sorted(out.glob("*.parquet"), key=chunk_order)],
+        # Every posting is dated: by its source, or by the day a build first saw it.
+        "first_seen": FIRST_SEEN,
         "sources": reports,
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")

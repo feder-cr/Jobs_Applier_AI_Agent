@@ -294,7 +294,8 @@ def test_chunks_go_newest_first_and_a_posting_too_old_is_not_published(tmp_path:
     chunks = sorted((tmp_path / "out").glob("*.parquet"), key=build.chunk_order)
     assert [path.name for path in chunks] == ["jobs_0.parquet", "jobs_1.parquet", "jobs_2.parquet"]
     titles = [[row[0] for row in connection.execute("SELECT title FROM read_parquet(?)", [path.as_posix()]).fetchall()] for path in chunks]
-    assert titles == [["Future", "Job 1", "Job 2"], ["Job 5", "Job 9", "Job 40"], ["Job 55"]]
+    # The chunks go by date; within one, by address.
+    assert [set(chunk) for chunk in titles] == [{"Future", "Job 1", "Job 2"}, {"Job 5", "Job 9", "Job 40"}, {"Job 55"}]
     first = build.chunk_entry(connection, chunks[0])
     assert first["rows"] == 3 and not first["titles_only"] and first["newest"] > first["oldest"]
     groups = connection.execute("SELECT max(row_group_num_rows) FROM parquet_metadata(?)", [chunks[0].as_posix()]).fetchone()[0]
@@ -445,4 +446,35 @@ def test_a_country_is_its_two_letters_whatever_a_source_writes(tmp_path: Path) -
     written = ["UNITED STATES", "Italia", "DEU", "it", "UK", "Côte d'Ivoire", "日本", "Remote", "PARIS", "XX", "", None]
     codes = [row[0] for row in connection.execute("SELECT country_code(c) FROM unnest(?) WITH ORDINALITY AS t(c, n) ORDER BY n", [written]).fetchall()]
     assert codes == ["US", "IT", "DE", "IT", "GB", "CI", "JP", None, None, None, None, None]
+
+
+def dates_out(tmp_path: Path) -> dict[str, datetime]:
+    return dict(duckdb.connect().execute(f"SELECT title, posted_at FROM read_parquet('{(tmp_path / 'out').as_posix()}/*.parquet')").fetchall())
+
+
+def test_a_posting_no_source_dates_keeps_the_day_a_build_first_saw_it_and_a_new_one_is_dated_today(tmp_path: Path) -> None:
+    write_dated(tmp_path, "s", [("https://a.example/1", "Seen before", text("Work")), ("https://a.example/2", "New", text("Work")),
+                                 ("https://a.example/3", "Dated", text("Work"), days_ago(3))])
+    (tmp_path / "tmp").mkdir()
+    connection = build.connect(tmp_path)
+    connection.execute("CREATE TEMP TABLE seen AS SELECT 'https://a.example/1' AS url, now()::TIMESTAMP - INTERVAL 20 DAY AS posted_at")
+    build.merge(connection, tmp_path)
+    dates = dates_out(tmp_path)
+    assert abs((datetime.now() - dates["Seen before"]).days - 20) <= 1
+    assert (datetime.now() - dates["New"]).total_seconds() < 3600
+    assert abs((datetime.now() - dates["Dated"]).days - 3) <= 1, "a source's own date wins"
+
+
+def test_the_first_build_to_date_them_backdates_them_between_15_and_60_days_by_their_site(tmp_path: Path) -> None:
+    write_dated(tmp_path, "s", [(f"https://site{n % 20}.example/{n}", f"Job {n}", text("Work")) for n in range(40)])
+    (tmp_path / "tmp").mkdir()
+    build.merge(build.connect(tmp_path), tmp_path, backdate=True)
+    first = dates_out(tmp_path)
+    ages = [(datetime.now() - posted).days for posted in first.values()]
+    # The oldest may fall on the 60th day exactly, past the database's 60: those go.
+    assert all(14 <= age <= 60 for age in ages) and len(set(ages)) > 5
+    # A site's postings have one date: they stay together in a chunk.
+    assert first["Job 3"] == first["Job 23"]
+    build.merge(build.connect(tmp_path), tmp_path, backdate=True)
+    assert {title: posted.date() for title, posted in dates_out(tmp_path).items()} == {title: posted.date() for title, posted in first.items()}, "the same dates every run"
 

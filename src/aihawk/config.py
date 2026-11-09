@@ -27,7 +27,8 @@ DEFAULT_DECISION_MODEL = "typesafe/jev-1.14"
 DEFAULT_DATABASE = "https://huggingface.co/datasets/feder-cr/jobs/resolve/main/library/manifest.json"
 # The manifest of the layout before 2026-11-09, which a settings file may still name: it means the default now.
 OLD_DATABASE = "https://huggingface.co/datasets/feder-cr/jobs/resolve/main/manifest.json"
-DEFAULT_MAX_AGE_DAYS = 60
+# A search looks back this many days by default: the owner's decision of 2026-11-09. The database holds 60.
+DEFAULT_MAX_AGE_DAYS = 15
 
 
 class ConfigError(Exception):
