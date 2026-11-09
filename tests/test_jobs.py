@@ -577,3 +577,15 @@ def test_many_deltas_become_one_and_a_search_finds_the_same(tmp_path: Path, monk
     assert [path.name for path in library.delta_files()] == ["delta-b3.parquet"]
     assert titles_here(library) == {"https://a/2": "Other"}, "the posting dropped last stays gone"
 
+
+def test_nothing_is_searched_until_a_fifth_of_the_postings_is_here(tmp_path: Path) -> None:
+    site = tmp_path / "site" / "b1"
+    chunk(site / "jobs_0.parquet", [("https://a/1", "One", "x" * 300)])
+    chunk(site / "jobs_1.parquet", [("https://a/2", "Two", "x" * 300)])
+    # The manifest's counts: 10 postings in the first chunk, 90 in the second, so a fifth is 20.
+    manifest = {"build": "b1", "base_url": site.as_posix(), "deltas": [], "chunks": [{"name": "jobs_0.parquet", "rows": 10}, {"name": "jobs_1.parquet", "rows": 90}]}
+    library = Library(tmp_path / "here")
+    seen: list[tuple[float, bool]] = []
+    library.sync(manifest, "unused", arrived=lambda: seen.append((library.readiness(), library.ready())))
+    assert seen == [(0.5, False), (1.0, True)]
+

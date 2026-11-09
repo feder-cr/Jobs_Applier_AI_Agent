@@ -90,6 +90,8 @@ class AIHawk(App[None]):
         # again over the chunks come since the last one.
         self.progress: tuple[int, int] | None = None
         self.more_found = False
+        # The chunks this computer had when it was last short of a fifth of the database, plus one.
+        self.ready_at = 0
         self.signing_in = False
         self.columns_for = 0
         self.with_location = True
@@ -228,13 +230,17 @@ class AIHawk(App[None]):
                 self.show_heading()
             if not session.mail()[1]:
                 await self.set_up_mail()
-            # The jobs come in the background, a chunk at a time, and each one that comes searches again.
-            self.bring_jobs()
-            await session.find(self.say)
             # The jobs scored before, by an earlier search: the first pages, sorted as they are.
             scored = [item.job.id for item in session.store.all() if item.score is not None]
             self.pages = [scored[start : start + PAGE] for start in range(0, len(scored), PAGE)]
             self.refresh_jobs()
+            # The jobs come in the background, a chunk at a time. Until a fifth of them is here nothing is searched: over
+            # the first chunk alone the best matches were few and poor. From there, each chunk that comes searches again.
+            self.bring_jobs()
+            if not session.library.ready():
+                self.show_progress()
+                return
+            await session.find(self.say)
             await self.score()
         except (ConfigError, DatabaseError) as error:
             self.say(str(error))
@@ -272,13 +278,25 @@ class AIHawk(App[None]):
                 self.refresh_jobs()
 
     def chunks_came(self, done: int, size: int) -> None:
+        # Whether the person was waiting for the first fifth: told by the count before this chunk, not by this one's.
+        waiting = self.progress is not None and self.progress[0] < self.ready_at
         self.progress = (done, size)
-        if self.is_running:
-            self.refresh_jobs()
+        if not self.session.library.ready():
+            self.ready_at = done + 1
+        if not self.is_running:
+            return
+        self.refresh_jobs()
+        if waiting and self.session.library.ready():
+            # The count of the wait gives way: the person sees it is over, and that more is coming.
+            self.query_one(Said).say("Ready. More jobs keep arriving in the background.", again=True)
+        else:
             self.show_progress()
 
     def found_more(self) -> None:
-        """New jobs on this computer: the search runs again over them, once for however many came while it ran."""
+        """New jobs on this computer: the search runs again over them, once for however many came while it ran. Not
+        before a fifth of the database is here."""
+        if not self.session.library.ready():
+            return
         self.more_found = True
         if self.is_running and not any(worker.group == "find" and worker.is_running for worker in self.workers):
             self.find_again()
@@ -318,12 +336,12 @@ class AIHawk(App[None]):
 
     def show_progress(self) -> None:
         """How far the page the person waits for is, on one line: only while they wait, the first page or one turned to.
-        Before the first jobs are on this computer, the chunks coming are counted."""
-        if self.wanted is None and len(self.pages) > self.page:
+        Until a fifth of the database is on this computer, how far that is."""
+        if self.wanted is None and len(self.pages) > self.page and self.session.library.ready():
             return
         said = self.query_one(Said)
-        if not self.pages and self.progress and not self.session.store.all():
-            said.say(f"Getting the jobs ready… {self.progress[0]} of {self.progress[1]}", again=True)
+        if not self.session.library.ready():
+            said.say(f"Getting the jobs ready, only the first time… {int(self.session.library.readiness() * 100)}%", again=True)
             return
         said.say(f"Preparing page {(self.wanted if self.wanted is not None else self.page) + 1}…", again=True)
 
