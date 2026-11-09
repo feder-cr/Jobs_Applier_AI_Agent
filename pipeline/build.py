@@ -75,10 +75,11 @@ COMMON = (
 KEY_SQL = Path(__file__).resolve().parents[1] / "src" / "aihawk" / "key.sql"
 KEY = "posting_key(url)"
 
-# One name for each vendor, whatever a source calls it.
+# One name for each vendor, whatever a source calls it. None: a label that names no vendor. One source labels postings of
+# every site "datastax", 34,477 of them LinkedIn's (measured on 2026-11-09).
 VENDOR_ALIASES = {
     "ashbyhq": "ashby", "join_com": "join", "oracle_hcm": "oracle", "wttj": "welcometothejungle", "csod": "cornerstone",
-    "ultipro": "ukg", "beisen_legacy": "beisen",
+    "ultipro": "ukg", "beisen_legacy": "beisen", "datastax": None,
 }  # fmt: skip
 # The vendor a link's host names, for the postings whose source does not say. The first that matches.
 VENDOR_HOSTS = (
@@ -97,6 +98,16 @@ VENDOR_HOSTS = (
     ("recruiterbox.com", "recruiterbox"), ("betterteam.com", "betterteam"), ("linkedin.com", "linkedin"),
     ("indeed.", "indeed"), ("glassdoor.", "glassdoor"), ("europa.eu", "eures"), ("arbeitsagentur.de", "bundesagentur"),
     ("jobbank.gc.ca", "jobbankca"), ("jobicy.com", "jobicy"), ("welcometothejungle.com", "welcometothejungle"),
+    # Read from the hosts of the postings no vendor was known for, on 2026-11-09: forms first, then boards.
+    ("brassring.com", "brassring"), ("governmentjobs.com", "neogov"), ("schooljobs.com", "neogov"),
+    ("recruitingbypaycor.com", "paycor"), ("applitrack.com", "applitrack"), ("hrmdirect.com", "hrmdirect"),
+    ("cadienttalent.com", "cadient"), ("hireology.com", "hireology"), ("workstream.us", "workstream"),
+    ("paradox.ai", "paradox"), ("apploi.com", "apploi"), ("pageuppeople.com", "pageup"), ("comeet.com", "comeet"),
+    ("dover.com", "dover"), ("silkroad.com", "silkroad"), ("hirebridge.com", "hirebridge"), ("careers-page.com", "manatal"),
+    ("jobappnetwork.com", "jobappnetwork"), ("arbeitnow.com", "arbeitnow"), ("builtin.com", "builtin"),
+    ("trudvsem.ru", "trudvsem"), ("jobsyn.org", "directemployers"), ("usajobs.gov", "usajobs"), ("glints.com", "glints"),
+    ("jobvision.ir", "jobvision"), ("jobinja.ir", "jobinja"), ("irantalent.com", "irantalent"), ("51job.com", "51job"),
+    ("myjob.mu", "myjobmu"), ("hr.ge", "hrge"), ("jobmaster.co.il", "jobmaster"), ("reed.co.uk", "reed"),
 )  # fmt: skip
 # Vendors that list other companies' postings rather than take the application: a copy on one is never the one kept when
 # the company's own form carries the same job.
@@ -104,6 +115,8 @@ AGGREGATORS = (
     "eures", "bundesagentur", "jobbankca", "linkedin", "indeed", "glassdoor", "jobicy", "arbeitnow", "weworkremotely",
     "remoteok", "remotive", "himalayas", "workingnomads", "builtin", "themuse", "wellfound", "ycombinator", "getonbrd",
     "cryptojobs", "fashionjobs", "jobsch", "programathor", "jobtech", "arbetsformedlingen", "manfred", "welcometothejungle",
+    "trudvsem", "directemployers", "usajobs", "glints", "jobvision", "jobinja", "irantalent", "51job", "myjobmu", "hrge",
+    "jobmaster", "reed",
 )  # fmt: skip
 # Boards whose posting pages, opened on 2026-11-08, sent the applicant on to one of the companies' own forms AIHawk applies
 # on: such a posting goes, as the job is the form's. EURES, the Bundesagentur, Welcome to the Jungle and Job Bank showed no
@@ -124,13 +137,14 @@ LEGAL_FORMS = (
 
 def _macros() -> str:
     """The vendor a posting belongs to, and the print that knows one job under links of different sites."""
-    aliases = " ".join(f"WHEN '{name}' THEN '{to}'" for name, to in VENDOR_ALIASES.items())
+    aliases = " ".join(f"WHEN '{name}' THEN {f'{chr(39)}{to}{chr(39)}' if to else 'NULL'}" for name, to in VENDOR_ALIASES.items())
     hosts = " ".join(f"WHEN contains(regexp_extract(lower(url), '^https?://([^/]+)', 1), '{host}') THEN '{name}'" for host, name in VENDOR_HOSTS)
     forms = "|".join(LEGAL_FORMS)
     return f"""
+        -- The link's host first: it is where the application goes, and a source's label can be wrong.
         CREATE OR REPLACE MACRO vendor(ats, url) AS coalesce(
-            CASE lower(nullif(trim(ats), '')) {aliases} ELSE lower(nullif(trim(ats), '')) END,
-            CASE {hosts} END);
+            CASE {hosts} END,
+            CASE lower(nullif(trim(ats), '')) {aliases} ELSE lower(nullif(trim(ats), '')) END);
         CREATE OR REPLACE MACRO plain(text) AS trim(regexp_replace(regexp_replace(lower(coalesce(text, '')), '[^\\pL\\pN]+', ' ', 'g'), '\\s+', ' ', 'g'));
         CREATE OR REPLACE MACRO employer(company) AS trim(regexp_replace(regexp_replace(plain(company), '\\b({forms})\\b', ' ', 'g'), '\\s+', ' ', 'g'));
         CREATE OR REPLACE MACRO city(location) AS plain(split_part(coalesce(location, ''), ',', 1));
