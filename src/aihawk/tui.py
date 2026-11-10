@@ -18,7 +18,7 @@ from aihawk.config import KEY_ENV, KEY_URL, ConfigError
 from aihawk.database import DatabaseError
 from aihawk.library import LibraryError
 from aihawk.llm import explain, refused
-from aihawk.screens import WIDE_ENOUGH, JobDetails, Rows, Said, SendBatch, SentDetails, SentList, Settings, SignIn, TextPrompt
+from aihawk.screens import WIDE_ENOUGH, JobDetails, Rows, Said, SendBatch, SentList, Settings, SignIn, TextPrompt
 from aihawk.session import Session
 from aihawk.store import SUBMITTED, Stored
 
@@ -62,13 +62,17 @@ class AIHawk(App[None]):
     #sent, #settings { height: auto; max-height: 24; }
     #question { text-style: bold; margin-bottom: 1; }
     #summary { height: auto; max-height: 24; margin: 1 0; }
+    #reader { width: 90%; max-width: 110; height: 90%; padding: 1 2; background: $surface; border: thick $primary; }
+    #reader #question { margin-bottom: 0; }
+    #text { height: 1fr; margin: 1 0; }
     .hint { color: $text-muted; }
     """
     BINDINGS: ClassVar = [
+        # Space and Enter both select: the table's own Enter comes as RowSelected, below. i reads the job.
         Binding("space", "toggle", "Select"),
-        Binding("enter", "details", show=False),
+        Binding("i", "details", "Details"),
         Binding("a", "apply", "Apply"),
-        Binding("s", "sent", show=False),
+        Binding("s", "sent", "Sent"),
         Binding("o", "open_link", show=False),
         Binding("e", "settings", "Settings"),
         Binding("r", "new_resume", show=False),
@@ -160,7 +164,7 @@ class AIHawk(App[None]):
         self.query_one("#heading", Static).update(" · ".join(part for part in ("AIHawk", wanted, place) if part))
 
     def row(self, item: Stored) -> tuple[Text | str, ...]:
-        # One sign, or none: selected, or sent. What else happened to a job is in its details, on Enter.
+        # One sign, or none: selected, or sent. How a send went is in the applications, on s.
         mark = "●" if item.job.id in self.selected else "✓" if item.status in SUBMITTED else ""
         score = f"{item.score:.1f}" if item.score is not None else "-"
         # Text, because a string cell is read as markup, and a posting's words are a source's: "[/x] Engineer" would stop the screen.
@@ -385,15 +389,20 @@ class AIHawk(App[None]):
 
     @on(DataTable.RowSelected)
     def row_chosen(self) -> None:
-        self.action_details()
+        self.action_toggle()
 
     def action_details(self) -> None:
-        """The job under the cursor: what was sent and what the page said when it was tried, otherwise why it is listed."""
+        """The job under the cursor, as its posting says it."""
         item = self.current()
         if not item:
             return
-        tried = next((sent for sent in self.session.store.sent() if sent.job.id == item.job.id), None)
-        self.push_screen(SentDetails(tried) if tried else JobDetails(item))
+        if not item.job.description.strip():
+            # A job listed before its text was kept with it: the text is in the database on this computer.
+            text = self.session.library.descriptions([item.job.url])[0]
+            if text:
+                self.session.store.set_description(item.job.id, text)
+                item = self.session.store.get(item.job.id) or item
+        self.push_screen(JobDetails(item))
 
     def action_open_link(self) -> None:
         item = self.current()
@@ -435,9 +444,7 @@ class AIHawk(App[None]):
             ("answers", "Your answers", f"{len(self.session.store.answers())}, given with the CV to every form"),
             ("mail", "Your mail", self.mail_words()),
             ("key", "OrcaRouter key", f"from {KEY_ENV}" if config.key_from_environment() else "saved" if config.api_key() else "none yet"),
-            ("model", "Forms model", config.model),
-            ("quick_model", "Search plan model", config.quick_model),
-            ("decision_model", "Scoring model", config.decision_model),
+            # The models are not here: a person does not choose one, and aihawk.yaml still changes them.
             ("folder", "Your files", str(config.workspace)),
         ]
 

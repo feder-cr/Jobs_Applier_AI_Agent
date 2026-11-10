@@ -383,12 +383,15 @@ def test_s_lists_what_was_tried_newest_first_and_enter_opens_one_in_full(home: P
             await pilot.press("s")
             await wait_for_screen(pilot, SentList)
             table = app.screen.query_one(DataTable)
-            rows = [[str(table.get_row_at(index)[column]) for column in (1, 3, 4)] for index in range(table.row_count)]
-            assert rows[0] == ["Acme", "sent and confirmed", "Thank you"]
-            assert rows[1][1:] == ["blocked", "a captcha"]
+            rows = [[str(table.get_row_at(index)[column]) for column in (1, 3)] for index in range(table.row_count)]
+            assert rows == [["Acme", "sent and confirmed"], ["Beta", "blocked"]]
             await pilot.press("enter")
             await wait_for_screen(pilot, SentDetails)
             assert app.screen.item.job.id == "sent"
+            # How it went in a person's words: what the page said, and not the form's fields or the page's files.
+            text = str(app.screen.query_one("#summary Static").render())
+            assert "Sent and confirmed · 2026-11-03 09:00" in text and "The page said: Thank you" in text
+            assert "Filled in" not in text and "shots" not in text
             await pilot.press("escape")
             await pilot.press("escape")
 
@@ -443,12 +446,26 @@ def test_at_80_columns_the_role_is_the_last_column_and_at_100_the_location_is(ho
     asyncio.run(run())
 
 
+def test_enter_selects_a_job_as_space_does_and_a_second_one_unselects_it(home: Path, resume: Path) -> None:
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
+            await pilot.press("enter", "space")
+            assert len(app.selected) == 2 and not isinstance(app.screen, JobDetails)
+            await pilot.press("up", "enter")
+            table = app.query_one(DataTable)
+            assert [str(table.get_row_at(index)[0]) for index in range(2)] == ["●", ""]
+
+    asyncio.run(run())
+
+
 def test_a_jobs_details_can_select_it_and_the_row_shows_the_mark(home: Path, resume: Path) -> None:
     async def run() -> None:
         app = scripted_app(home, resume)
         async with app.run_test(size=(140, 40)) as pilot:
             await settle(pilot, app)
-            await pilot.press("enter")
+            await pilot.press("i")
             await wait_for_screen(pilot, JobDetails)
             await pilot.press("space")
             await pilot.pause(0.1)
@@ -458,16 +475,18 @@ def test_a_jobs_details_can_select_it_and_the_row_shows_the_mark(home: Path, res
     asyncio.run(run())
 
 
-def test_enter_shows_why_a_job_fits(home: Path, resume: Path) -> None:
+def test_i_shows_the_job_as_its_posting_says_it_and_nothing_else(home: Path, resume: Path) -> None:
     async def run() -> None:
         app = scripted_app(home, resume)
         async with app.run_test(size=(140, 40)) as pilot:
             await settle(pilot, app)
-            await pilot.press("enter")
+            await pilot.press("i")
             await wait_for_screen(pilot, JobDetails)
-            # The job and its score, nothing else: Jev answers in or out, and writes no reasons.
-            text = str(app.screen.query_one("#summary Static").render())
-            assert "Bestco" in text and "Score 4.5/5" in text
+            # The role, the company, where, and the posting's text: no score, no address.
+            text = "\n".join(str(widget.render()) for widget in app.screen.query(Static))
+            item = app.current()
+            assert item and item.job.title in text and "Bestco" in text and item.job.location in text
+            assert "Score" not in text and "https://" not in text
             await pilot.press("escape")
 
     asyncio.run(run())
@@ -985,3 +1004,14 @@ def test_the_right_arrow_says_so_when_there_is_nothing_left_to_read(home: Path, 
             assert "No more jobs for this search." in logged(app)
 
     asyncio.run(run())
+
+
+def test_a_postings_html_reads_as_paragraphs_and_bullets_even_when_escaped() -> None:
+    from aihawk.screens import readable
+
+    html_text = "<h2>About us</h2><p>We build <strong>tools</strong>.</p><ul><li>Python</li><li>Go &amp; Rust</li></ul><script>x()</script>"
+    expected = "About us\n\nWe build tools.\n\n• Python\n• Go & Rust"
+    assert readable(html_text) == expected
+    # Some sources escape their HTML, once or twice over.
+    assert readable(html_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")) == expected
+    assert readable("Plain text,   with  spaces.\n\n\n\nAnd a second paragraph.") == "Plain text, with spaces.\n\nAnd a second paragraph."
