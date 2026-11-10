@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Space and Enter both select a job, and `i` opens it: its role, company, place and the posting's own text, as paragraphs, with nothing else. `s`, the applications, is shown at the bottom; an application's details say how it went in plain words, and the models are no longer in the settings.
+- The one-command install runs on Python 3.14: on 3.15 PyYAML has no Windows build yet, and the install stopped asking for a C++ compiler.
+
 - Added [docs/sites.md](docs/sites.md): each site's status from real forms and what stops it; the README links to it.
 - Added [docs/data-sources.md](docs/data-sources.md), each source with its licence and how to ask for its removal, and [docs/configuration.md](docs/configuration.md).
 - A model error that a smaller batch cannot cure stops at once and says why, instead of ranking by title almost silently.

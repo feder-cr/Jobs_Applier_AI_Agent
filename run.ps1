@@ -3,4 +3,5 @@ if (-not (Get-Command uvx -ErrorAction SilentlyContinue)) {
     Invoke-RestMethod https://astral.sh/uv/install.ps1 | Invoke-Expression
     $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
 }
-uvx --refresh-package aihawk --from git+https://github.com/feder-cr/Jobs_Applier_AI_Agent aihawk
+# Python 3.14: on 3.15, the newest, PyYAML has no Windows build yet, and the install stopped asking for a C++ compiler.
+uvx --python 3.14 --refresh-package aihawk --from git+https://github.com/feder-cr/Jobs_Applier_AI_Agent aihawk

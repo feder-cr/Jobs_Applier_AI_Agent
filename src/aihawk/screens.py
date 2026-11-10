@@ -3,6 +3,8 @@ browser left open for a sign-in. Each is self-contained and reports back by what
 
 from __future__ import annotations
 
+import html
+import re
 import webbrowser
 from typing import Any, ClassVar
 
@@ -14,8 +16,7 @@ from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Input, RichLog, Static
 
-from aihawk.llm import money
-from aihawk.store import Sent, Stored, said, sent_word
+from aihawk.store import SUBMITTED, Sent, Stored, sent_word
 
 
 class Said(RichLog):
@@ -138,14 +139,15 @@ class SentList(ModalScreen[None]):
 
     def on_mount(self) -> None:
         table = self.query_one(DataTable)
-        # What is left beside the time and the status, inside this screen's 95% and its padding, goes to the words.
+        # What is left beside the time and the status, inside this screen's 95% and its padding, goes to the words. What
+        # the page said is in each one's details: cut to a column, it was half a sentence.
         wide = self.app.size.width >= WIDE_ENOUGH
-        left = int(self.app.size.width * 0.95) - 8 - 2 * (5 if wide else 3) - 16 - 19
-        words = [("Company", left // 5), ("Role", left * 3 // 10)] if wide else [("Company", left)]
-        for label, width in (("When", 16), *words, ("Status", 19), *([("What the page said", left // 2)] if wide else [])):
+        left = int(self.app.size.width * 0.95) - 8 - 2 * (4 if wide else 3) - 16 - 19
+        words = [("Company", left * 2 // 5), ("Role", left - left * 2 // 5)] if wide else [("Company", left)]
+        for label, width in (("When", 16), *words, ("Status", 19)):
             table.add_column(label, key=label, width=width)
         for item in self.items:
-            cells = (when_short(item.when), item.job.company, *([item.job.title] if wide else []), sent_word(item), *([short(said(item))] if wide else []))
+            cells = (when_short(item.when), item.job.company, *([item.job.title] if wide else []), sent_word(item))
             table.add_row(*(Text(cell) for cell in cells), key=item.job.id)
         table.focus()
 
@@ -168,51 +170,70 @@ class SentDetails(ModalScreen[None]):
         self.item = item
 
     def compose(self) -> ComposeResult:
-        item, proof = self.item, self.item.proof
-        lines = [
-            item.job.title,
-            f"{item.job.company} · {item.job.location}",
-            "",
-            f"{sent_word(item)} · {item.when}" + (f" · {money(item.cost)}" if item.cost is not None else ""),
-            f"Posting: {item.job.url}",
-            f"Address after the send: {proof.url or '-'}",
-            f"Screenshot: {proof.screenshot or '-'}",
-            "",
-            f"Filled in:\n{item.note or '-'}",
-            "",
-            f"What the page said: {proof.evidence or '-'}",
-            "",
-            proof.text or "The page's text was not read.",
-        ]
+        # How it went, in a person's words: what the form was filled with and the page's files stay in the store.
+        item = self.item
+        lines = [f"{sent_word(item).capitalize()} · {when_short(item.when)}"]
+        if item.proof.evidence:
+            lines.append(f"The page said: {item.proof.evidence}")
+        elif item.status not in SUBMITTED and item.note:
+            # Why it was not sent; a sent one's note is what its form was filled with.
+            lines.append(item.note)
         with Vertical(id="dialog"):
+            yield Static(Text(item.job.title), id="question")
+            yield Static(Text(" · ".join(part for part in (item.job.company, item.job.location) if part)), classes="hint")
             with VerticalScroll(id="summary"):
-                yield Static("\n".join(lines), markup=False)
+                yield Static(Text("\n".join(lines)))
             yield Footer()
 
     def action_close(self) -> None:
         self.dismiss(None)
 
 
+def readable(text: str) -> str:
+    """A posting's text as a person reads it. Sources write HTML, some of it escaped once or twice over: here it is
+    paragraphs and bullets, with no tag left."""
+    for _ in range(3):
+        if not re.search(r"&(amp;)*lt;/?[a-zA-Z]", text):
+            break
+        text = html.unescape(text)
+    text = re.sub(r"(?is)<(script|style)\b.*?</\1\s*>", "", text)
+    text = re.sub(r"(?i)<li\b[^>]*>", "\n• ", text)
+    text = re.sub(r"(?i)<br\b[^>]*>", "\n", text)
+    text = re.sub(r"(?i)</?(p|div|h[1-6]|ul|ol|table|tr|section|article|header|footer|blockquote)\b[^>]*>", "\n\n", text)
+    text = html.unescape(re.sub(r"<[^>]+>", "", text))
+    lines: list[str] = []
+    for line in (" ".join(line.split()) for line in text.splitlines()):
+        # One empty line between paragraphs, never two.
+        if line or (lines and lines[-1]):
+            lines.append(line)
+    return "\n".join(lines).strip()
+
+
 class JobDetails(ModalScreen[None]):
-    BINDINGS: ClassVar = [Binding("space", "select", "Select"), Binding("o", "open_link", "Open"), Binding("escape,enter,q", "close", "Back")]
+    """The job as its posting says it: the role, the company, where, and the posting's text. Nothing else."""
+
+    BINDINGS: ClassVar = [
+        Binding("space,enter", "select", "Select", key_display="space"),
+        Binding("escape,i,q", "close", "Back", key_display="esc"),
+        Binding("o", "open_link", show=False),
+    ]
 
     def __init__(self, item: Stored) -> None:
         super().__init__()
         self.item = item
 
     def compose(self) -> ComposeResult:
-        job, score = self.item.job, self.item.score
-        lines = [f"{job.title}", f"{job.company} · {job.location}", job.url]
-        if score is not None:
-            lines += ["", f"Score {score:.1f}/5"]
-            if not job.description.strip():
-                lines += ["Scored from the title alone: the posting had no text to read."]
-        if self.item.note:
-            lines += ["", "Last attempt:", self.item.note]
-        with Vertical(id="dialog"):
-            with VerticalScroll(id="summary"):
-                yield Static("\n".join(lines), markup=False)
+        job = self.item.job
+        with Vertical(id="reader"):
+            yield Static(Text(job.title), id="question")
+            yield Static(Text(" · ".join(part for part in (job.company, job.location) if part)), classes="hint")
+            with VerticalScroll(id="text"):
+                yield Static(Text(readable(job.description) or "This posting has no description."))
             yield Footer()
+
+    def on_mount(self) -> None:
+        # The arrows and Page Down read the text.
+        self.query_one("#text").focus()
 
     def action_close(self) -> None:
         self.dismiss(None)

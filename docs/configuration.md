@@ -10,7 +10,7 @@ With the environment variable `AIHAWK_DRY_RUN` set to anything, an application s
 
 ## What it costs
 
-AIHawk counts the tokens of every model call and prices them with the gateway's own list, read once per start. A sent application shows its cost in its details, and the log says what each application and each scoring cost. Jev's calls, which score the jobs, are not counted: they go through another endpoint and cost under a cent per hundred postings.
+AIHawk counts the tokens of every model call and prices them with the gateway's own list, read once per start. The log says what each application and each scoring cost. Jev's calls, which score the jobs, are not counted: they go through another endpoint and cost under a cent per hundred postings.
 
 ## The accounts it made
 
