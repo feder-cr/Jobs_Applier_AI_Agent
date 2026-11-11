@@ -1,0 +1,58 @@
+# old-version-sync.yml - every hour, the applications of AIHawk's old version, which count on GitHub (the downloads of the
+# usage-counter release's files), are sent on to PostHog, so PostHog holds every application from 2026-11-11 on. Marked
+# source=old_version, with how they ended and nothing else: the old version says nothing more.
+#
+# The totals already sent are kept in counters/posthog_synced.json on the badges branch. No secret: PostHog's write-only
+# project key is public, and GitHub's API is read with the built-in token.
+name: old version sync
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: counters
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out the script (main)
+        uses: actions/checkout@v7
+        with:
+          path: main
+
+      - name: Check out the badges branch
+        uses: actions/checkout@v7
+        with:
+          ref: badges
+          path: badges
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Send the old version's new applications to PostHog
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python main/scripts/usage_counters.py --sync badges/counters/posthog_synced.json
+
+      - name: Keep the totals sent
+        working-directory: badges
+        run: |
+          set -euo pipefail
+          git config user.name "feder-cr"
+          git config user.email "85809106+feder-cr@users.noreply.github.com"
+          git add counters/posthog_synced.json
+          if git diff --cached --quiet; then
+            echo "nothing changed"
+            exit 0
+          fi
+          git commit -q -m "counters: old version's applications sent to PostHog up to $(date -u +%FT%H:%MZ)"
+          git push origin HEAD:badges
