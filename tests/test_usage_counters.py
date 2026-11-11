@@ -43,12 +43,10 @@ def test_a_day_is_the_difference_of_two_snapshots_and_the_badge_shows_the_applic
     ])
 
     def api(path: str) -> object:
-        if path.endswith("/releases/tags/usage-counter"):
-            return {"assets": [{"name": f"{name}.txt", "download_count": value} for name, value in next(totals).items()]}
         return {"stargazers_count": 3}
 
     def query(hogql: str) -> list[list[object]]:
-        return [[1]] if "DISTINCT" in hogql else []
+        return [[1]] if "DISTINCT" in hogql else [[outcome, count] for outcome, count in next(totals).items()]
 
     history, daily, badges = tmp_path / "history.csv", tmp_path / "daily.csv", tmp_path / "badges"
     counters.run(api, query, history, daily, badges, dt.date(2026, 11, 9))
@@ -58,30 +56,13 @@ def test_a_day_is_the_difference_of_two_snapshots_and_the_badge_shows_the_applic
     assert b"applications sent: 28" in (badges / "applications.svg").read_bytes()
 
 
-def test_the_old_versions_new_applications_go_to_posthog_and_the_first_run_sends_none(tmp_path: Path) -> None:
-    totals = iter([
-        {"submitted": 10, "unconfirmed": 2, "refused": 1, "blocked": 4, "failed": 0},
-        {"submitted": 12, "unconfirmed": 2, "refused": 1, "blocked": 5, "failed": 0},
-    ])
-
-    def api(path: str) -> object:
-        return {"assets": [{"name": f"{name}.txt", "download_count": value} for name, value in next(totals).items()]}
-
-    sent: list[list[dict[str, object]]] = []
-    state = tmp_path / "posthog_synced.json"
-    assert sum(counters.sync(api, state, "2026-11-11T20:17:00+00:00", sent.append).values()) == 0 and sent == []
-    assert counters.sync(api, state, "2026-11-11T21:17:00+00:00", sent.append) == {"submitted": 2, "unconfirmed": 0, "refused": 0, "blocked": 1, "failed": 0}
-    (batch,) = sent
-    assert sorted(event["properties"]["outcome"] for event in batch) == ["blocked", "submitted", "submitted"]  # type: ignore[index]
-    assert all(event["event"] == "application" and event["properties"]["source"] == counters.OLD_VERSION for event in batch)  # type: ignore[index]
-
-
-def test_the_snapshot_leaves_the_copies_out_of_posthogs_count() -> None:
+def test_only_posthog_counts_and_the_setup_check_is_no_computer() -> None:
     asked: list[str] = []
 
     def query(hogql: str) -> list[list[object]]:
         asked.append(hogql)
         return [[1]] if "DISTINCT" in hogql else []
 
-    counters.collect(lambda path: {"assets": []} if "releases" in path else {"stargazers_count": 0}, query)
-    assert any(counters.OLD_VERSION in hogql and "!=" in hogql for hogql in asked)
+    counters.collect(lambda path: {"stargazers_count": 0}, query)
+    assert not hasattr(counters, "COUNTER_TAG") and not hasattr(counters, "sync")
+    assert any("app_started" in hogql and "DISTINCT" in hogql for hogql in asked)
