@@ -1,0 +1,26 @@
+# posthog-dashboard.yml - makes, or makes again, the "AIHawk" dashboard in PostHog (scripts/posthog_dashboard.py).
+#
+# Run by hand from the Actions tab. The key that can write dashboards is the repository's secret POSTHOG_DASHBOARD_KEY,
+# which only GitHub sees.
+name: posthog dashboard
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  dashboard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Make the dashboard
+        env:
+          # A key of its own that can write dashboards, or else the snapshot's key, if it can.
+          POSTHOG_DASHBOARD_KEY: ${{ secrets.POSTHOG_DASHBOARD_KEY || secrets.POSTHOG_API_KEY }}
+        run: python scripts/posthog_dashboard.py
