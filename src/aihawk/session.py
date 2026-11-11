@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from openai import AsyncOpenAI
 
 from aihawk.apply import MAILBOXES, Outcome, apply_to_job, signed_in, site_of
 from aihawk.apply import sign_in as sign_in_browser
-from aihawk.config import KEY_ENV, KEY_URL, Config, ConfigError, load_config
-from aihawk.counter import count
+from aihawk.config import DEFAULT_BASE_URL, KEY_ENV, KEY_URL, Config, ConfigError, load_config
 from aihawk.database import load_manifest, search
 from aihawk.library import Library
 from aihawk.llm import SPEND, explain, make_client, money, refused
@@ -21,6 +22,7 @@ from aihawk.plugins import Plugin, always_plugins, load_plugins, plugin_for
 from aihawk.profile import ensure_account_password, import_answers_file, install_resume, save_setting
 from aihawk.shortlist import fits, question, score
 from aihawk.store import SENT_WORDS, SUBMITTED, Store, Stored, write_applied
+from aihawk.telemetry import track
 
 # Jev reads the next WIDE postings the search ranked best and scores each of them: about what one of its requests holds,
 # 215 to 230 postings with their descriptions on 2026-11-08. What a round waits on is not Jev, three seconds for 512, but
@@ -125,7 +127,9 @@ class Session:
     async def find(self, log: Log) -> int:
         """Bring the postings for this search, of those on this computer, into the store; how many are new."""
         jobs = await asyncio.to_thread(search, self.library, self.config.filters, self.config.max_age_days)
-        return self.store.add_all(jobs)
+        new = self.store.add_all(jobs)
+        track(self.config.data_dir, "search", found=len(jobs), new=new)
+        return new
 
     async def read(self, log: Log) -> int:
         """Jev reads the next WIDE postings the search ranked best and scores each one by how sure it is that the job is in
@@ -134,6 +138,7 @@ class Session:
         batch = self.store.with_status("new")[:WIDE]
         if not batch:
             return 0
+        started = time.monotonic()
         # From this computer, by the posting's address: a job kept from an earlier build has its text there too.
         texts = await asyncio.to_thread(self.library.descriptions, [item.job.url for item in batch])
         for item, text in zip(batch, texts, strict=True):
@@ -158,6 +163,8 @@ class Session:
         for job, value in zip(jobs, values, strict=True):
             if value is not None:
                 self.store.set_score(job.id, score(value), {})
+        track(self.config.data_dir, "jobs_scored", postings=len(jobs), answered=len(jobs) - len(failed),
+              seconds=round(time.monotonic() - started, 1), scoring_model=self.config.decision_model)
         return len(jobs) - len(failed)
 
     def _own_cv(self) -> Path:
@@ -197,6 +204,7 @@ class Session:
         )
         await self.priced()
         before = SPEND.total
+        started = time.monotonic()
         try:
             cv_file = self._own_cv()
             log(f"{item.job.company}: filling the form")
@@ -206,16 +214,21 @@ class Session:
             # One job's failure is reported and recorded; the next job still runs.
             if refused(error):
                 raise
-            outcome = Outcome("failed", explain(error))
+            outcome = Outcome("failed", explain(error), reason=type(error).__name__)
         if outcome.made_account and (email := self.store.answers().get("email")):
             # Written whatever the form did: the account exists on that site either way, and the next form there signs in.
             self.store.set_account(host, email)
         self.store.set_status(item.job.id, outcome.status, outcome.summary)
         self.store.set_proof(item.job.id, outcome.proof)
-        # One more application sent, in the count of all AIHawk's users: see counter.py.
-        count(outcome.status)
         await SPEND.settle(self.client)
         self.store.set_cost(item.job.id, SPEND.total - before)
+        # How it went, for AIHawk's makers, with nothing about the person or the job: see telemetry.py.
+        track(
+            self.config.data_dir, "application", outcome=outcome.status, reason=outcome.reason, site=plugin.name if plugin else host,
+            plugin=plugin is not None, forms_model=self.config.model, scoring_model=self.config.decision_model,
+            gateway=urlsplit(DEFAULT_BASE_URL).hostname, steps=outcome.steps, seconds=round(time.monotonic() - started, 1),
+            cost=round(SPEND.total - before, 4),
+        )
         # The file for the person outside the app. One that another program holds open must not stop the next send.
         try:
             write_applied(self.config.workspace / "applied.csv", self.store.sent())

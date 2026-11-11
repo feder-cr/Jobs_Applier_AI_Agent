@@ -5,13 +5,15 @@
     python scripts/usage_counters.py --selftest
 
 Run once a day by .github/workflows/counters.yml, which keeps the files on the unprotected `badges` branch: no person and
-no machine of ours, every input a public GitHub API answer, every output a file on that branch. The way
-invisible_playwright records its browser launches.
+no machine of ours, every output a file on that branch. The way invisible_playwright records its browser launches.
 
-WHAT IS COUNTED. Every application that ends makes one download of the `usage-counter` release's file named after how it
-ended (src/aihawk/counter.py), and GitHub counts each file's downloads as its `download_count`. GitHub keeps only the
-running totals, never a history: a day's applications are the difference between two daily totals, and a day nobody
-recorded is lost for good.
+WHAT IS COUNTED. An application is counted in one of two places, never both:
+  * AIHawk since 2026-11-11 sends an `application` event to PostHog (src/aihawk/telemetry.py), read here with the
+    project's read key, POSTHOG_API_KEY, a secret of the repository.
+  * AIHawk from 2026-11-09 to 2026-11-11 downloaded the `usage-counter` release's file named after how the application
+    ended, and GitHub counts each file's downloads. Those still running count there until they update.
+Each outcome's total is the sum. GitHub keeps only running totals, never a history: a day's applications are the
+difference between two daily totals, and a day nobody recorded is lost for good.
 
 `sent` is what the badge shows: the applications whose send was clicked, confirmed by the page or not.
 """
@@ -36,7 +38,11 @@ COUNTER_TAG = "usage-counter"
 OUTCOMES = ("submitted", "unconfirmed", "refused", "blocked", "failed")
 SENT = ("submitted", "unconfirmed")
 
+POSTHOG_QUERY = "https://us.posthog.com/api/projects/728626/query/"
+
 Api = Callable[[str], object]
+# A HogQL query's rows.
+Query = Callable[[str], list[list[object]]]
 
 
 def github_api(token: str | None) -> Api:
@@ -51,13 +57,26 @@ def github_api(token: str | None) -> Api:
     return get
 
 
-def collect(api: Api) -> dict[str, int]:
-    """Each outcome's total, the ones sent, all of them, and the stars."""
+def posthog_query(key: str) -> Query:
+    def query(hogql: str) -> list[list[object]]:
+        body = json.dumps({"query": {"kind": "HogQLQuery", "query": hogql}}).encode("utf-8")
+        request = urllib.request.Request(POSTHOG_QUERY, data=body, headers={"Content-Type": "application/json", "Authorization": "Bearer " + key})
+        with urllib.request.urlopen(request, timeout=120) as response:
+            return json.load(response)["results"]
+
+    return query
+
+
+def collect(api: Api, query: Query) -> dict[str, int]:
+    """Each outcome's total on GitHub and PostHog together, the ones sent, all of them, the computers AIHawk has run on
+    since it reports to PostHog, and the stars."""
     release = api(f"/repos/{REPO}/releases/tags/{COUNTER_TAG}")
     downloads = {asset["name"].removesuffix(".txt"): asset["download_count"] for asset in release["assets"]}  # type: ignore[index]
-    out = {outcome: int(downloads.get(outcome, 0)) for outcome in OUTCOMES}
+    events = {str(outcome): int(count) for outcome, count in query("SELECT properties.outcome, count() FROM events WHERE event = 'application' GROUP BY 1")}  # type: ignore[call-overload]
+    out = {outcome: int(downloads.get(outcome, 0)) + events.get(outcome, 0) for outcome in OUTCOMES}
     out["sent"] = sum(out[outcome] for outcome in SENT)
     out["applications"] = sum(out[outcome] for outcome in OUTCOMES)
+    out["computers"] = int(query("SELECT count(DISTINCT distinct_id) FROM events")[0][0])  # type: ignore[call-overload]
     out["stars"] = int(api(f"/repos/{REPO}")["stargazers_count"])  # type: ignore[index]
     return out
 
@@ -183,10 +202,10 @@ def write_badges(directory: Path, history: dict[str, dict[str, int]]) -> None:
 # ── entry point ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
 
-def run(api: Api, history: Path, daily: Path, badges: Path, today: dt.date) -> int:
+def run(api: Api, query: Query, history: Path, daily: Path, badges: Path, today: dt.date) -> int:
     day = today.isoformat()
     before = read_history(history)
-    written = append_snapshot(history, day, collect(api))
+    written = append_snapshot(history, day, collect(api, query))
     after = read_history(history)
     write_daily(daily, after)
     write_badges(badges, after)
@@ -204,7 +223,12 @@ def selftest() -> int:
     fails = []
     release = {"assets": [{"name": "submitted.txt", "download_count": 7}, {"name": "unconfirmed.txt", "download_count": 2}, {"name": "failed.txt", "download_count": 1}]}
     answers = {f"/repos/{REPO}/releases/tags/{COUNTER_TAG}": release, f"/repos/{REPO}": {"stargazers_count": 5}}
-    if collect(answers.__getitem__) != {"submitted": 7, "unconfirmed": 2, "refused": 0, "blocked": 0, "failed": 1, "sent": 9, "applications": 10, "stars": 5}:
+
+    def query(hogql: str) -> list[list[object]]:
+        return [[3]] if "DISTINCT" in hogql else [["submitted", 4], ["blocked", 2]]
+
+    expected = {"submitted": 11, "unconfirmed": 2, "refused": 0, "blocked": 2, "failed": 1, "sent": 13, "applications": 16, "computers": 3, "stars": 5}
+    if collect(answers.__getitem__, query) != expected:
         fails.append("collect")
     if format_count(4_616_723) != "4.61M" or format_count(2554) != "2.55k" or format_count(999) != "999":
         fails.append("format")
@@ -232,7 +256,10 @@ def main() -> int:
     if not (arguments.history and arguments.daily and arguments.badges):
         parser.error("--history, --daily and --badges are required")
     api = github_api(os.environ.get("GITHUB_TOKEN"))
-    return run(api, arguments.history, arguments.daily, arguments.badges, dt.datetime.now(dt.UTC).date())
+    key = os.environ.get("POSTHOG_API_KEY")
+    if not key:
+        parser.error("POSTHOG_API_KEY is not set: the applications since 2026-11-11 are counted in PostHog")
+    return run(api, posthog_query(key), arguments.history, arguments.daily, arguments.badges, dt.datetime.now(dt.UTC).date())
 
 
 if __name__ == "__main__":

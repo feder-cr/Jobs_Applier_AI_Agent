@@ -21,6 +21,7 @@ from aihawk.llm import explain, refused
 from aihawk.screens import WIDE_ENOUGH, JobDetails, Rows, Said, SendBatch, SentList, Settings, SignIn, TextPrompt
 from aihawk.session import Session
 from aihawk.store import SUBMITTED, Stored
+from aihawk.telemetry import track
 
 SEARCH_SETTINGS = {"places", "exclude", "max_age_days"}
 # Jobs on a page: all scored, sorted once, and never moved while the person reads them.
@@ -114,6 +115,7 @@ class AIHawk(App[None]):
     def on_mount(self) -> None:
         self.query_one(DataTable).focus()
         self.show_heading()
+        track(self.session.config.data_dir, "app_started")
         self.start()
 
     def on_resize(self, event: events.Resize) -> None:
