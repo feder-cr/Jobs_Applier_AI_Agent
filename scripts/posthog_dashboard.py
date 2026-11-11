@@ -24,14 +24,17 @@ NAME = "AIHawk"
 
 
 def trends(event: str, *, math: str = "total", math_property: str | None = None, breakdown: str | None = None,
-           display: str = "ActionsLineGraph", date_from: str = "-30d", where: dict[str, Any] | None = None) -> dict[str, Any]:
-    """A trends query over one event, as PostHog's insight API takes it."""
+           display: str = "ActionsLineGraph", date_from: str = "-30d", where: dict[str, Any] | None = None,
+           sums: tuple[str, ...] = ()) -> dict[str, Any]:
+    """A trends query over one event, as PostHog's insight API takes it: one series, or with `sums` one series summing
+    each of those properties."""
     series: dict[str, Any] = {"kind": "EventsNode", "event": event, "name": event, "math": math}
     if math_property:
         series["math_property"] = math_property
+    every = [{"kind": "EventsNode", "event": event, "name": name, "math": "sum", "math_property": name} for name in sums] or [series]
     source: dict[str, Any] = {
         "kind": "TrendsQuery",
-        "series": [series],
+        "series": every,
         "interval": "day",
         "dateRange": {"date_from": date_from},
         "trendsFilter": {"display": display},
@@ -47,7 +50,7 @@ CHARTS = [
     ("Applications a day, by how they ended", trends("application", breakdown="outcome", display="ActionsBar")),
     ("Why applications are blocked", trends("application", breakdown="reason", display="ActionsPie", date_from="-7d", where={"outcome": "blocked"})),
     ("Applications by site and outcome", trends("application", breakdown="site", display="ActionsTable", date_from="-7d")),
-    ("Average cost of an application ($)", trends("application", math="avg", math_property="cost")),
+    ("Tokens a day, read and written, by forms model", trends("application", sums=("input_tokens", "output_tokens"), breakdown="forms_model", display="ActionsBar")),
     ("Computers that opened AIHawk", trends("app_started", math="dau")),
 ]
 

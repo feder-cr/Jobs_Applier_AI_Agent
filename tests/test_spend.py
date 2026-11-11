@@ -90,3 +90,14 @@ def test_an_account_is_kept_per_host_and_read_back(tmp_path: Path) -> None:
     store.set_account("nvidia.wd5.myworkdayjobs.com", "other@example.com")
     assert store.accounts() == {"nvidia.wd5.myworkdayjobs.com": "other@example.com"}
     store.close()
+
+
+def test_every_call_counts_its_tokens_read_and_written_by_model_priced_or_not() -> None:
+
+    spend = Spend()
+    spend.prices["priced/model"] = (1e-6, 2e-6, 5e-7)
+    spend.note("priced/model", usage(100, 20))
+    spend.note("priced/model", usage(50, 5))
+    spend.note("unpriced/model", usage(7, 3))
+    spend.note("unpriced/model", None)
+    assert spend.tokens == {"priced/model": (150, 25), "unpriced/model": (7, 3)}

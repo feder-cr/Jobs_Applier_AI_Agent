@@ -204,6 +204,7 @@ class Session:
         )
         await self.priced()
         before = SPEND.total
+        tokens_before = dict(SPEND.tokens)
         started = time.monotonic()
         try:
             cv_file = self._own_cv()
@@ -222,12 +223,19 @@ class Session:
         self.store.set_proof(item.job.id, outcome.proof)
         await SPEND.settle(self.client)
         self.store.set_cost(item.job.id, SPEND.total - before)
-        # How it went, for AIHawk's makers, with nothing about the person or the job: see telemetry.py.
+        # How it went, for AIHawk's makers, with nothing about the person or the job: see telemetry.py. The tokens each
+        # model took in and gave out on this application, as the gateway counted them: no price, no currency.
+        used = {
+            model: (taken - tokens_before.get(model, (0, 0))[0], given - tokens_before.get(model, (0, 0))[1])
+            for model, (taken, given) in SPEND.tokens.items()
+        }
+        used = {model: pair for model, pair in used.items() if pair != (0, 0)}
         track(
             self.config.data_dir, "application", outcome=outcome.status, reason=outcome.reason, site=plugin.name if plugin else host,
             plugin=plugin is not None, forms_model=self.config.model, scoring_model=self.config.decision_model,
             gateway=urlsplit(DEFAULT_BASE_URL).hostname, steps=outcome.steps, seconds=round(time.monotonic() - started, 1),
-            cost=round(SPEND.total - before, 4),
+            models=sorted(used), input_tokens=sum(taken for taken, _ in used.values()), output_tokens=sum(given for _, given in used.values()),
+            tokens_by_model={model: {"input": taken, "output": given} for model, (taken, given) in used.items()},
         )
         # The file for the person outside the app. One that another program holds open must not stop the next send.
         try:

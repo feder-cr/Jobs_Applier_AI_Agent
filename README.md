@@ -63,7 +63,7 @@ AIHawk tells us how it is used, so we know what to fix. It sends these events to
 | `app_started` | AIHawk opens | AIHawk's version, the operating system |
 | `search` | a search ends | how many jobs it found |
 | `jobs_scored` | Jev reads a round | how many postings, how many it answered for, how long it took, the model |
-| `application` | an application ends | how it went (sent, refused, blocked, failed), why in one word (captcha, login, closed posting…), the kind of site (Workday, Greenhouse…), the models, the gateway, the steps, the time and the cost |
+| `application` | an application ends | how it went (sent, refused, blocked, failed), why in one word (captcha, login, closed posting…), the kind of site (Workday, Greenhouse…), the models, the gateway, the steps, the time, and the tokens each model read and wrote |
 
 Nothing about you or the jobs goes with them: no name, email, resume, answer, company or link. The number on the badge above is the applications sent. The count is always on; a dry run is not counted.
 
