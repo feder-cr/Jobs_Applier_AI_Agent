@@ -7,12 +7,9 @@
 Run once a day by .github/workflows/counters.yml, which keeps the files on the unprotected `badges` branch: no person and
 no machine of ours, every output a file on that branch. The way invisible_playwright records its browser launches.
 
-WHAT IS COUNTED. An application is counted in one of two places, never both:
-  * AIHawk since 2026-11-11 sends an `application` event to PostHog (src/aihawk/telemetry.py), read here with the
-    project's read key, POSTHOG_API_KEY, a secret of the repository.
-  * AIHawk from 2026-11-09 to 2026-11-11 downloaded the `usage-counter` release's file named after how the application
-    ended, and GitHub counts each file's downloads. Those still running count there until they update.
-Each outcome's total is the sum. GitHub keeps only running totals, never a history: a day's applications are the
+WHAT IS COUNTED. AIHawk sends an `application` event to PostHog for each application (src/aihawk/telemetry.py), read
+here with the project's read key, POSTHOG_API_KEY, a secret of the repository. PostHog alone counts, the owner's decision
+of 2026-11-11: what AIHawk counted on GitHub for its first two days is left behind. A day's applications are the
 difference between two daily totals, and a day nobody recorded is lost for good.
 
 `sent` is what the badge shows: the applications whose send was clicked, confirmed by the page or not.
@@ -34,18 +31,12 @@ from itertools import pairwise
 from pathlib import Path
 
 REPO = "feder-cr/Jobs_Applier_AI_Agent"
-COUNTER_TAG = "usage-counter"
 OUTCOMES = ("submitted", "unconfirmed", "refused", "blocked", "failed")
 SENT = ("submitted", "unconfirmed")
 
 POSTHOG_QUERY = "https://us.posthog.com/api/projects/728626/query/"
-# Where the copies of the old version's applications go: PostHog's batch capture, with the project's write-only key, the
-# one AIHawk ships (src/aihawk/telemetry.py).
-POSTHOG_BATCH = "https://us.i.posthog.com/batch/"
-POSTHOG_PROJECT_KEY = "phc_pfK4un6Vf6wppby8tpzexsWcVmwXBUHFZpbUSciZqkag"
-# The mark of a copy: an application the old version counted on GitHub, sent on to PostHog by `sync`. The snapshot leaves
-# these out of PostHog's count, since GitHub's already holds them.
-OLD_VERSION = "old_version"
+# AIHawk's own events: the project also holds a check made when it was set up, which is no computer of anyone's.
+EVENTS = ("app_started", "search", "jobs_scored", "application")
 
 Api = Callable[[str], object]
 # A HogQL query's rows.
@@ -75,17 +66,12 @@ def posthog_query(key: str) -> Query:
 
 
 def collect(api: Api, query: Query) -> dict[str, int]:
-    """Each outcome's total on GitHub and PostHog together, the ones sent, all of them, the computers AIHawk has run on
-    since it reports to PostHog, and the stars."""
-    release = api(f"/repos/{REPO}/releases/tags/{COUNTER_TAG}")
-    downloads = {asset["name"].removesuffix(".txt"): asset["download_count"] for asset in release["assets"]}  # type: ignore[index]
-    events = {str(outcome): int(count) for outcome, count in query(  # type: ignore[call-overload]
-        f"SELECT properties.outcome, count() FROM events WHERE event = 'application' AND coalesce(properties.source, '') != '{OLD_VERSION}' GROUP BY 1"
-    )}
-    out = {outcome: int(downloads.get(outcome, 0)) + events.get(outcome, 0) for outcome in OUTCOMES}
+    """Each outcome's total in PostHog, the ones sent, all of them, the computers AIHawk has run on, and the stars."""
+    events = {str(outcome): int(count) for outcome, count in query("SELECT properties.outcome, count() FROM events WHERE event = 'application' GROUP BY 1")}  # type: ignore[call-overload]
+    out = {outcome: events.get(outcome, 0) for outcome in OUTCOMES}
     out["sent"] = sum(out[outcome] for outcome in SENT)
     out["applications"] = sum(out[outcome] for outcome in OUTCOMES)
-    out["computers"] = int(query("SELECT count(DISTINCT distinct_id) FROM events")[0][0])  # type: ignore[call-overload]
+    out["computers"] = int(query(f"SELECT count(DISTINCT distinct_id) FROM events WHERE event IN {EVENTS!r}")[0][0])  # type: ignore[call-overload]
     out["stars"] = int(api(f"/repos/{REPO}")["stargazers_count"])  # type: ignore[index]
     return out
 
@@ -230,13 +216,12 @@ def selftest() -> int:
     import tempfile
 
     fails = []
-    release = {"assets": [{"name": "submitted.txt", "download_count": 7}, {"name": "unconfirmed.txt", "download_count": 2}, {"name": "failed.txt", "download_count": 1}]}
-    answers = {f"/repos/{REPO}/releases/tags/{COUNTER_TAG}": release, f"/repos/{REPO}": {"stargazers_count": 5}}
+    answers = {f"/repos/{REPO}": {"stargazers_count": 5}}
 
     def query(hogql: str) -> list[list[object]]:
         return [[3]] if "DISTINCT" in hogql else [["submitted", 4], ["blocked", 2]]
 
-    expected = {"submitted": 11, "unconfirmed": 2, "refused": 0, "blocked": 2, "failed": 1, "sent": 13, "applications": 16, "computers": 3, "stars": 5}
+    expected = {"submitted": 4, "unconfirmed": 0, "refused": 0, "blocked": 2, "failed": 0, "sent": 4, "applications": 6, "computers": 3, "stars": 5}
     if collect(answers.__getitem__, query) != expected:
         fails.append("collect")
     if format_count(4_616_723) != "4.61M" or format_count(2554) != "2.55k" or format_count(999) != "999":
@@ -266,39 +251,6 @@ REPORT = (
 )
 
 
-def github_totals(api: Api) -> dict[str, int]:
-    """Each outcome's downloads of the usage-counter release's files: the old version's applications, all of them."""
-    release = api(f"/repos/{REPO}/releases/tags/{COUNTER_TAG}")
-    downloads = {asset["name"].removesuffix(".txt"): asset["download_count"] for asset in release["assets"]}  # type: ignore[index]
-    return {outcome: int(downloads.get(outcome, 0)) for outcome in OUTCOMES}
-
-
-def send_batch(events: list[dict[str, object]]) -> None:
-    body = json.dumps({"api_key": POSTHOG_PROJECT_KEY, "batch": events}).encode("utf-8")
-    request = urllib.request.Request(POSTHOG_BATCH, data=body, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(request, timeout=60) as response:
-        response.read()
-
-
-def sync(api: Api, state: Path, now: str, send: Callable[[list[dict[str, object]]], None] = send_batch) -> dict[str, int]:
-    """The old version's applications since the last run, sent to PostHog as `application` events marked OLD_VERSION, and
-    the totals they reach written to `state`. The first run only writes the totals: the owner wanted the old version's
-    applications in PostHog from 2026-11-11 on, not before. Returns how many of each were sent."""
-    totals = github_totals(api)
-    seen = json.loads(state.read_text(encoding="utf-8")) if state.exists() else None
-    sent = {outcome: max(0, totals[outcome] - seen.get(outcome, 0)) for outcome in OUTCOMES} if seen is not None else dict.fromkeys(OUTCOMES, 0)
-    events = [
-        {"event": "application", "distinct_id": "aihawk-old-version", "timestamp": now,
-         "properties": {"outcome": outcome, "source": OLD_VERSION, "$process_person_profile": False, "$lib": "aihawk-counter"}}
-        for outcome, count in sent.items() for _ in range(count)
-    ]
-    if events:
-        send(events)
-    state.parent.mkdir(parents=True, exist_ok=True)
-    state.write_text(json.dumps(totals, indent=1, sort_keys=True), encoding="utf-8")
-    return sent
-
-
 def report(query: Query) -> int:
     """What PostHog has received lately, printed: for a look by hand, from .github/workflows/posthog-report.yml."""
     for title, hogql in REPORT:
@@ -312,17 +264,12 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--selftest", action="store_true")
     parser.add_argument("--report", action="store_true", help="Print what PostHog received in the last 24 hours.")
-    parser.add_argument("--sync", type=Path, help="Send the old version's new applications to PostHog; the file keeps the totals sent.")
     parser.add_argument("--history", type=Path)
     parser.add_argument("--daily", type=Path)
     parser.add_argument("--badges", type=Path)
     arguments = parser.parse_args()
     if arguments.selftest:
         return selftest()
-    if arguments.sync:
-        sent = sync(github_api(os.environ.get("GITHUB_TOKEN")), arguments.sync, dt.datetime.now(dt.UTC).isoformat(timespec="seconds"))
-        print(f"[sync] sent to PostHog: {sent}")
-        return 0
     if arguments.report:
         if not (key := os.environ.get("POSTHOG_API_KEY")):
             parser.error("POSTHOG_API_KEY is not set")
