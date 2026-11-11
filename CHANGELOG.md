@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The install needs no git: the one-line command brings AIHawk's code as an archive, 7 MB where the clone of its repository was 180, and the first start is about a minute shorter. A start with no connection opens the copy already on the computer.
 - AIHawk tells its makers, anonymously, how it is used: how a start went and where it stopped, how many jobs a search found, and how each application ended, with the tokens each model used and no price. Nothing about you or the jobs goes with it, and a dry run is not counted. The README lists every event. The badge counts the applications sent from these events.
 - Jev alone scores the jobs: for each posting, whether it is in line with the resume, and how sure the answer is is the score. The list comes in pages of 50, the next one read while you read, and a posting Jev gave no answer for is set aside, not asked again and again.
 - The job database comes from Hugging Face, in chunks of complete postings, newest first. A search looks back 15 days by default (`max_age_days`), only the chunks those days need are downloaded, all before the first search, and after that only what changed.
