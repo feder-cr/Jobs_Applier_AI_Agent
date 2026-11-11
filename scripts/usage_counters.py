@@ -244,15 +244,42 @@ def selftest() -> int:
     return 1 if fails else 0
 
 
+REPORT = (
+    ("events, last 24 hours", "SELECT event, count(), count(DISTINCT distinct_id) FROM events WHERE timestamp > now() - INTERVAL 1 DAY GROUP BY 1 ORDER BY 2 DESC"),
+    ("applications by outcome and reason, last 24 hours",
+     "SELECT properties.outcome, properties.reason, count() FROM events WHERE event = 'application' AND timestamp > now() - INTERVAL 1 DAY GROUP BY 1, 2 ORDER BY 3 DESC"),
+    ("applications by site, last 24 hours",
+     "SELECT properties.site, count(), countIf(properties.outcome = 'submitted') FROM events WHERE event = 'application' AND timestamp > now() - INTERVAL 1 DAY GROUP BY 1 ORDER BY 2 DESC LIMIT 15"),
+    ("tokens by forms model, last 24 hours",
+     "SELECT properties.forms_model, sum(toInt(properties.input_tokens)), sum(toInt(properties.output_tokens)), count() FROM events WHERE event = 'application' AND timestamp > now() - INTERVAL 1 DAY GROUP BY 1"),
+    ("versions, last 24 hours", "SELECT properties.version, count(DISTINCT distinct_id) FROM events WHERE timestamp > now() - INTERVAL 1 DAY GROUP BY 1 ORDER BY 2 DESC"),
+    ("last event", "SELECT max(timestamp) FROM events WHERE event <> 'aihawk_setup_check'"),
+)
+
+
+def report(query: Query) -> int:
+    """What PostHog has received lately, printed: for a look by hand, from .github/workflows/posthog-report.yml."""
+    for title, hogql in REPORT:
+        print(f"== {title}")
+        for row in query(hogql):
+            print("  " + " | ".join(str(value) for value in row))
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--selftest", action="store_true")
+    parser.add_argument("--report", action="store_true", help="Print what PostHog received in the last 24 hours.")
     parser.add_argument("--history", type=Path)
     parser.add_argument("--daily", type=Path)
     parser.add_argument("--badges", type=Path)
     arguments = parser.parse_args()
     if arguments.selftest:
         return selftest()
+    if arguments.report:
+        if not (key := os.environ.get("POSTHOG_API_KEY")):
+            parser.error("POSTHOG_API_KEY is not set")
+        return report(posthog_query(key))
     if not (arguments.history and arguments.daily and arguments.badges):
         parser.error("--history, --daily and --badges are required")
     api = github_api(os.environ.get("GITHUB_TOKEN"))
