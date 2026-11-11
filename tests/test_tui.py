@@ -517,6 +517,27 @@ def test_a_second_start_goes_straight_to_the_list_without_asking(home: Path, res
     assert asyncio.run(run(None)) == [0]
 
 
+def test_the_first_start_says_each_step_and_closing_says_where_it_was_and_whether_it_searched(
+    home: Path, resume: Path, tracked: list[dict[str, Any]]
+) -> None:
+    import threading
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
+
+    asyncio.run(run())
+    for thread in threading.enumerate():
+        if thread.name == "telemetry":
+            thread.join()
+    steps = [event["properties"]["step"] for event in tracked if event["event"] == "first_run"]
+    assert "resume_read" in steps and steps.index("resume_read") < len(steps)
+    assert all(event["properties"]["seconds"] >= 0 for event in tracked if event["event"] == "first_run")
+    (closed,) = [event for event in tracked if event["event"] == "app_closed"]
+    assert closed["properties"]["searched"] is True and closed["properties"]["last_step"] == steps[-1]
+
+
 @pytest.mark.parametrize("name", ["cv.txt", "cv.md"])
 def test_a_text_resume_is_read(tmp_path: Path, name: str) -> None:
     path = tmp_path / name
