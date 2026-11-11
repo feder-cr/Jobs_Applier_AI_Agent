@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
+import openai
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from openai import AsyncOpenAI
@@ -47,6 +48,35 @@ REFUSED_BY_FORM = "refused_by_form"
 NEVER_CLICKED = "never_clicked"
 DRY_RUN = "dry_run"
 FORM_NOT_LOADED = "form_not_loaded"
+# Why a job was not sent, in a person's words: for the line after each application and for the list of what was sent. One place,
+# so the two never say it differently. A reason that is not here is an error's name (the AI service's), or a stop the model chose.
+WHY_NOT_SENT = {
+    "captcha": "a captcha stopped it",
+    "login": "the site wants a login",
+    "closed": "the posting is closed",
+    "broken_page": "the page did not work",
+    "missing_info": "a required answer is missing: press e, Your answers",
+    STUCK: "it went in circles",
+    NO_CODE_REASON: "no code arrived by mail",
+    MAILBOX_SIGNED_OUT: "your mailbox is not signed in",
+    NEVER_CLICKED: "the send button did not respond",
+    FORM_NOT_LOADED: "the form did not load",
+    REFUSED_BY_FORM: "the form refused it",
+    DRY_RUN: "it was a trial, nothing is sent",
+    "other": "the form could not be filled",
+}
+
+
+def why_not_sent(reason: str) -> str:
+    """Why a job was not sent, in plain words; empty when no reason was kept (a job tried before reasons were)."""
+    if not reason:
+        return ""
+    if reason in WHY_NOT_SENT:
+        return WHY_NOT_SENT[reason]
+    # The name of the error that stopped it: one of the AI service's, or any other.
+    return "the AI service gave an error" if reason.endswith("Error") and hasattr(openai, reason) else "something went wrong"
+
+
 # What a form ends with when the mailbox it opened sent the browser to a sign-in page: the person signs in, and it is sent again.
 MAIL_NOT_SIGNED_IN = "The mailbox is not signed in."
 # Set in the environment, every step the model takes on a page is written to data/trace.log; a dry run always is.

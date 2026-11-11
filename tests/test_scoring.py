@@ -15,7 +15,7 @@ from openai import AsyncOpenAI
 
 from aihawk.config import DEFAULT_BASE_URL, load_config
 from aihawk.database import Job
-from aihawk.scoring import DESCRIPTION_CHARS, MAX_CHARS, MAX_POSTINGS, fits, question, score
+from aihawk.scoring import DESCRIPTION_CHARS, MAX_CHARS, MAX_POSTINGS, NOT_JUDGED, fits, question, score
 
 KEY = "sk-test-key"
 JOB = Job("g:a:1", "Acme", "Python Engineer", "Rome", "u", "a", "Build Python services.")
@@ -101,7 +101,7 @@ def test_a_failure_that_a_smaller_batch_cannot_cure_is_not_split_and_the_person_
 
     assert run(client_with(refusing), postings(8), why=said.append) == [None] * 8
     assert len(seen) == 1
-    assert len(said) == 1 and said[0].startswith("OrcaRouter rejected the request.")
+    assert len(said) == 1 and said[0] == "The AI service did not accept the request."
 
 
 @pytest.mark.parametrize("answer", [{"unexpected": 1}, {"answers": {"p00_fit": {"noul": "yes"}}}, {"answers": {"p00_fit": {"noul": 1.5}}}])
@@ -161,3 +161,32 @@ def test_the_decision_model_is_pinned_and_settable_in_the_settings(tmp_path: Pat
     assert load_config(tmp_path).decision_model == "typesafe/jev-1.14"
     (tmp_path / "aihawk.yaml").write_text("decision_model: other/model\n", encoding="utf-8")
     assert load_config(tmp_path).decision_model == "other/model"
+
+
+@pytest.mark.parametrize("status", [429, 500, 503, 408])
+def test_a_service_that_does_not_answer_leaves_the_postings_not_judged_and_says_nothing_of_them(status: int) -> None:
+    said: list[str] = []
+    client = AsyncOpenAI(base_url=DEFAULT_BASE_URL, api_key=KEY, max_retries=0, http_client=httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(status, json={"error": "busy"}))))
+    assert run(client, postings(3), why=said.append) == [NOT_JUDGED] * 3
+    assert said == []
+
+
+def test_a_lost_connection_leaves_the_postings_not_judged() -> None:
+    def lost(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("no route", request=request)
+
+    client = AsyncOpenAI(base_url=DEFAULT_BASE_URL, api_key=KEY, max_retries=0, http_client=httpx.AsyncClient(transport=httpx.MockTransport(lost)))
+    assert run(client, [JOB]) == [NOT_JUDGED]
+
+
+def test_only_the_request_that_got_no_answer_is_not_judged() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if "Engineer 0 at" in request.content.decode():
+            return httpx.Response(503, json={"error": "busy"})
+        return httpx.Response(200, json={"answers": {name: {"type": "noul", "noul": 0.5} for name in body["questions"]}})
+
+    client = AsyncOpenAI(base_url=DEFAULT_BASE_URL, api_key=KEY, max_retries=0, http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    jobs = postings(MAX_POSTINGS + 1)
+    values = run(client, jobs)
+    assert values[:MAX_POSTINGS] == [NOT_JUDGED] * MAX_POSTINGS and values[MAX_POSTINGS] == 0.5

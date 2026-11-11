@@ -229,7 +229,6 @@ class Library:
         except OSError as error:
             partial.unlink(missing_ok=True)
             if error.errno == errno.ENOSPC:
-                raise LibraryError(f"The disk is full: AIHawk's jobs need about 2 GB free in {path.parent}. Free some space, then start AIHawk again.") from error
-            code = f" ({error.code})" if isinstance(error, urllib.error.HTTPError) else ""
-            raise LibraryError(f"The jobs cannot be downloaded{code}: check your internet connection, then start AIHawk again. ({error})") from error
+                raise LibraryError("The disk is full. AIHawk needs about 2 GB free for the jobs. Free some space, then start AIHawk again.") from error
+            raise LibraryError("Cannot download the jobs. Check your internet connection, then start AIHawk again.") from error
         partial.replace(path)

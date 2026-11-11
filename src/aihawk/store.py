@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     screenshot TEXT,
     first_seen TEXT NOT NULL,
     updated TEXT NOT NULL,
-    cost REAL
+    cost REAL,
+    reason TEXT
 )
 """
 
@@ -42,6 +43,8 @@ CREATE TABLE IF NOT EXISTS jobs (
 # its own file beside it, and opened only when an answer is read.
 ACCOUNT_PASSWORD = "account_password"
 SECRET_ANSWERS = frozenset({ACCOUNT_PASSWORD})
+# Answers AIHawk keeps for itself: the person is never shown or counted them with their own.
+OWN_ANSWERS = frozenset({ACCOUNT_PASSWORD, "mail_provider"})
 
 ACCOUNTS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS accounts (
@@ -72,7 +75,11 @@ JEV_ONLY = 3
 # 4: a job's id is its address, as the database's since 2026-11-09, and its key is kept beside it: the same posting under
 # another of its links is known by the key, and never comes back as new, to be sent twice.
 URL_IDS = 4
+# 5: a round whose request got no answer used to set its jobs aside for good; those with no score are read again.
+RETRY_SET_ASIDE = 5
 # The jobs the person sees as tried, and what each status says in plain words.
+# The sign each tried job has in the list: sent, sent but not confirmed, not sent.
+SENT_MARKS = {"submitted": "✓", "unconfirmed": "?", "refused": "✗", "blocked": "✗", "failed": "✗"}
 SENT_WORDS = {
     "submitted": "sent and confirmed",
     "unconfirmed": "sent, not confirmed",
@@ -108,6 +115,8 @@ class Sent:
     when: str
     proof: Proof
     cost: float | None = None
+    # Why it was not sent, in one word: see apply.py.
+    reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -169,6 +178,9 @@ class Store:
         if "key" not in columns:
             self._db.execute("ALTER TABLE jobs ADD COLUMN key TEXT")
             self._db.commit()
+        if "reason" not in columns:
+            self._db.execute("ALTER TABLE jobs ADD COLUMN reason TEXT")
+            self._db.commit()
         self._db.execute("CREATE INDEX IF NOT EXISTS jobs_key ON jobs (key)")
         if self._db.execute("PRAGMA user_version").fetchone()[0] < KEY_VERSION:
             self._rekey()
@@ -179,6 +191,10 @@ class Store:
             self._db.commit()
         if self._db.execute("PRAGMA user_version").fetchone()[0] < URL_IDS:
             self._by_address()
+        if self._db.execute("PRAGMA user_version").fetchone()[0] < RETRY_SET_ASIDE:
+            self._db.execute("UPDATE jobs SET status = 'new' WHERE status = 'passed_over' AND score IS NULL")
+            self._db.execute(f"PRAGMA user_version = {RETRY_SET_ASIDE}")
+            self._db.commit()
 
     def _by_address(self) -> None:
         """Each job under its address, its key kept beside it. Two jobs with one address are one row, the one furthest along."""
@@ -254,7 +270,7 @@ class Store:
         """Every job tried, the newest first."""
         marks = ",".join("?" * len(SENT_WORDS))
         rows = self._db.execute(f"SELECT * FROM jobs WHERE status IN ({marks}) ORDER BY COALESCE(sent_at, updated) DESC", tuple(SENT_WORDS)).fetchall()
-        return [Sent(self._job(row), row["status"], row["note"] or "", row["sent_at"] or row["updated"], self._proof(row), row["cost"]) for row in rows]
+        return [Sent(self._job(row), row["status"], row["note"] or "", row["sent_at"] or row["updated"], self._proof(row), row["cost"], row["reason"] or "") for row in rows]
 
     @staticmethod
     def _proof(row: sqlite3.Row) -> Proof:
@@ -268,6 +284,13 @@ class Store:
         """The postings in this status, the best fit by title first."""
         rows = self._db.execute("SELECT * FROM jobs WHERE status = ? ORDER BY lexical DESC, rowid", (status,)).fetchall()
         return [self._stored(row) for row in rows]
+
+    def forget_untried(self) -> None:
+        """Every job the person has not applied to is dropped, so a new search lists its own jobs and no others. A job that
+        was tried stays, with how it went."""
+        marks = ",".join("?" * len(SENT_WORDS))
+        self._db.execute(f"DELETE FROM jobs WHERE status NOT IN ({marks})", tuple(SENT_WORDS))
+        self._db.commit()
 
     def all(self) -> list[Stored]:
         """What the person sees, the best first: the scored by the score and the title's fit together, then the rest by the title's fit."""
@@ -340,8 +363,8 @@ class Store:
         self._db.execute("UPDATE jobs SET description = ?, updated = ? WHERE id = ?", (description, _now(), job_id))
         self._db.commit()
 
-    def set_status(self, job_id: str, status: str, note: str = "") -> None:
-        self._db.execute("UPDATE jobs SET status = ?, note = ?, updated = ? WHERE id = ?", (status, note, _now(), job_id))
+    def set_status(self, job_id: str, status: str, note: str = "", reason: str = "") -> None:
+        self._db.execute("UPDATE jobs SET status = ?, note = ?, reason = ?, updated = ? WHERE id = ?", (status, note, reason, _now(), job_id))
         self._db.commit()
 
     def set_cost(self, job_id: str, cost: float) -> None:

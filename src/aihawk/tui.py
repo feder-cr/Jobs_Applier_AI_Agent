@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import webbrowser
 from pathlib import Path
 from typing import ClassVar
@@ -13,28 +14,58 @@ from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.widgets import DataTable, Footer, Static
 
-from aihawk.apply import MAILBOXES, Outcome, mail_provider
+from aihawk.apply import MAILBOXES, Outcome, mail_provider, why_not_sent
 from aihawk.config import KEY_ENV, KEY_URL, ConfigError
 from aihawk.database import DatabaseError
 from aihawk.library import LibraryError
 from aihawk.llm import explain, refused
-from aihawk.screens import WIDE_ENOUGH, JobDetails, Rows, Said, SendBatch, SentList, Settings, SignIn, TextPrompt
+from aihawk.scoring import NotAnswering
+from aihawk.screens import WIDE_ENOUGH, Confirm, JobDetails, Rows, Said, SendBatch, SentList, Settings, SignIn, StopSending, TextPrompt, clipped
 from aihawk.session import Session
-from aihawk.store import SUBMITTED, Stored
+from aihawk.store import OWN_ANSWERS, SENT_MARKS, SENT_WORDS, SUBMITTED, Stored
 
 SEARCH_SETTINGS = {"places", "exclude", "max_age_days"}
+
+
+def whole_days(answer: str) -> str | None:
+    """What is wrong with the days a person typed, said in the dialog; an empty answer goes back to the default."""
+    return None if not answer or (answer.isdigit() and int(answer) > 0) else "Type a whole number of days, like 30."
+
+
+# What each setting asks, and what makes an answer wrong.
+SETTING_QUESTIONS = {
+    "places": ("Where (cities or countries, separated by commas)", None),
+    "exclude": ("Leave out (words in job titles, separated by commas)", None),
+    "max_age_days": ("Posted within (days)", whole_days),
+}
 # Jobs on a page: all scored, sorted once, and never moved while the person reads them.
 PAGE = 50
 # Scored jobs kept in reserve beyond the pages made, a round of them: the next pages are there when the person turns.
 AHEAD = 200
 RESUME_QUESTION = "Where is your resume?"
-MAIL_QUESTION = "The email you apply with."
-MAIL_HINT = "Job sites send their codes there, and AIHawk reads only those · Enter · Esc for later"
-KEY_QUESTION = "Your OrcaRouter key."
-KEY_HINT = f"Get one at {KEY_URL} · it stays on this computer · Enter saves it"
+RESUME_PLACEHOLDER = "Drag your resume file into this window, or type where it is"
+MAIL_QUESTION = "Some job sites email a code to confirm it is you. Which email do you apply with?"
+MAIL_CODE_QUESTION = "A site sent a code to your email. Which email is it, so AIHawk can read it?"
+MAIL_HINT = "AIHawk opens that inbox in its browser only to read those codes · Enter · Esc later"
+KEY_QUESTION = "Paste your OrcaRouter key"
+KEY_HINT = (
+    "AIHawk uses OrcaRouter, a paid AI service, to read your resume and fill the forms: a few cents per application.\n"
+    f"Get a key at {KEY_URL.removeprefix('https://www.')}\n"
+    "It stays on this computer · Enter saves · Esc later"
+)
 MAIL_LATER = "Mail left for later: e, then Your mail."
 MAIL_NAMES = {"gmail": "Gmail", "outlook": "Outlook"}
-RESUME_HINT = "PDF, .docx or text · Enter reads it · Esc for later"
+RESUME_HINT = "PDF, .docx or text · Enter reads it · Esc later"
+MAIL_UNREADABLE = "Only Gmail and Outlook can be read for now; the rest works without."
+SENDING = "Applications are being sent: wait for them to finish."
+NO_KEY = "No key yet. Press e, then OrcaRouter key."
+NO_RESUME = "No resume yet. Press r and give the file."
+NO_JOBS = "No jobs found for these places and days. Press e to change them."
+# How long scoring waits after each request that got no answer, in seconds, before it asks again. After the last wait one more
+# failure stops it: the person asks again with the right arrow.
+RETRY_PAUSES = (15, 30, 60, 120)
+# The colour of a tried job's sign in the list: sent is green, sent but not confirmed is yellow, not sent is red.
+MARK_COLOURS = {"submitted": "green", "unconfirmed": "yellow", "refused": "red", "blocked": "red", "failed": "red"}
 
 
 class Pages(Rows):
@@ -56,7 +87,7 @@ class AIHawk(App[None]):
     #heading { width: 1fr; padding: 0 1; text-style: bold; }
     #count { width: auto; padding: 0 1; }
     #jobs { height: 1fr; }
-    #log { height: 3; border-top: solid $primary; padding: 0 1; scrollbar-size-vertical: 0; }
+    #log { height: 4; border-top: solid $primary; padding: 0 1; scrollbar-size-vertical: 0; }
     ModalScreen { align: center middle; background: $background 60%; }
     #dialog { width: 80%; max-width: 100; height: auto; max-height: 85%; padding: 1 2; background: $surface; border: thick $primary; }
     #wide { width: 95%; height: auto; max-height: 85%; padding: 1 2; background: $surface; border: thick $primary; }
@@ -67,6 +98,7 @@ class AIHawk(App[None]):
     #reader #question { margin-bottom: 0; }
     #text { height: 1fr; margin: 1 0; }
     .hint { color: $text-muted; }
+    #problem { color: $error; }
     """
     BINDINGS: ClassVar = [
         # Space and Enter both select: the table's own Enter comes as RowSelected, below. i reads the job.
@@ -76,6 +108,8 @@ class AIHawk(App[None]):
         Binding("s", "sent", "Sent"),
         Binding("o", "open_link", show=False),
         Binding("e", "settings", "Settings"),
+        # r is in the footer only while there is no resume: it is the next step then, and a key that always shows is noise.
+        Binding("r", "give_resume", "Resume"),
         Binding("r", "new_resume", show=False),
         Binding("q", "quit", "Quit"),
         # Textual's own Ctrl+C only says "press ctrl+q", and an input under it copies: at any prompt Ctrl+C now leaves.
@@ -100,8 +134,12 @@ class AIHawk(App[None]):
         # The chunks this computer had when it was last short of the search's days, plus one.
         self.ready_at = 0
         self.signing_in = False
+        # Why the key is being asked for again, for the question to say.
+        self.key_problem = ""
         self.columns_for = 0
         self.with_location = True
+        # The room each of Company, Role and Location has, for the ellipsis where a word is cut.
+        self.word_widths: list[int] = [20, 40, 20]
 
     def compose(self) -> ComposeResult:
         # What is being looked for, and on the right, out of the way, how many jobs the list holds: nothing else about
@@ -137,9 +175,19 @@ class AIHawk(App[None]):
         # A column's padding is 2, and the scrollbar takes 2.
         left = width - 2 - 2 * (5 if self.with_location else 4) - 2 - 5
         words = [("Company", left // 4), ("Role", left // 2), ("Location", left // 4)] if self.with_location else [("Company", left // 3), ("Role", left - left // 3)]
+        self.word_widths = [size for _, size in words]
         for label, size in (("", 2), ("Score", 5), *words):
             table.add_column(label, key=label or "mark", width=size)
         self.refresh_jobs(current)
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        # While there is no resume the footer names r, the next step, in place of the keys that act on a list there is not:
+        # the other r, the one that always works, is not listed. Both keep working.
+        if action == "give_resume":
+            return self.session.needs_resume()
+        if action in ("toggle", "details", "apply"):
+            return not self.session.needs_resume()
+        return True
 
     def on_unmount(self) -> None:
         # Whether the person searched before closing, and where the start was: who leaves, and at which step.
@@ -148,34 +196,50 @@ class AIHawk(App[None]):
 
     # What the person sees.
 
-    def say(self, line: str) -> None:
-        self.query_one(Said).say(line)
+    def say(self, line: str, again: bool = False, replace: bool = False) -> None:
+        """A line in the log. With `again`, it takes the place of the line before it when that was one too: a state that changes
+        is one line, not a list. With `replace`, it ends such a state: it takes its place and stays."""
+        self.query_one(Said).say(line, again, replace)
 
-    def failed(self, error: Exception) -> None:
-        """Says what went wrong, in plain words. A key OrcaRouter refused is forgotten when it came from the file, and asked for again."""
+    def failed(self, error: Exception, then: str = "") -> None:
+        """Says what went wrong, in plain words, and `then`, the next step. A key the AI service refused is forgotten when it
+        came from the file, and asked for again."""
         if not refused(error):
-            self.say(explain(error))
+            self.say(f"{explain(error)}{then}")
             return
-        self.say(self.session.refuse_key())
+        line = self.session.refuse_key()
+        self.say(line)
         if self.session.needs_key():
+            # Said in the key question that comes next, which covers the log.
+            self.key_problem = line
             self.start()
 
     def show_heading(self) -> None:
         # A flow that ends while the app quits finds its screen gone: there is no heading left to write to.
         if not self.is_running:
             return
+        self.refresh_bindings()
         config = self.session.config
         wanted = config.filters.titles() or "no resume yet"
-        place = ", ".join(config.filters.locations[:3])
-        self.query_one("#heading", Static).update(" · ".join(part for part in ("AIHawk", wanted, place) if part))
+        self.query_one("#heading", Static).update(" · ".join(part for part in ("AIHawk", wanted, self.places()) if part))
+
+    def places(self) -> str:
+        """Where the search looks, for the heading: a city once under its variants (Milan, Milano) and the country after it."""
+        filters = self.session.config.filters
+        shown: list[str] = []
+        for place in dict.fromkeys(filters.locations):
+            if not any(known.lower().startswith(place.lower()) or place.lower().startswith(known.lower()) for known in shown):
+                shown.append(place)
+        return ", ".join(shown[:3])
 
     def row(self, item: Stored) -> tuple[Text | str, ...]:
-        # One sign, or none: selected, or sent. How a send went is in the applications, on s.
-        mark = "●" if item.job.id in self.selected else "✓" if item.status in SUBMITTED else ""
+        # One sign, or none: selected, or how it went when tried. Why is in the applications, on s.
+        selected = item.job.id in self.selected
+        mark = Text("●" if selected else SENT_MARKS.get(item.status, ""), style="bold " + ("green" if selected else MARK_COLOURS.get(item.status, "green")))
         score = f"{item.score:.1f}" if item.score is not None else "-"
         # Text, because a string cell is read as markup, and a posting's words are a source's: "[/x] Engineer" would stop the screen.
-        place = (Text(item.job.location),) if self.with_location else ()
-        return (Text(mark, style="bold green"), score, Text(item.job.company), Text(item.job.title), *place)
+        words = (item.job.company, item.job.title, *([item.job.location] if self.with_location else []))
+        return (mark, score, *(clipped(word, width) for word, width in zip(words, self.word_widths, strict=False)))
 
     def refresh_jobs(self, current: str | None = None) -> None:
         """The page shown, as it was made: sorted once, by Jev's score, when all of it was scored. A job tried since
@@ -188,13 +252,18 @@ class AIHawk(App[None]):
         table.clear()
         for item in page:
             table.add_row(*self.row(item), key=item.job.id)
-        # The whole database's jobs, not the search's: what AIHawk looks through for the person.
-        total = self.session.database_jobs
-        found = f"{total:,} job" + ("" if total == 1 else "s") if total else ""
-        self.query_one("#count", Static).update(" · ".join(part for part in (f"Page {self.page + 1}" if self.pages else "", found) if part))
+        self.show_count()
         ids = [item.job.id for item in page]
         if current in ids:
             table.move_cursor(row=ids.index(current))
+
+    def show_count(self) -> None:
+        """On the right of the heading: the page, how many jobs AIHawk looks through, and how many are selected."""
+        # The whole database's jobs, not the search's: what AIHawk looks through for the person.
+        total = self.session.database_jobs
+        found = f"{total:,} job" + ("" if total == 1 else "s") if total else ""
+        chosen = f"{len(self.selected)} selected" if self.selected else ""
+        self.query_one("#count", Static).update(" · ".join(part for part in (f"Page {self.page + 1}" if self.pages else "", found, chosen) if part))
 
     def current_id(self) -> str | None:
         table = self.query_one(DataTable)
@@ -237,12 +306,16 @@ class AIHawk(App[None]):
             await self.score()
         except (ConfigError, DatabaseError) as error:
             self.start_failed(error)
-            self.say(str(error))
+            self.say(f"{error}{self.resume_next()}")
         except Exception as error:  # noqa: BLE001  The screen stays up and says what went wrong, instead of a traceback over it.
             self.start_failed(error)
-            self.failed(error)
+            self.failed(error, self.resume_next())
         finally:
             self.show_heading()
+
+    def resume_next(self) -> str:
+        """What to press when a start stopped for want of a resume: the file is given again with r."""
+        return " Press r and give the file again." if self.session.needs_resume() else ""
 
     def start_failed(self, error: Exception) -> None:
         """A start that ended in an error, told once: a resume that could not be read said so already, with its kind."""
@@ -256,7 +329,7 @@ class AIHawk(App[None]):
         key = await self.key_prompt()
         if not key:
             telemetry.step("key_missing")
-            self.say("Without a key AIHawk cannot read. Press e when you have one.")
+            self.say(NO_KEY, again=True)
             return False
         self.session.save_key(key)
         telemetry.step("key_saved")
@@ -272,14 +345,14 @@ class AIHawk(App[None]):
             path = await self.resume_prompt()
             if path is None:
                 telemetry.step("resume_missing")
-                self.say("Press e when you have a resume.")
+                self.say(NO_RESUME, again=True)
                 return False
             if not path.is_file():
                 telemetry.step("resume_not_found")
-                self.say(f"No file at {path}.")
+                self.say("No file at that path.")
                 path = None
         self.resume = None
-        self.say(f"Reading {path.name}.")
+        self.say(f"Reading {path.name}…", again=True)
         try:
             await self.session.load_resume(path)
         except Exception as error:
@@ -287,30 +360,69 @@ class AIHawk(App[None]):
             self.reported = error
             raise
         telemetry.step("resume_read", kind=path.suffix.lower())
+        # A new resume is a new search: the jobs of the old one that nobody applied to give way to the new one's.
+        self.forget_untried()
         self.show_heading()
         return True
 
+    def forget_untried(self) -> None:
+        """The jobs not applied to are dropped, so the list is the new search's alone; what was sent stays."""
+        self.session.store.forget_untried()
+        self.selected &= {item.job.id for item in self.session.store.all()}
+
     async def key_prompt(self) -> str | None:
-        return await self.push_screen_wait(TextPrompt(KEY_QUESTION, placeholder="sk-orca-...", password=True, hint=KEY_HINT))
+        problem, self.key_problem = self.key_problem, ""
+        return await self.push_screen_wait(TextPrompt(KEY_QUESTION, placeholder="sk-orca-...", password=True, hint=KEY_HINT, problem=problem))
 
     async def resume_prompt(self) -> Path | None:
         """The file the person names, as a path; None when they name none."""
-        answer = await self.push_screen_wait(TextPrompt(RESUME_QUESTION, placeholder=str(Path.home() / "resume.pdf"), hint=RESUME_HINT))
-        return Path(answer.strip("\"' ")).expanduser() if answer else None
+        def missing(answer: str) -> str | None:
+            # In the dialog, which stays open, so that the person sees it: the log is behind it.
+            if answer and not self.as_path(answer).is_file():
+                self.session.telemetry.step("resume_not_found")
+                return "No file at that path."
+            return None
+
+        answer = await self.push_screen_wait(TextPrompt(RESUME_QUESTION, placeholder=RESUME_PLACEHOLDER, hint=RESUME_HINT, check=missing))
+        return self.as_path(answer) if answer else None
+
+    @staticmethod
+    def as_path(answer: str) -> Path:
+        """The file an answer names: a file dragged into the window comes with quotes round its path."""
+        return Path(answer.strip("\"' ")).expanduser()
 
     async def score(self) -> None:
         """Pages, PAGE jobs each, up to the one after the page shown, and a round of scored jobs no page holds yet in
         reserve: Jev reads the next round while the person reads, so a page they turn to is there. A round takes Jev a few
-        seconds; until the first jobs are on this computer, the line below counts the chunks coming."""
+        seconds; until the first jobs are on this computer, the line below counts the chunks coming. A round the AI service
+        does not answer is asked again after a pause that grows, and after the last one the person is told how to ask."""
         session = self.session
         store = session.store
+        failures = 0
         while True:
             self.make_pages()
             if not store.with_status("new") or (len(self.pages) >= self.page + 2 and len(self.spare()) >= AHEAD):
                 break
             self.show_progress()
-            await session.read(self.say)
+            try:
+                await session.read(self.say)
+            except NotAnswering:
+                if failures == len(RETRY_PAUSES):
+                    self.say("Still no answer. Check your connection, then press → to try again.", again=True)
+                    return
+                self.say(f"The AI service is not answering. Trying again in {RETRY_PAUSES[failures]} seconds…", again=True)
+                await asyncio.sleep(RETRY_PAUSES[failures])
+                failures += 1
+            else:
+                failures = 0
         self.make_pages()
+        self.check_empty()
+
+    def check_empty(self) -> None:
+        """Says so when the search is over and found no job: not while the jobs are still coming, or some wait to be read."""
+        if self.pages or self.session.store.with_status("new") or not self.session.library.complete():
+            return
+        self.say(NO_JOBS, again=True)
 
     @work(exclusive=True, group="library")
     async def bring_jobs(self) -> None:
@@ -358,6 +470,7 @@ class AIHawk(App[None]):
                 self.more_found = False
                 await self.session.find()
                 self.keep_ahead()
+                self.check_empty()
         except DatabaseError as error:
             self.say(str(error))
 
@@ -391,9 +504,9 @@ class AIHawk(App[None]):
             return
         said = self.query_one(Said)
         if not self.session.library.ready():
-            said.say(f"Getting the jobs ready… {int(self.session.library.readiness() * 100)}%", again=True)
+            said.say(f"Getting the jobs: only the first time, a few minutes. {int(self.session.library.readiness() * 100)}%", again=True)
             return
-        said.say(f"Preparing page {(self.wanted if self.wanted is not None else self.page) + 1}…", again=True)
+        said.say("Reading the jobs against your resume…", again=True)
 
     def turn(self, step: int) -> None:
         """To the page before or after, on its first row. A page not ready yet opens once it is; the line below says how
@@ -401,6 +514,9 @@ class AIHawk(App[None]):
         target = self.page + step
         if target < 0:
             return
+        if not self.pages:
+            # No page yet: the arrow asks for the first, which is what the person who sees an empty list is trying.
+            target = 0
         if target < len(self.pages):
             self.page = target
             self.wanted = None
@@ -412,7 +528,7 @@ class AIHawk(App[None]):
         nothing_left = not self.session.store.with_status("new") and not self.spare()
         # Unless more are on their way: the page opens when the chunks still coming bring its jobs.
         if nothing_left and self.session.library.complete():
-            self.say("No more jobs for this search.")
+            self.say("No more jobs for this search." if self.pages else NO_JOBS, again=not self.pages)
             return
         self.wanted = target
         self.show_progress()
@@ -430,6 +546,7 @@ class AIHawk(App[None]):
             self.selected.add(item.job.id)
         table = self.query_one(DataTable)
         table.update_cell(item.job.id, "mark", self.row(item)[0])
+        self.show_count()
         # Down a row, and no further: on the page's last row, selecting is not turning the page.
         table.move_cursor(row=min(table.cursor_row + 1, table.row_count - 1))
 
@@ -473,11 +590,14 @@ class AIHawk(App[None]):
             self.show_heading()
 
     def action_sent(self) -> None:
+        if self.applying():
+            self.say(SENDING)
+            return
         sent = self.session.store.sent()
         if sent:
             self.push_screen(SentList(sent))
         else:
-            self.say("Nothing sent yet.")
+            self.say("No applications yet. Select jobs with space, then press a.")
 
     def setting_rows(self) -> list[tuple[str, str, str]]:
         # What to look for is not here: the titles and their graph come from the resume. A new resume changes them.
@@ -486,23 +606,25 @@ class AIHawk(App[None]):
             ("places", "Where", ", ".join(config.filters.locations)),
             ("exclude", "Leave out", ", ".join(config.filters.exclude)),
             ("max_age_days", "Posted within (days)", str(config.max_age_days)),
-            ("resume", "Resume", "loaded" if config.cv.is_file() else "none yet"),
-            ("answers", "Your answers", f"{len(self.session.store.answers())}, given with the CV to every form"),
+            ("resume", "Resume", (self.session.resume_name() or "loaded") if config.cv.is_file() else "none yet"),
+            ("answers", "Your answers", str(len(self.own_answers()))),
             ("mail", "Your mail", self.mail_words()),
-            ("key", "OrcaRouter key", f"from {KEY_ENV}" if config.key_from_environment() else "saved" if config.api_key() else "none yet"),
+            ("key", "OrcaRouter key", "saved" if config.api_key() else "none yet"),
             # The models are not here: a person does not choose one, and aihawk.yaml still changes them.
             ("folder", "Your files", str(config.workspace)),
         ]
 
+    def own_answers(self) -> dict[str, str]:
+        """The answers that are the person's: AIHawk's own, a password it made and where the mail is, are not for them to read or change."""
+        return {name: value for name, value in self.session.store.answers().items() if name not in OWN_ANSWERS}
+
     def answer_rows(self) -> list[tuple[str, str, str]]:
         """What the forms are told about the person: the answers in the store, and a row to add one."""
-        rows = [(f"answer:{name}", name.replace("_", " "), value) for name, value in self.session.store.answers().items()]
+        rows = [(f"answer:{name}", name.replace("_", " "), value) for name, value in self.own_answers().items()]
         return [*rows, ("answer:", "Add an answer", "name: value")]
 
     def action_settings(self) -> None:
-        if self.applying() or self.signing_in:
-            self.say("The browser is busy.")
-        else:
+        if not self.busy():
             self.settings()
 
     @work(group="settings")
@@ -521,8 +643,9 @@ class AIHawk(App[None]):
             elif choice == "key":
                 await self.change_key()
             else:
-                label, now = next((label, now) for key, label, now in self.setting_rows() if key == choice)
-                answer = await self.push_screen_wait(TextPrompt(label, value=now, hint="Enter saves it · Esc leaves it"))
+                now = next(now for key, _, now in self.setting_rows() if key == choice)
+                question, check = SETTING_QUESTIONS[choice]
+                answer = await self.push_screen_wait(TextPrompt(question, value=now, hint="Enter saves · Esc goes back", check=check))
                 if answer is not None:
                     try:
                         self.session.change_setting(choice, answer)
@@ -532,6 +655,7 @@ class AIHawk(App[None]):
         self.show_heading()
         if search_again:
             self.say("Searching again.")
+            self.forget_untried()
             self.start()
 
     def mail_words(self) -> str:
@@ -540,45 +664,54 @@ class AIHawk(App[None]):
             return f"{MAIL_NAMES[provider]}, {email}"
         return "not set up"
 
-    async def set_up_mail(self) -> bool:
+    async def set_up_mail(self, question: str = MAIL_QUESTION) -> bool:
         """The mailbox the job sites write to: its address, then the browser open on it for the person to sign in once, and the
         inbox checked. Esc at any point leaves it for later. Whether the inbox was reached."""
         session = self.session
         email, provider = session.mail()
-        answer = await self.push_screen_wait(TextPrompt(MAIL_QUESTION, value=email, placeholder="you@gmail.com", hint=MAIL_HINT))
+        answer = await self.push_screen_wait(TextPrompt(question, value=email, placeholder="you@gmail.com", hint=MAIL_HINT))
         if not answer or "@" not in answer:
             session.set_mail(email, "later")
             self.say(MAIL_LATER)
             return False
         email = answer.strip()
         provider = mail_provider(email) or (provider if provider in MAILBOXES else "")
-        while provider not in MAILBOXES:
-            choice = await self.push_screen_wait(TextPrompt(f"Where is {email}?", placeholder="gmail", hint="gmail or outlook · Enter · Esc for later"))
+        if provider not in MAILBOXES:
+            # A company's own address may still be a Gmail or an Outlook inbox: asked once, and left for later when it is not.
+            choice = await self.push_screen_wait(TextPrompt(f"Where is {email}?", placeholder="gmail", hint="gmail or outlook · Enter · Esc later"))
             if choice is None:
                 session.set_mail(email, "later")
                 self.say(MAIL_LATER)
                 return False
             provider = choice.strip().lower()
+            if provider not in MAILBOXES:
+                session.set_mail(email, "later")
+                self.say(MAIL_UNREADABLE)
+                return False
         session.set_mail(email, provider)
         name = MAIL_NAMES[provider]
         while True:
             self.signing_in = True
+            done = True
             try:
 
                 async def wait() -> None:
-                    await self.push_screen_wait(SignIn(f"{name} is open in the browser. Sign in with {email}.", hint="Enter here when you see your inbox"))
+                    nonlocal done
+                    done = await self.push_screen_wait(SignIn(f"The browser opened {name}. Sign in as {email}, then come back to this window and press Enter."))
 
                 reached = await session.sign_in_mail(provider, wait)
-            except Exception as error:  # noqa: BLE001  Said on the screen, as for the other browser openings.
-                self.say(f"The browser did not open: {error}")
+            except Exception:  # noqa: BLE001  Said on the screen, as for the other browser openings.
+                self.say("The browser did not open. Close other AIHawk windows and try again.")
                 return False
             finally:
                 self.signing_in = False
+            if not done:
+                self.say(MAIL_LATER)
+                return False
             if reached:
                 self.say(f"Signed in to {name}.")
                 return True
-            again = await self.push_screen_wait(TextPrompt(f"{name} still shows its sign-in page.", hint="Enter opens it again · Esc for later"))
-            if again is None:
+            if not await self.push_screen_wait(Confirm(f"{name} still shows its sign-in page.", "Enter opens it again · Esc later")):
                 self.say(MAIL_LATER)
                 return False
 
@@ -588,11 +721,11 @@ class AIHawk(App[None]):
         while (choice := await self.push_screen_wait(Settings(self.answer_rows(), title="Your answers"))) is not None:
             name = choice.removeprefix("answer:")
             if name:
-                value = await self.push_screen_wait(TextPrompt(name.replace("_", " "), value=store.answers().get(name, ""), hint="Enter saves it · empty removes it · Esc leaves it"))
+                value = await self.push_screen_wait(TextPrompt(name.replace("_", " "), value=store.answers().get(name, ""), hint="Enter saves · empty removes it · Esc goes back"))
                 if value is not None:
                     store.set_answer(name, value)
             else:
-                line = await self.push_screen_wait(TextPrompt("A new answer, as name: value", placeholder="notice period: one month", hint="Enter saves it · Esc goes back"))
+                line = await self.push_screen_wait(TextPrompt("A new answer, as name: value", placeholder="notice period: one month", hint="Enter saves · Esc goes back"))
                 if line and ":" in line:
                     new_name, new_value = line.split(":", 1)
                     store.set_answer(new_name.strip().lower().replace(" ", "_"), new_value)
@@ -617,12 +750,28 @@ class AIHawk(App[None]):
         if path:
             self.resume = path
             self.start()
+        else:
+            self.say("No resume given." if self.session.needs_resume() else "Your resume was not changed.")
 
     def action_apply(self) -> None:
-        if self.signing_in or self.applying():
-            self.say("The browser is busy.")
+        if self.busy():
             return
         self.apply_selected()
+
+    def busy(self) -> bool:
+        """Whether the browser is held, which it says: applications being sent, or a sign-in the person is in the middle of."""
+        if self.applying():
+            self.say(SENDING)
+        elif self.signing_in:
+            self.say("Finish signing in first: the browser is open for it.")
+        return self.applying() or self.signing_in
+
+    def action_quit(self) -> None:  # type: ignore[override]
+        """Leaves; but not while applications are being sent without asking once, since leaving stops them."""
+        if self.applying() and not isinstance(self.screen, StopSending):
+            self.push_screen(StopSending(), lambda quit: quit and self.exit())
+        else:
+            self.exit()
 
     def applying(self) -> bool:
         """Whether an application holds the browser: one running, or one just started and not yet running."""
@@ -645,28 +794,56 @@ class AIHawk(App[None]):
         results = await self.send(ready)
         self.selected -= {item.job.id for item in chosen}
         self.refresh_jobs()
+        # How each ended, the last try of each: a job sent again after the mail was signed in counts once.
+        ended = {item.job.id: outcome for item, outcome in results}
         unread = [item for item, outcome in results if outcome.needs_mail]
         if unread:
-            await self.mail_then_retry(unread)
+            ended.update({item.job.id: outcome for item, outcome in await self.mail_then_retry(unread)})
+        if ended:
+            self.say(self.summary(list(ended.values())))
         # The applications used some of what lay ahead: fill it again, as a cursor move would.
         self.keep_ahead()
+
+    @staticmethod
+    def summary(outcomes: list[Outcome]) -> str:
+        """One line for the batch: how many were sent, how many sent but not confirmed, how many not sent."""
+        sent = sum(outcome.status == "submitted" for outcome in outcomes)
+        unsure = sum(outcome.status == "unconfirmed" for outcome in outcomes)
+        counts = ((sent, "sent"), (unsure, "sent but not confirmed"), (len(outcomes) - sent - unsure, "not sent"))
+        parts = [f"{count} {words}" for count, words in counts if count]
+        return f"{', '.join(parts)}. Press s to see {'why' if len(parts) > 1 or not sent else 'them'}."
+
+    def started(self, number: int, total: int, item: Stored) -> None:
+        """The line while a batch is sent: which one it is on, and that the person can watch the browser. It changes in place."""
+        self.say(f"Sending {number} of {total}: {item.job.company}. A few minutes each; you can watch the browser.", again=True)
+
+    def ended(self, item: Stored, outcome: Outcome) -> None:
+        """What came of one application, in a line, and the list's sign for it."""
+        self.refresh_jobs()
+        company = clipped(item.job.company, 40).plain
+        if outcome.status in SUBMITTED:
+            evidence = " ".join(outcome.proof.evidence.split())
+            tail = f" {evidence[:100]}{'…' if len(evidence) > 100 else ''}" if evidence else ""
+            self.say(f"{company}: {SENT_WORDS[outcome.status]}.{tail}", replace=True)
+        else:
+            self.say(f"{company}: not sent, {why_not_sent(outcome.reason) or 'something went wrong'}.", replace=True)
 
     async def send(self, items: list[Stored]) -> list[tuple[Stored, Outcome]]:
         """The applications, each with what came of it; a failure is said on the screen, and the batch stops where it failed."""
         try:
-            return await self.session.send(items, self.say, self.refresh_jobs)
+            return await self.session.send(items, self.say, self.started, self.ended)
         except Exception as error:  # noqa: BLE001  Said on the screen, as in start.
             self.failed(error)
             return []
         finally:
             self.refresh_jobs()
 
-    async def mail_then_retry(self, items: list[Stored]) -> None:
+    async def mail_then_retry(self, items: list[Stored]) -> list[tuple[Stored, Outcome]]:
         """A site sent a code to the mail and the mailbox was not signed in: the sign-in now, then those applications again."""
-        names = ", ".join(item.job.company for item in items)
-        self.say(f"{names}: a code was sent to your mail, and the mailbox is not signed in.")
-        if await self.set_up_mail():
-            await self.send(items)
+        self.say("A site sent you a code by email, and AIHawk cannot read your mailbox yet.")
+        if await self.set_up_mail(MAIL_CODE_QUESTION):
+            return await self.send(items)
+        return []
 
     def can_send(self, item: Stored) -> bool:
         """Whether the job goes in the batch: all of them, but one already sent."""
