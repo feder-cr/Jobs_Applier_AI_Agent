@@ -12,7 +12,7 @@
 - Added [docs/sites.md](docs/sites.md): each site's status from real forms and what stops it; the README links to it.
 - Added [docs/data-sources.md](docs/data-sources.md), each source with its licence and how to ask for its removal, and [docs/configuration.md](docs/configuration.md).
 - A model error that a smaller batch cannot cure stops at once and says why, instead of ranking by title almost silently.
-- The job database is shown with its real date.
+- The screen shows how many jobs the whole database holds.
 - After a send, the page is read once it has changed and stopped changing, up to 30 seconds, and the verdict sees its address: a slow confirmation page is no longer read as the old form.
 - A posting whose title or company looks like screen markup, such as `[/x]`, no longer stops the screen.
 - A database of your own, named by `database` in `aihawk.yaml`, can no longer make AIHawk read a file on your computer: a posting whose address is not `http` or `https` is left out of a search. The published database already left those out.

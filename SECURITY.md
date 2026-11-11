@@ -39,5 +39,5 @@ AIHawk reads job pages written by strangers, fills their forms, and sends applic
 - **It goes out in your name, unread.** Where your resume says nothing, the model writes "Please see my attached CV", picks the closest option or a plausible number, and ticks the boxes the form requires, the right to work included. You answer for all of it, and some sites do not allow this.
 - **Nothing checks the model in the browser.** It could send early or half filled: [SECURITY.md](SECURITY.md).
 - **Your data.** Your CV and the pages go to OrcaRouter and its providers. The rest stays in `~/.aihawk`.
-- **Downloads.** About 740 MB of job index and 268 MB of browser. Windows and Linux.
+- **Downloads.** About 0.7 GB of jobs at the first start (the last 15 days; the whole database, 60 days, is about 2 GB) and a browser of 268 MB on Windows or 304 MB on Linux.
 - **The job data is not ours.** Some sources state no licence, and one asks not to be republished: [every source](docs/data-sources.md).

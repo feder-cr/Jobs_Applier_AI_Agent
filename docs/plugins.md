@@ -64,7 +64,7 @@ Give the cost when you know it: "seen on a real form, 40 steps lost" tells the m
 
 ## Menus and dropdowns
 
-`menus.md` reaches the model on every form. It names the five kinds of list, the test that tells them apart, how to check that a choice was taken, and the two ways past a click that does not land. A site's plugin adds only what is that site's own: an id pattern such as Paylocity's `#<id>__listbox__option__N`, or a list that hides its rows in a shadow root, as SmartRecruiters does.
+`menus.md` reaches the model on every form. It names the five kinds of list, the test that tells them apart, how to check that a choice was taken, and the two ways past a click that does not land. A site's plugin adds only what is that site's own: an id pattern such as Paylocity's options under `#<id>__listbox`, or a list that hides its rows in a shadow root, as SmartRecruiters does.
 
 ## What belongs in a plugin
 
@@ -105,7 +105,7 @@ Some forms show a captcha when sending, from an hCaptcha widget with no size tha
 
 The submit control is `#btn-submit`, "Submit application".
 
-After sending: the "Success!" shown after the CV upload is the upload, not the send, so read the page after submitting. After a send the address moves to one ending in `/thanks` and says "Application submitted!". It can take more than a few seconds, so read the page once more before you conclude anything from a page that still shows the form. Lever usually emails a confirmation with the candidate's name, the company and the posting title. If the form is still on the page, the application was not received.
+After sending: the "Success!" shown after the CV upload is the upload, not the send, so read the page after submitting. After a send the address moves to one ending in `/thanks` and says "Application submitted!". It can take more than a few seconds to appear. If the form is still on the page, the application was not received.
 ```
 
 ## Try a plugin without touching the repository
