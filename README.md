@@ -54,6 +54,8 @@ curl -LsSf https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main
 
 You need a key: [get one from OrcaRouter](https://www.orcarouter.ai/ref/ref_accd17afb78fc95ac4d7).
 
+The first start downloads about 250 MB and takes a minute or two; after that it opens in seconds, also without a connection. Nothing else needs installing first (on Linux, `curl`). The first application brings the browser, about 430 MB more, and opens it in a window: on Linux that needs a desktop.
+
 ## The count
 
 AIHawk tells us how it is used, so we know what to fix. It sends these events to [PostHog](https://posthog.com), with a random id made on your computer the first time, so each computer counts once:
