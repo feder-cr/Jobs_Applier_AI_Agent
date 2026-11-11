@@ -272,12 +272,12 @@ def test_space_space_a_then_enter_sends_each_selected_job_once_and_asks_no_quest
     assert Path(calls[0]["cv_file"]).is_file()
 
 
-def test_every_application_sent_is_counted_once_by_how_it_ended_and_a_dry_run_is_not(
-    home: Path, resume: Path, restored_apply: Any, counted: list[str], monkeypatch: pytest.MonkeyPatch
+def test_every_application_is_sent_to_posthog_with_how_it_went_and_nothing_about_the_person_and_a_dry_run_is_not(
+    home: Path, resume: Path, restored_apply: Any, tracked: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import threading
 
-    from aihawk.counter import COUNTER
+    from aihawk import telemetry
 
     async def send(keys: list[str], outcomes: list[Outcome]) -> None:
         app = scripted_app(home, resume)
@@ -289,16 +289,26 @@ def test_every_application_sent_is_counted_once_by_how_it_ended_and_a_dry_run_is
             await pilot.press("enter")
             await wait_for_apply(pilot, app)
         for thread in threading.enumerate():
-            if thread.name == "usage-counter":
+            if thread.name == "telemetry":
                 thread.join()
 
-    asyncio.run(send(["space", "space"], [Outcome("submitted", "sent"), Outcome("refused", "phone is required")]))
-    assert counted == [COUNTER.format(outcome="submitted"), COUNTER.format(outcome="refused")]
-    assert counted[0] == "https://github.com/feder-cr/Jobs_Applier_AI_Agent/releases/download/usage-counter/submitted.txt"
-    # A dry run fills the form and sends nothing: nothing is counted.
+    asyncio.run(send(["space", "space"], [Outcome("submitted", "sent", steps=12), Outcome("blocked", "a puzzle", reason="captcha", steps=4)]))
+    applications = [event for event in tracked if event["event"] == "application"]
+    assert [(event["properties"]["outcome"], event["properties"]["reason"], event["properties"]["steps"]) for event in applications] == [
+        ("submitted", "", 12), ("blocked", "captcha", 4)]
+    sent = applications[0]
+    assert sent["api_key"] == telemetry.PROJECT_KEY and sent["properties"]["site"] == "lever" and sent["properties"]["plugin"] is True
+    assert sent["properties"]["gateway"] == "api.orcarouter.ai" and sent["properties"]["forms_model"]
+    assert {"app_started", "search", "jobs_scored"} <= {event["event"] for event in tracked}
+    # One id for this computer, made at random and kept: nothing in any event is the person's or the job's.
+    assert len({event["distinct_id"] for event in tracked}) == 1
+    text = json.dumps(tracked)
+    assert not any(word in text for word in ("Ada", "ada@example.com", "Bestco", "Lowly", "jobs.lever.co/beta"))
+    # A dry run fills the form and sends nothing: nothing is sent to PostHog either.
     monkeypatch.setenv("AIHAWK_DRY_RUN", "1")
+    before = len(tracked)
     asyncio.run(send(["down", "down", "space"], [Outcome("blocked", "Dry run: nothing sent.")]))
-    assert len(counted) == 2
+    assert len(tracked) == before
 
 
 def test_escape_on_the_batch_sends_none_and_the_selection_stays(home: Path, resume: Path, restored_apply: Any) -> None:

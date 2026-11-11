@@ -622,7 +622,7 @@ def test_the_third_arrival_at_the_mailbox_ends_the_form_blocked(tmp_path: Path) 
         ready(),
     )
     report = asyncio.run(fill_form(browser, [], model, "m", "the brief"))  # type: ignore[arg-type]
-    assert report == {"status": "blocked", "summary": apply_module.NO_CODE, "submit_selector": ""}
+    assert report == {"status": "blocked", "blocked_by": "no_code", "summary": apply_module.NO_CODE, "submit_selector": "", "steps": 5}
     assert mailbox_pages(browser) == 2
 
 

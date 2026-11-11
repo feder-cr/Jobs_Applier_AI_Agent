@@ -22,14 +22,14 @@ def test_the_snapshot_is_a_scheduled_workflow_with_no_personal_secret() -> None:
     assert "schedule:" in text and "cron:" in text
     assert "scripts/usage_counters.py" in text
     assert "ref: badges" in text and "HEAD:badges" in text
-    assert "secrets." not in text, "it must run on the built-in token alone"
+    assert [line.strip() for line in text.splitlines() if "secrets." in line] == ["POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}"], "no secret but PostHog's read key"
 
 
-def test_the_app_and_the_snapshot_count_the_same_files() -> None:
-    from aihawk import counter
+def test_the_app_reports_the_outcomes_the_snapshot_counts() -> None:
+    from aihawk.apply import Outcome
 
-    assert counter.OUTCOMES == counters.OUTCOMES
-    assert counter.COUNTER == f"https://github.com/{counters.REPO}/releases/download/{counters.COUNTER_TAG}/{{outcome}}.txt"
+    assert Outcome.__dataclass_fields__["status"].type == "str"
+    assert counters.OUTCOMES == ("submitted", "unconfirmed", "refused", "blocked", "failed")
 
 
 def test_the_selftest_passes() -> None:
@@ -47,9 +47,12 @@ def test_a_day_is_the_difference_of_two_snapshots_and_the_badge_shows_the_applic
             return {"assets": [{"name": f"{name}.txt", "download_count": value} for name, value in next(totals).items()]}
         return {"stargazers_count": 3}
 
+    def query(hogql: str) -> list[list[object]]:
+        return [[1]] if "DISTINCT" in hogql else []
+
     history, daily, badges = tmp_path / "history.csv", tmp_path / "daily.csv", tmp_path / "badges"
-    counters.run(api, history, daily, badges, dt.date(2026, 11, 9))
-    counters.run(api, history, daily, badges, dt.date(2026, 11, 10))
+    counters.run(api, query, history, daily, badges, dt.date(2026, 11, 9))
+    counters.run(api, query, history, daily, badges, dt.date(2026, 11, 10))
     rows = daily.read_text(encoding="utf-8").splitlines()
     assert rows == ["day_utc,sent,submitted,unconfirmed,refused,blocked,failed", "2026-11-09,16,15,1,3,1,2"]
     assert b"applications sent: 28" in (badges / "applications.svg").read_bytes()

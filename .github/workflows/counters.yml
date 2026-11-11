@@ -1,8 +1,9 @@
 # counters.yml - the daily snapshot of the applications AIHawk has sent, and the README badge.
 #
-# GitHub keeps only the running total of each counter file's downloads (src/aihawk/counter.py), so the applications of a
-# day exist only if someone records the totals every day. This is that someone: no machine and no personal token, just
-# the scheduler and the built-in GITHUB_TOKEN. A run that fails sends GitHub's failure mail, and the run's log warns when
+# The applications are counted in PostHog (src/aihawk/telemetry.py) and, for AIHawk before 2026-11-11, by the downloads
+# of the usage-counter release's files. Both keep only running totals, so the applications of a day exist only if someone
+# records them every day. This is that someone: no machine of ours, just the scheduler, the built-in GITHUB_TOKEN and
+# PostHog's read key as a secret. A run that fails sends GitHub's failure mail, and the run's log warns when
 # a day between two snapshots is missing. The way invisible_playwright records its browser launches.
 #
 # Everything it writes lives on the `badges` branch, which is not protected:
@@ -52,6 +53,8 @@ jobs:
       - name: Record today's counters and redraw the badge
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          # PostHog's read key, for the applications AIHawk reports there since 2026-11-11.
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
         run: >
           python main/scripts/usage_counters.py
           --history badges/counters/history.csv

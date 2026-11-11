@@ -56,7 +56,16 @@ You need a key: [get one from OrcaRouter](https://www.orcarouter.ai/ref/ref_accd
 
 ## The count
 
-Each application AIHawk finishes downloads one small file from GitHub, named after how it went: sent and confirmed, sent without a confirmation, refused by the form, blocked, or failed. GitHub counts the downloads, and that is how we know how many applications AIHawk sends; the number is the badge above. Nothing about you or the job goes with it: the file is the same for everyone. The count is always on.
+AIHawk tells us how it is used, so we know what to fix. It sends these events to [PostHog](https://posthog.com), with a random id made on your computer the first time, so each computer counts once:
+
+| Event | When | What it carries |
+|---|---|---|
+| `app_started` | AIHawk opens | AIHawk's version, the operating system |
+| `search` | a search ends | how many jobs it found |
+| `jobs_scored` | Jev reads a round | how many postings, how many it answered for, how long it took, the model |
+| `application` | an application ends | how it went (sent, refused, blocked, failed), why in one word (captcha, login, closed posting…), the kind of site (Workday, Greenhouse…), the models, the gateway, the steps, the time and the cost |
+
+Nothing about you or the jobs goes with them: no name, email, resume, answer, company or link. The number on the badge above is the applications sent. The count is always on; a dry run is not counted.
 
 
 ---
