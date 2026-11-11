@@ -28,7 +28,7 @@ from aihawk.config import Config, ConfigError, load_config
 from aihawk.database import Job
 from aihawk.llm import explain
 from aihawk.profile import import_answers_file, install_resume, read_resume
-from aihawk.screens import JobDetails, SendBatch, SentDetails, SentList, Settings, SignIn, TextPrompt
+from aihawk.screens import Confirm, JobDetails, Said, SendBatch, SentDetails, SentList, Settings, SignIn, StopSending, TextPrompt
 from aihawk.session import Session
 from aihawk.store import Proof, Store, Stored
 from aihawk.tui import AIHawk
@@ -395,8 +395,9 @@ def test_s_lists_what_was_tried_newest_first_and_enter_opens_one_in_full(home: P
         store.add(Job("sent", "Acme", "Engineer", "Rome", "https://jobs.lever.co/acme/1", "https://jobs.lever.co/acme/1/apply", "d"))
         store.set_status("sent", "submitted", "Filled in: the CV")
         store.set_proof("sent", Proof("2026-11-03T09:00:00", "https://jobs.lever.co/acme/thanks", "submitted", "Thank you", "the whole page", "/shots/sent.png"))
+        store.set_cost("sent", 0.04)
         store.add(Job("stuck", "Beta", "Designer", "Rome", "https://jobs.lever.co/beta/2", "https://jobs.lever.co/beta/2/apply", "d"))
-        store.set_status("stuck", "blocked", "a captcha")
+        store.set_status("stuck", "blocked", "I could not get past it.", "captcha")
         store.set_proof("stuck", Proof())
         # A job with no click is ordered by when its status changed: an older change comes after the send.
         store._db.execute("UPDATE jobs SET updated = ? WHERE id = ?", ("2026-11-01T12:00:00", "stuck"))
@@ -406,13 +407,13 @@ def test_s_lists_what_was_tried_newest_first_and_enter_opens_one_in_full(home: P
             await wait_for_screen(pilot, SentList)
             table = app.screen.query_one(DataTable)
             rows = [[str(table.get_row_at(index)[column]) for column in (1, 3)] for index in range(table.row_count)]
-            assert rows == [["Acme", "sent and confirmed"], ["Beta", "blocked"]]
+            assert rows == [["Acme", "✓ sent and confirmed"], ["Beta", "✗ a captcha stopped it"]]
             await pilot.press("enter")
             await wait_for_screen(pilot, SentDetails)
             assert app.screen.item.job.id == "sent"
             # How it went in a person's words: what the page said, and not the form's fields or the page's files.
             text = str(app.screen.query_one("#summary Static").render())
-            assert "Sent and confirmed · 2026-11-03 09:00" in text and "The page said: Thank you" in text
+            assert "Sent and confirmed · 2026-11-03 09:00" in text and "The page said: Thank you" in text and "Cost: 4 cents" in text
             assert "Filled in" not in text and "shots" not in text
             await pilot.press("escape")
             await pilot.press("escape")
@@ -432,7 +433,7 @@ def test_s_with_nothing_tried_says_how_to_send(home: Path, resume: Path) -> None
             await pilot.press("s")
             await pilot.pause(0.1)
             assert not isinstance(app.screen, SentList)
-            assert "Nothing sent yet" in logged(app)
+            assert "No applications yet" in logged(app)
 
     asyncio.run(run())
 
@@ -587,7 +588,7 @@ def test_a_pdf_with_no_text_says_what_to_do(tmp_path: Path) -> None:
     writer.add_blank_page(100, 100)
     with path.open("wb") as out:
         writer.write(out)
-    with pytest.raises(ConfigError, match="scanned PDF"):
+    with pytest.raises(ConfigError, match="looks like a scan"):
         read_resume(path)
 
 
@@ -698,7 +699,9 @@ def test_a_key_from_the_file_that_orcarouter_refuses_is_forgotten_and_asked_for_
         async with app.run_test(size=(140, 40)) as pilot:
             await settle(pilot, app)
             assert isinstance(app.screen, TextPrompt)
-            assert "forgot it" in log_text(app) and "orcarouter.ai" in log_text(app)
+            assert "forgot it" in log_text(app)
+            # And said in the question, which covers the log.
+            assert "forgot it" in str(app.screen.query_one("#problem", Static).content) and app.screen.query_one("#problem").display
             assert "sk-orca-wrong" not in log_text(app)
             await pilot.press("escape")
 
@@ -722,16 +725,17 @@ def test_a_key_from_the_environment_that_orcarouter_refuses_is_named_and_not_ask
 @pytest.mark.parametrize(
     ("error", "words"),
     [
-        (APIConnectionError(request=REQUEST), "cannot be reached"),
+        (APIConnectionError(request=REQUEST), "Cannot reach the AI service"),
         (APITimeoutError(request=REQUEST), "did not answer in time"),
-        (status_error(RateLimitError, 429), "slow down"),
-        (status_error(InternalServerError, 503), "failed on its side"),
+        (status_error(RateLimitError, 429), "is busy"),
+        (status_error(InternalServerError, 503), "problem on its side"),
     ],
 )
-def test_a_failed_model_call_says_in_plain_words_what_happened_and_keeps_the_detail(error: Exception, words: str) -> None:
+def test_a_failed_model_call_says_in_plain_words_what_happened_and_what_to_do(error: Exception, words: str) -> None:
     text = explain(error)
     assert words in text
-    assert text.endswith(f"({error})")
+    # The error's own text is for the makers: no code, no brackets, no number.
+    assert str(error) not in text and "(" not in text
 
 
 def test_ctrl_c_at_the_key_prompt_leaves(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -742,7 +746,7 @@ def test_ctrl_c_at_the_key_prompt_leaves(home: Path, monkeypatch: pytest.MonkeyP
         async with app.run_test(size=(80, 24)) as pilot:
             await settle(pilot, app)
             assert isinstance(app.screen, TextPrompt)
-            assert "Enter saves it" in str(app.screen.query_one(".hint", Static).content)
+            assert "Enter saves" in str(app.screen.query_one(".hint", Static).content)
             await pilot.press("ctrl+c")
             await pilot.pause(0.1)
             assert not app.is_running
@@ -774,7 +778,7 @@ def test_at_80_columns_a_message_wraps_whole_and_quit_is_on_the_footer(home: Pat
         async with app.run_test(size=(80, 24)) as pilot:
             await settle(pilot, app)
             await pilot.pause(0.3)  # settle waits for the flow, not for the first paint of the footer
-            assert "exported with text, or saved as .docx." in " ".join(line.text.strip() for line in app.query_one(RichLog).lines)
+            assert "Save it as a PDF with text, or as .docx." in " ".join(line.text.strip() for line in app.query_one(RichLog).lines)
             rows = ["".join(segment.text for segment in strip) for strip in app.screen._compositor.render_strips()]
             assert any("q Quit" in row for row in rows)
 
@@ -971,12 +975,12 @@ def test_after_the_resume_the_mail_is_asked_once_and_gmail_is_opened_until_the_i
         app = scripted_app(home, resume)
         async with app.run_test(size=(140, 40)) as pilot:
             await settle(pilot, app)
-            assert isinstance(app.screen, TextPrompt) and "email you apply with" in app.screen.question
+            assert isinstance(app.screen, TextPrompt) and "Which email do you apply with" in app.screen.question
             assert app.screen.query_one(Input).value == "ada@example.com"
             app.screen.query_one(Input).value = "ada@gmail.com"
             await pilot.press("enter")
             await wait_for_screen(pilot, SignIn)
-            assert "Gmail is open" in app.screen.text and "ada@gmail.com" in app.screen.text
+            assert "The browser opened Gmail" in app.screen.text and "ada@gmail.com" in app.screen.text
             assert ("browser_navigate", {"url": "https://mail.google.com/mail/u/0/"}) in server.calls
             await pilot.press("enter")
             await wait_for_sign_in_to_close(pilot, app)
@@ -998,7 +1002,7 @@ def test_the_mail_question_left_with_escape_is_not_asked_again_at_the_next_start
         app = scripted_app(home, resume)
         async with app.run_test(size=(140, 40)) as pilot:
             await settle(pilot, app)
-            assert isinstance(app.screen, TextPrompt) and "email you apply with" in app.screen.question
+            assert isinstance(app.screen, TextPrompt) and "Which email do you apply with" in app.screen.question
             await pilot.press("escape")
             await settle(pilot, app)
             assert companies(app) == ["Bestco", "Lowly", "Noplugin"]
@@ -1066,3 +1070,699 @@ def test_a_postings_html_reads_as_paragraphs_and_bullets_even_when_escaped() -> 
     # Some sources escape their HTML, once or twice over.
     assert readable(html_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")) == expected
     assert readable("Plain text,   with  spaces.\n\n\n\nAnd a second paragraph.") == "Plain text, with spaces.\n\nAnd a second paragraph."
+
+
+class Flaky(ScriptedModelForApp):
+    """The scoring requests lose their connection `failures` times, then answer."""
+
+    def __init__(self, failures: int) -> None:
+        super().__init__()
+        self.failures = failures
+        self.attempts = 0
+
+    async def post(self, path: str, *, body: dict[str, Any], cast_to: type) -> dict[str, Any]:
+        self.attempts += 1
+        if self.failures:
+            self.failures -= 1
+            raise APIConnectionError(request=REQUEST)
+        return await super().post(path, body=body, cast_to=cast_to)
+
+
+def last_line(app: AIHawk) -> str:
+    """The last thing the log was told, whole: what it shows is wrapped to its width."""
+    return app.query_one(Said).said[-1]
+
+
+def footer_text(app: AIHawk) -> str:
+    return " ".join("".join(segment.text for segment in strip) for strip in app.screen._compositor.render_strips())
+
+
+def test_a_round_the_service_does_not_answer_is_asked_again_and_no_job_is_set_aside(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(tui_module, "RETRY_PAUSES", (0.01, 0.01, 0.01, 0.01))
+
+    async def run() -> None:
+        app = AIHawk(home, resume)
+        model = Flaky(2)
+        app.session._client = model  # type: ignore[assignment]
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
+            assert companies(app) == ["Bestco", "Lowly", "Noplugin"]
+            assert model.attempts == 3
+            assert not app.session.store.with_status("passed_over")
+            assert "could not be read" not in logged(app) and "not answering" not in logged(app)
+
+    asyncio.run(run())
+
+
+def test_after_four_pauses_it_stops_says_how_to_ask_again_and_the_right_arrow_asks(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(tui_module, "RETRY_PAUSES", (0.01, 0.01, 0.01, 0.01))
+
+    async def run() -> None:
+        app = AIHawk(home, resume)
+        model = Flaky(100)
+        app.session._client = model  # type: ignore[assignment]
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
+            assert model.attempts == 5
+            assert last_line(app) == "Still no answer. Check your connection, then press → to try again."
+            # The jobs wait as they were, and nothing says there are no more.
+            assert len(app.session.store.with_status("new")) == 3 and not app.session.store.with_status("passed_over")
+            assert "No more jobs" not in logged(app) and "No jobs found" not in logged(app)
+            model.failures = 0
+            await pilot.press("right")
+            await settle(pilot, app)
+            assert companies(app) == ["Bestco", "Lowly", "Noplugin"]
+
+    asyncio.run(run())
+
+
+def test_a_key_the_service_refuses_while_scoring_still_asks_for_another(home: Path, resume: Path) -> None:
+    async def run() -> None:
+        app = AIHawk(home, resume)
+        app.session._client = RefusingModel()  # type: ignore[assignment]
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
+            assert "refused the key" in log_text(app) and not app.session.store.with_status("passed_over")
+
+    asyncio.run(run())
+
+
+def test_a_search_that_finds_nothing_says_so_and_what_to_change(home: Path, resume: Path) -> None:
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        # Every posting is a Python one: leaving Python out leaves none.
+        app.session.change_setting("exclude", "Python")
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            await pilot.pause(0.2)
+            assert companies(app) == []
+            assert last_line(app) == "No jobs found for these places and days. Press e to change them."
+            assert "Preparing" not in logged(app)
+            await pilot.press("right")
+            await pilot.pause(0.1)
+            assert "No more jobs" not in logged(app)
+
+    asyncio.run(run())
+
+
+def test_nothing_is_said_about_no_jobs_while_the_jobs_are_still_coming(home: Path, resume: Path) -> None:
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        app.session.change_setting("exclude", "Python")
+        hold = asyncio.Event()
+
+        async def coming(progress: Any, arrived: Any) -> None:
+            await hold.wait()
+
+        app.session.sync = coming  # type: ignore[method-assign]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause(0.5)
+            assert "No jobs found" not in logged(app)
+            await pilot.press("right")
+            await pilot.pause(0.2)
+            assert "No jobs found" not in logged(app) and "No more jobs" not in logged(app)
+            hold.set()
+
+    asyncio.run(run())
+
+
+def test_with_no_key_the_line_says_the_next_key_and_it_works(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ORCAROUTER_API_KEY")
+
+    async def run() -> None:
+        app = AIHawk(home, None)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            await pilot.press("escape")
+            await settle(pilot, app)
+            assert last_line(app) == "No key yet. Press e, then OrcaRouter key."
+            await pilot.press("e")
+            await wait_for_screen(pilot, Settings)
+            assert ("key", "OrcaRouter key", "none yet") in app.setting_rows()
+
+    asyncio.run(run())
+
+
+def test_with_no_resume_the_line_says_r_the_footer_shows_it_and_esc_on_it_says_so(home: Path, resume: Path) -> None:
+    async def run() -> None:
+        app = scripted_app(home, None)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            assert isinstance(app.screen, TextPrompt)
+            await pilot.press("escape")
+            await settle(pilot, app)
+            await pilot.pause(0.2)
+            assert last_line(app) == "No resume yet. Press r and give the file."
+            assert "r Resume" in footer_text(app) and "q Quit" in footer_text(app)
+            await pilot.press("r")
+            await wait_for_screen(pilot, TextPrompt)
+            await pilot.press("escape")
+            await pilot.pause(0.2)
+            assert last_line(app) == "No resume given."
+            await pilot.press("r")
+            await wait_for_screen(pilot, TextPrompt)
+            app.screen.query_one(Input).value = str(resume)
+            await pilot.press("enter")
+            await settle(pilot, app)
+            assert companies(app) == ["Bestco", "Lowly", "Noplugin"]
+            assert "r Resume" not in footer_text(app)
+            # r still works with a resume, and leaving it says nothing changed.
+            await pilot.press("r")
+            await wait_for_screen(pilot, TextPrompt)
+            await pilot.press("escape")
+            await pilot.pause(0.2)
+            assert last_line(app) == "Your resume was not changed."
+
+    asyncio.run(run())
+
+
+def test_a_resume_that_cannot_be_read_says_to_press_r(home: Path, tmp_path: Path) -> None:
+    old = tmp_path / "cv.doc"
+    old.write_bytes(b"old")
+
+    async def run() -> None:
+        app = scripted_app(home, old)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            await pilot.pause(0.2)
+            assert last_line(app).endswith("Press r and give the file again.")
+
+    asyncio.run(run())
+
+
+def test_a_new_search_lists_its_own_jobs_and_keeps_what_was_sent(home: Path, resume: Path) -> None:
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
+            assert companies(app) == ["Bestco", "Lowly", "Noplugin"]
+            app.session.store.set_status("https://jobs.lever.co/beta/2", "submitted", "sent")
+            await pilot.press("e")
+            await wait_for_screen(pilot, Settings)
+            rows = [key.value for key in app.screen.query_one(DataTable).rows]
+            app.screen.query_one(DataTable).move_cursor(row=rows.index("exclude"))
+            await pilot.press("enter")
+            await wait_for_screen(pilot, TextPrompt)
+            app.screen.query_one(Input).value = "Senior"
+            await pilot.press("enter")
+            await wait_for_screen(pilot, Settings)
+            await pilot.press("escape")
+            await settle(pilot, app)
+            await pilot.pause(0.2)
+            # The jobs nobody applied to were dropped and the new search found its own again; the one sent stays, as sent, though
+            # the new search would leave it out.
+            assert sorted(item.job.company for item in app.session.store.all()) == ["Bestco", "Lowly", "Noplugin"]
+            assert app.session.store.get("https://jobs.lever.co/beta/2").status == "submitted"  # type: ignore[union-attr]
+
+    asyncio.run(run())
+
+
+def test_leaving_a_word_out_drops_the_listed_jobs_that_have_it(home: Path, resume: Path) -> None:
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
+            assert companies(app) == ["Bestco", "Lowly", "Noplugin"]
+            await pilot.press("e")
+            await wait_for_screen(pilot, Settings)
+            rows = [key.value for key in app.screen.query_one(DataTable).rows]
+            app.screen.query_one(DataTable).move_cursor(row=rows.index("exclude"))
+            await pilot.press("enter")
+            await wait_for_screen(pilot, TextPrompt)
+            app.screen.query_one(Input).value = "Python"
+            await pilot.press("enter")
+            await wait_for_screen(pilot, Settings)
+            await pilot.press("escape")
+            await settle(pilot, app)
+            await pilot.pause(0.2)
+            assert companies(app) == [] and app.session.store.all() == []
+            assert last_line(app) == "No jobs found for these places and days. Press e to change them."
+
+    asyncio.run(run())
+
+
+def test_the_answers_the_person_sees_and_counts_leave_out_aihawks_own(home: Path) -> None:
+    app = AIHawk(home)
+    store = app.session.store
+    store.set_answer("account_password", "G-secret")
+    store.set_answer("phone", "123")
+    store.set_answer("mail_provider", "gmail")
+    assert [row[0] for row in app.answer_rows()] == ["answer:phone", "answer:"]
+    assert {key: now for key, _, now in app.setting_rows()}["answers"] == "1"
+    assert "G-secret" not in str(app.answer_rows())
+
+
+def test_every_reason_a_form_stops_for_has_plain_words_and_an_unknown_one_does_not_blame_the_service() -> None:
+    from aihawk.apply import BLOCKED_BY, WHY_NOT_SENT, why_not_sent
+
+    for reason in (*BLOCKED_BY, "stuck", "no_code", "mailbox_signed_out", "never_clicked", "form_not_loaded", "refused_by_form"):
+        assert reason in WHY_NOT_SENT, reason
+    assert why_not_sent("captcha") == "a captcha stopped it"
+    assert why_not_sent("missing_info") == "a required answer is missing: press e, Your answers"
+    assert why_not_sent("APIConnectionError") == "the AI service gave an error"
+    assert why_not_sent("KeyError") == "something went wrong"
+    assert why_not_sent("") == ""
+
+
+def test_a_time_the_store_wrote_in_utc_is_shown_on_the_persons_own_clock() -> None:
+    from datetime import datetime
+
+    from aihawk.screens import when_short
+
+    moment = datetime.fromisoformat("2026-11-05T10:00:00+00:00").astimezone()
+    assert when_short("2026-11-05T10:00:00+00:00") == moment.strftime("%Y-%m-%d %H:%M")
+    assert when_short("2026-11-05T10:00:00") == "2026-11-05 10:00"
+
+
+def test_a_store_from_before_reasons_were_kept_gets_the_column(tmp_path: Path) -> None:
+    import sqlite3
+
+    old = sqlite3.connect(tmp_path / "jobs.db")
+    old.execute("CREATE TABLE jobs (id TEXT PRIMARY KEY, company TEXT NOT NULL, title TEXT NOT NULL, location TEXT NOT NULL, url TEXT NOT NULL, apply_url TEXT NOT NULL, description TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'new', score REAL, lexical REAL NOT NULL DEFAULT 0, note TEXT, sent_at TEXT, final_url TEXT, verdict TEXT, verdict_evidence TEXT, page_text TEXT, screenshot TEXT, first_seen TEXT NOT NULL, updated TEXT NOT NULL, cost REAL)")
+    old.commit()
+    old.close()
+    store = Store(tmp_path / "jobs.db")
+    store.add(Job("a", "Firm", "Engineer", "Rome", "https://a.example/1", "https://a.example/1", ""))
+    store.set_status("a", "blocked", "stuck on a captcha", "captcha")
+    assert [item.reason for item in store.sent()] == ["captcha"]
+
+
+async def send_batch(app: AIHawk, pilot: Any, presses: list[str]) -> None:
+    await settle(pilot, app)
+    await pilot.press(*presses, "a")
+    await wait_for_screen(pilot, SendBatch)
+
+
+def test_the_batch_confirmation_says_what_it_will_do_and_the_keys_are_in_the_footer(home: Path, resume: Path, restored_apply: Any) -> None:
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        fake_apply(app, [], [])
+        async with app.run_test(size=(80, 24)) as pilot:
+            await send_batch(app, pilot, ["space"])
+            hint = str(app.screen.query_one(".hint", Static).content)
+            assert hint.startswith("AIHawk fills each company's form in the browser with your resume and your answers (e shows them), and sends it in your name.")
+            assert "Enter" not in hint and "Esc" not in hint
+            assert "Send" in footer_text(app) and "Cancel" in footer_text(app)
+            await pilot.press("escape")
+
+    asyncio.run(run())
+
+
+def test_a_batch_says_which_one_it_is_on_in_one_line_and_ends_with_one_summary_and_a_sign_for_each(home: Path, resume: Path, restored_apply: Any) -> None:
+    outcomes = [
+        Outcome("submitted", "ok", Proof("2026-11-05T10:00:00+00:00", "u", "submitted", "Thank you.", "t", "")),
+        Outcome("unconfirmed", "clicked", Proof("2026-11-05T10:01:00+00:00", "u", "", "The page did not change.", "t", "")),
+        Outcome("blocked", "I could not get past it.", reason="captcha"),
+    ]
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        fake_apply(app, outcomes, [])
+        async with app.run_test(size=(140, 40)) as pilot:
+            await send_batch(app, pilot, ["space", "space", "space"])
+            await pilot.press("enter")
+            await wait_for_apply(pilot, app)
+            await pilot.pause(0.2)
+            said = app.query_one(Said).said
+            assert said[-1] == "1 sent, 1 sent but not confirmed, 1 not sent. Press s to see why."
+            assert "Bestco: sent and confirmed. Thank you." in said
+            assert "Lowly: sent and confirmed." not in said
+            assert "Noplugin: not sent, a captcha stopped it." in said
+            assert not any("under a cent" in line for line in said)
+            # The sign of each: sent, sent but not confirmed, not sent.
+            table = app.query_one(DataTable)
+            assert [str(table.get_row_at(index)[0]) for index in range(3)] == ["✓", "?", "✗"]
+
+    asyncio.run(run())
+
+
+def test_while_a_batch_is_sent_one_line_names_the_job_it_is_on_and_changes_in_place(home: Path, resume: Path, restored_apply: Any) -> None:
+    first_gate, second_gate = asyncio.Event(), asyncio.Event()
+    gates = [first_gate, second_gate]
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+
+        async def slow(*arguments: Any, **keywords: Any) -> Outcome:
+            await gates.pop(0).wait()
+            return Outcome("submitted", "ok")
+
+        import aihawk.session as session_module
+
+        session_module.apply_to_job = slow  # type: ignore[assignment]
+        async with app.run_test(size=(140, 40)) as pilot:
+            await send_batch(app, pilot, ["space", "space"])
+            await pilot.press("enter")
+            await pilot.pause(0.3)
+            assert last_line(app) == "Sending 1 of 2: Bestco. A few minutes each; you can watch the browser."
+            first = len(app.query_one(Said).said)
+            await pilot.pause(0.1)
+            assert len(app.query_one(Said).said) == first
+            first_gate.set()
+            await pilot.pause(0.3)
+            assert last_line(app) == "Sending 2 of 2: Lowly. A few minutes each; you can watch the browser."
+            # The first one's result is a line of its own; the Sending line took the place of the Sending line before it.
+            assert app.query_one(Said).said.count("Bestco: sent and confirmed.") == 1
+            assert not [line for line in app.query_one(Said).said if line.startswith("Sending 1")]
+            second_gate.set()
+            await wait_for_apply(pilot, app)
+
+    asyncio.run(run())
+
+
+def test_the_log_keeps_one_sending_line_not_one_per_job(home: Path, resume: Path, restored_apply: Any) -> None:
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        fake_apply(app, [Outcome("submitted", "ok"), Outcome("submitted", "ok")], [])
+        async with app.run_test(size=(140, 40)) as pilot:
+            await send_batch(app, pilot, ["space", "space"])
+            await pilot.press("enter")
+            await wait_for_apply(pilot, app)
+            await pilot.pause(0.2)
+            assert not [line for line in app.query_one(Said).said if line.startswith("Sending")]
+
+    asyncio.run(run())
+
+
+def test_the_sent_list_and_its_details_say_why_a_job_was_not_sent_in_the_same_words(home: Path, resume: Path, restored_apply: Any) -> None:
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        fake_apply(app, [Outcome("blocked", "I saw a puzzle.", reason="captcha"), Outcome("unconfirmed", "clicked", Proof("2026-11-05T10:01:00", "u", "", "No change.", "t", ""))], [])
+        async with app.run_test(size=(80, 24)) as pilot:
+            await send_batch(app, pilot, ["space", "space"])
+            await pilot.press("enter")
+            await wait_for_apply(pilot, app)
+            await pilot.press("s")
+            await wait_for_screen(pilot, SentList)
+            table = app.screen.query_one(DataTable)
+            assert sorted(str(table.get_row_at(index)[2]) for index in range(table.row_count)) == ["? sent, not confirmed", "✗ a captcha stopped it"]
+            for index in range(table.row_count):
+                table.move_cursor(row=index)
+                await pilot.press("enter")
+                await wait_for_screen(pilot, SentDetails)
+                text = str(app.screen.query_one("#summary Static").render())
+                if app.screen.item.status == "blocked":
+                    assert "Not sent" in text and "A captcha stopped it." in text and "I saw a puzzle." in text
+                else:
+                    assert "Check your email" in text
+                await pilot.press("escape")
+
+    asyncio.run(run())
+
+
+def test_quitting_while_applications_are_sent_asks_once_and_escape_goes_back(home: Path, resume: Path, restored_apply: Any) -> None:
+    gate = asyncio.Event()
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+
+        async def slow(*arguments: Any, **keywords: Any) -> Outcome:
+            await gate.wait()
+            return Outcome("submitted", "ok")
+
+        import aihawk.session as session_module
+
+        session_module.apply_to_job = slow  # type: ignore[assignment]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await send_batch(app, pilot, ["space"])
+            await pilot.press("enter")
+            await pilot.pause(0.3)
+            await pilot.press("q")
+            await wait_for_screen(pilot, StopSending)
+            assert "Quit and stop them?" in app.screen.question
+            await pilot.press("escape")
+            await pilot.pause(0.1)
+            assert app.is_running and not isinstance(app.screen, StopSending)
+            await pilot.press("ctrl+c")
+            await wait_for_screen(pilot, StopSending)
+            await pilot.press("enter")
+            await pilot.pause(0.2)
+            assert not app.is_running
+
+    asyncio.run(run())
+
+
+def test_quitting_with_nothing_being_sent_asks_nothing(home: Path, resume: Path) -> None:
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            await pilot.press("q")
+            await pilot.pause(0.2)
+            assert not app.is_running
+
+    asyncio.run(run())
+
+
+def test_s_a_and_e_while_applications_are_sent_say_to_wait(home: Path, resume: Path, restored_apply: Any) -> None:
+    gate = asyncio.Event()
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+
+        async def slow(*arguments: Any, **keywords: Any) -> Outcome:
+            await gate.wait()
+            return Outcome("submitted", "ok")
+
+        import aihawk.session as session_module
+
+        session_module.apply_to_job = slow  # type: ignore[assignment]
+        async with app.run_test(size=(140, 40)) as pilot:
+            await send_batch(app, pilot, ["space"])
+            await pilot.press("enter")
+            await pilot.pause(0.3)
+            for key in ("s", "a", "e"):
+                await pilot.press(key)
+                await pilot.pause(0.1)
+                assert last_line(app) == "Applications are being sent: wait for them to finish.", key
+                assert not isinstance(app.screen, (SentList, SendBatch, Settings))
+            gate.set()
+            await wait_for_apply(pilot, app)
+
+    asyncio.run(run())
+
+
+def test_the_key_prompt_says_what_orcarouter_is_that_it_costs_and_that_esc_is_allowed(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ORCAROUTER_API_KEY")
+
+    async def run() -> None:
+        app = AIHawk(home, None)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            assert app.screen.question == "Paste your OrcaRouter key"
+            hint = str(app.screen.query_one(".hint", Static).content).splitlines()
+            assert hint[0] == "AIHawk uses OrcaRouter, a paid AI service, to read your resume and fill the forms: a few cents per application."
+            # The address on a line of its own, whole, the referral path in it.
+            assert hint[1] == "Get a key at orcarouter.ai/ref/ref_accd17afb78fc95ac4d7"
+            assert hint[2] == "It stays on this computer · Enter saves · Esc later"
+            rows = [row.rstrip() for row in ["".join(segment.text for segment in strip) for strip in app.screen._compositor.render_strips()]]
+            assert any("orcarouter.ai/ref/ref_accd17afb78fc95ac4d7" in row for row in rows)
+
+    asyncio.run(run())
+
+
+def test_the_mail_question_is_plain_and_an_address_that_is_neither_gmail_nor_outlook_is_asked_once_then_left(home: Path, resume: Path) -> None:
+    store = Store(home / "data" / "jobs.db")
+    store.set_answer("mail_provider", "")
+    store.close()
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            assert app.screen.question == "Some job sites email a code to confirm it is you. Which email do you apply with?"
+            assert str(app.screen.query_one(".hint", Static).content) == "AIHawk opens that inbox in its browser only to read those codes · Enter · Esc later"
+            app.screen.query_one(Input).value = "ada@yahoo.com"
+            await pilot.press("enter")
+            await pilot.pause(0.3)
+            assert app.screen.question == "Where is ada@yahoo.com?"
+            app.screen.query_one(Input).value = "yahoo"
+            await pilot.press("enter")
+            await settle(pilot, app)
+            await pilot.pause(0.2)
+            # Said once, and left for later: it is not asked again.
+            assert not isinstance(app.screen, TextPrompt)
+            assert app.query_one(Said).said.count("Only Gmail and Outlook can be read for now; the rest works without.") == 1
+            assert app.session.mail()[1] == "later"
+
+    asyncio.run(run())
+
+
+def test_a_mailbox_that_still_shows_its_sign_in_page_is_a_question_with_no_empty_input(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    store = Store(home / "data" / "jobs.db")
+    store.set_answer("mail_provider", "")
+    store.close()
+    server = ScriptedServer(page={"url": "https://accounts.google.com/signin", "text": "Sign in"})
+
+    async def stuck(name: str, arguments: dict[str, Any] | None = None) -> Any:
+        server.calls.append((name, arguments or {}))
+        return SimpleNamespace(isError=False, content=[SimpleNamespace(text="ok")])
+
+    server.call_tool = stuck  # type: ignore[method-assign]
+    scripted_server(monkeypatch, server)
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            app.screen.query_one(Input).value = "ada@gmail.com"
+            await pilot.press("enter")
+            await wait_for_screen(pilot, SignIn)
+            assert app.screen.text == "The browser opened Gmail. Sign in as ada@gmail.com, then come back to this window and press Enter."
+            await pilot.press("enter")
+            await wait_for_screen(pilot, Confirm)
+            assert app.screen.question == "Gmail still shows its sign-in page."
+            assert not list(app.screen.query(Input))
+            await pilot.press("escape")
+            await wait_for_sign_in_to_close(pilot, app)
+            await settle(pilot, app)
+            assert "Mail left for later: e, then Your mail." in app.query_one(Said).said
+
+    asyncio.run(run())
+
+
+def test_escape_on_the_sign_in_is_later_not_done(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    store = Store(home / "data" / "jobs.db")
+    store.set_answer("mail_provider", "")
+    store.close()
+    # The inbox would show if it were looked at: Escape must not count as having signed in.
+    server = ScriptedServer(page={"url": "https://mail.google.com/mail/u/0/#inbox", "text": "Inbox"})
+    scripted_server(monkeypatch, server)
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            app.screen.query_one(Input).value = "ada@gmail.com"
+            await pilot.press("enter")
+            await wait_for_screen(pilot, SignIn)
+            await pilot.press("escape")
+            await wait_for_sign_in_to_close(pilot, app)
+            await settle(pilot, app)
+            assert "Signed in to Gmail." not in app.query_one(Said).said
+            assert "Mail left for later: e, then Your mail." in app.query_one(Said).said
+
+    asyncio.run(run())
+
+
+def test_the_resume_prompt_says_a_wrong_path_inside_itself_and_stays_open(home: Path, resume: Path) -> None:
+    async def run() -> None:
+        app = scripted_app(home, None)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            assert app.screen.query_one(Input).placeholder == "Drag your resume file into this window, or type where it is"
+            app.screen.query_one(Input).value = "/no/such/file.pdf"
+            await pilot.press("enter")
+            await pilot.pause(0.1)
+            assert isinstance(app.screen, TextPrompt)
+            assert str(app.screen.query_one("#problem", Static).content) == "No file at that path."
+            assert app.screen.query_one("#problem").display
+            # Typing again takes it away; a file dragged in comes with quotes.
+            app.screen.query_one(Input).value = f'"{resume}"'
+            await pilot.pause(0.1)
+            assert not app.screen.query_one("#problem").display
+            await pilot.press("enter")
+            await settle(pilot, app)
+            assert companies(app) == ["Bestco", "Lowly", "Noplugin"]
+
+    asyncio.run(run())
+
+
+def test_days_that_are_not_a_whole_number_are_said_in_the_prompt(home: Path, resume: Path) -> None:
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            await pilot.press("e")
+            await wait_for_screen(pilot, Settings)
+            rows = [key.value for key in app.screen.query_one(DataTable).rows]
+            app.screen.query_one(DataTable).move_cursor(row=rows.index("max_age_days"))
+            await pilot.press("enter")
+            await wait_for_screen(pilot, TextPrompt)
+            assert app.screen.question == "Posted within (days)"
+            app.screen.query_one(Input).value = "soon"
+            await pilot.press("enter")
+            await pilot.pause(0.1)
+            assert isinstance(app.screen, TextPrompt)
+            assert str(app.screen.query_one("#problem", Static).content) == "Type a whole number of days, like 30."
+            app.screen.query_one(Input).value = "30"
+            await pilot.press("enter")
+            await wait_for_screen(pilot, Settings)
+            assert app.session.config.max_age_days == 30
+
+    asyncio.run(run())
+
+
+def test_the_settings_say_the_resumes_name_the_key_as_saved_and_never_an_environment_variable(home: Path, resume: Path) -> None:
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            rows = {key: now for key, _, now in app.setting_rows()}
+            assert rows["resume"] == "resume.txt" and rows["key"] == "saved"
+            assert "ORCAROUTER" not in " ".join(rows.values())
+            await pilot.press("e")
+            await wait_for_screen(pilot, Settings)
+            assert not list(app.screen.query("Footer"))
+            table = app.screen.query_one(DataTable)
+            table.move_cursor(row=0)
+            await pilot.press("enter")
+            await wait_for_screen(pilot, TextPrompt)
+            assert app.screen.question == "Where (cities or countries, separated by commas)"
+            assert str(app.screen.query_one(".hint", Static).content) == "Enter saves · Esc goes back"
+            await pilot.press("escape")
+            await wait_for_screen(pilot, Settings)
+            app.screen.query_one(DataTable).move_cursor(row=1)
+            await pilot.press("enter")
+            await wait_for_screen(pilot, TextPrompt)
+            assert app.screen.question == "Leave out (words in job titles, separated by commas)"
+
+    asyncio.run(run())
+
+
+def test_the_heading_says_how_many_are_selected_names_a_place_once_and_a_cut_word_ends_in_an_ellipsis(home: Path, resume: Path) -> None:
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            assert str(app.query_one("#heading", Static).render()) == "AIHawk · Python Engineer · Milan, Italy"
+            assert str(app.query_one("#count", Static).render()) == "Page 1 · 4 jobs"
+            await pilot.press("space", "space")
+            assert str(app.query_one("#count", Static).render()) == "Page 1 · 4 jobs · 2 selected"
+            await pilot.press("up", "space")
+            assert str(app.query_one("#count", Static).render()) == "Page 1 · 4 jobs · 1 selected"
+            app.session.store.add(Job("long", "A Very Long Company Name That Cannot Fit Here Ltd", "Principal Python Engineer, Platform and Data Infrastructure", "Milan", "https://x.example/1", "https://x.example/1", ""))
+            app.session.store.set_score("long", 5.0)
+            app.pages = [["long"]]
+            app.refresh_jobs()
+            row = app.query_one(DataTable).get_row_at(0)
+            assert str(row[2]).endswith("…") and str(row[3]).endswith("…")
+
+    asyncio.run(run())
+
+
+def test_a_job_with_no_description_says_it_can_still_be_applied_to_and_the_details_name_o(home: Path) -> None:
+    async def run() -> None:
+        app = AIHawk(home)
+        app.start = lambda: None  # type: ignore[method-assign]
+        job = Job("x", "Co", "Engineer", "Milan", "https://a.example/", "https://a.example/", "")
+        async with app.run_test(size=(80, 24)) as pilot:
+            await app.push_screen(JobDetails(Stored(job, "scored", 4.0, None)))
+            await pilot.pause(0.2)
+            assert str(app.screen.query_one("#text Static").render()) == "This posting has no description. You can still apply: the form is filled from your resume."
+            assert "o Open the posting" in footer_text(app)
+
+    asyncio.run(run())
+
+
+def test_the_log_shows_three_lines_so_a_message_of_three_lines_is_whole(home: Path, resume: Path) -> None:
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            app.say("one " * 17 + "\n" if False else ("word " * 45).strip())
+            await pilot.pause(0.2)
+            shown = [row.rstrip() for row in ["".join(segment.text for segment in strip) for strip in app.screen._compositor.render_strips()]]
+            assert sum(row.lstrip().startswith("word") for row in shown) >= 3
+
+    asyncio.run(run())

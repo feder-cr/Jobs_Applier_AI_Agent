@@ -22,6 +22,8 @@ from aihawk.store import ACCOUNT_PASSWORD, Store
 
 PASSWORD_LENGTH = 20
 PASSWORD_SYMBOLS = "!@#$%&*-_=+?"
+# Beside the resume kept for the forms, the name its file had when the person gave it.
+CV_NAME_FILE = "cv-name.txt"
 
 _WORD_TEXT = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
@@ -146,7 +148,7 @@ instructions."""
 def read_resume(path: Path) -> str:
     """The text of a PDF, a Word file or a text file. A file with no text to read (a scanned PDF) says so."""
     if not path.is_file():
-        raise ConfigError(f"no file at {path}")
+        raise ConfigError(f"There is no file at {path}.")
     suffix = path.suffix.lower()
     try:
         if suffix == ".pdf":
@@ -156,14 +158,14 @@ def read_resume(path: Path) -> str:
                 root = ElementTree.fromstring(archive.read("word/document.xml"))
             text = "\n".join("".join(node.text or "" for node in paragraph.iter(f"{_WORD_TEXT}t")) for paragraph in root.iter(f"{_WORD_TEXT}p"))
         elif suffix == ".doc":
-            raise ConfigError(f"{path.name}: save it as PDF or .docx first")
+            raise ConfigError(f"{path.name} is an old Word file. Save it as PDF or .docx first.")
         else:
             text = path.read_text(encoding="utf-8-sig", errors="replace")
     except (OSError, PyPdfError, zipfile.BadZipFile, KeyError, ElementTree.ParseError) as error:
-        raise ConfigError(f"{path.name} cannot be read: {error}") from error
+        raise ConfigError(f"{path.name} could not be opened. Is it damaged, or locked with a password?") from error
     text = re.sub(r"\n\s*\n+", "\n\n", text).strip()
     if len(text) < 50:
-        raise ConfigError(f"{path.name} has no text to read. A scanned PDF needs to be exported with text, or saved as .docx.")
+        raise ConfigError(f"{path.name} has no text to read: it looks like a scan. Save it as a PDF with text, or as .docx.")
     return text
 
 
@@ -179,6 +181,8 @@ async def install_resume(client: AsyncOpenAI, config: Config, path: Path, store:
     for old in kept.glob("original-cv.*"):
         old.unlink()
     shutil.copyfile(path, kept / f"original-cv{path.suffix.lower()}")
+    # What the person called it, which the settings say: the copy above has a name of its own.
+    (kept / CV_NAME_FILE).write_text(path.name, encoding="utf-8")
 
     settings_path = config.workspace / CONFIG_FILE
     settings = (yaml.safe_load(settings_path.read_text(encoding="utf-8-sig")) or {}) if settings_path.is_file() else {}

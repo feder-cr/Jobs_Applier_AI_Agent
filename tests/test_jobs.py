@@ -279,15 +279,15 @@ def test_a_database_that_cannot_be_read_says_so(tmp_path: Path) -> None:
         load_manifest(str(tmp_path / "none.json"))
 
 
-def test_a_database_that_cannot_be_reached_says_so_in_plain_words_and_keeps_the_detail(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_database_that_cannot_be_reached_says_so_in_plain_words_and_keeps_the_detail_out_of_them(monkeypatch: pytest.MonkeyPatch) -> None:
     def down(*_: object, **__: object) -> None:
         raise urllib.error.URLError(socket.gaierror(11001, "getaddrinfo failed"))
 
     monkeypatch.setattr("urllib.request.urlopen", down)
     with pytest.raises(DatabaseError) as raised:
         load_manifest("https://example.test/manifest.json")
-    assert str(raised.value).startswith("The job database cannot be reached: check your internet connection")
-    assert "getaddrinfo failed" in str(raised.value)
+    assert str(raised.value) == "Cannot reach the job list. Check your internet connection, then start AIHawk again."
+    assert "getaddrinfo" not in str(raised.value) and isinstance(raised.value.__cause__, urllib.error.URLError)
 
 
 def test_nothing_here_yet_finds_nothing(tmp_path: Path) -> None:

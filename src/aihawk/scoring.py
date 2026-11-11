@@ -12,7 +12,7 @@ from typing import Any
 from openai import APIStatusError, AsyncOpenAI
 
 from aihawk.database import Job
-from aihawk.llm import explain, refused
+from aihawk.llm import explain, not_answering, refused
 
 DESCRIPTION_CHARS = 24000
 DECISION_ENDPOINT = "/systemone"
@@ -22,6 +22,19 @@ MAX_POSTINGS = 512
 MAX_CHARS = 180_000 * 4
 # The words an endpoint's refusal uses for a request or context that is too big, which a smaller batch can cure.
 TOO_LARGE = re.compile(r"context|too (?:large|long|many)")
+
+
+class NotJudged:
+    """What a posting's value is when the request about it got no answer: not that Jev had none for it. It is asked about
+    again; a posting Jev gave no verdict for (None) is set aside."""
+
+
+NOT_JUDGED = NotJudged()
+Value = float | None | NotJudged
+
+
+class NotAnswering(Exception):
+    """A round's request got no answer, so its postings were left to be read again."""
 
 
 def question(goals: str, places: str) -> str:
@@ -37,9 +50,9 @@ def score(certainty: float) -> float:
     return round(1 + 4 * min(1.0, max(0.0, certainty)), 1)
 
 
-async def fits(client: AsyncOpenAI, model: str, cv: str, jobs: list[Job], asked: str, why: Callable[[str], None]) -> list[float | None]:
-    """How sure Jev is that each posting is in line, in order; None where it gave no answer. The groups go at once. `why` is
-    told, once per failed request, in plain words why."""
+async def fits(client: AsyncOpenAI, model: str, cv: str, jobs: list[Job], asked: str, why: Callable[[str], None]) -> list[Value]:
+    """How sure Jev is that each posting is in line, in order; None where it gave no verdict, NOT_JUDGED where the request
+    got no answer at all. The groups go at once. `why` is told, once per request that cannot work as it is, in plain words why."""
     parts = await asyncio.gather(*(_read(client, model, cv, group, asked, why) for group in groups(model, cv, jobs, asked)))
     return [value for part in parts for value in part]
 
@@ -69,9 +82,10 @@ def too_large(error: BaseException) -> bool:
     return error.status_code == 413 or (error.status_code == 400 and TOO_LARGE.search(str(error).lower()) is not None)
 
 
-async def _read(client: AsyncOpenAI, model: str, cv: str, jobs: list[Job], asked: str, why: Callable[[str], None]) -> list[float | None]:
-    """One request's values. A request too large for the endpoint is split in two and each half tried again. Any other failure ends
-    the request at once, without a split: its postings have no verdict, and `why` says why."""
+async def _read(client: AsyncOpenAI, model: str, cv: str, jobs: list[Job], asked: str, why: Callable[[str], None]) -> list[Value]:
+    """One request's values. A request too large for the endpoint is split in two and each half tried again. A service that does not
+    answer leaves its postings not judged. Any other failure ends the request at once, without a split: its postings have no
+    verdict, and `why` says why."""
     try:
         reply = await client.post(DECISION_ENDPOINT, body=request_body(model, cv, jobs, asked), cast_to=dict)
     except Exception as error:
@@ -81,12 +95,14 @@ async def _read(client: AsyncOpenAI, model: str, cv: str, jobs: list[Job], asked
         if too_large(error) and len(jobs) > 1:
             middle = len(jobs) // 2
             return [*await _read(client, model, cv, jobs[:middle], asked, why), *await _read(client, model, cv, jobs[middle:], asked, why)]
+        if not_answering(error):
+            return [NOT_JUDGED] * len(jobs)
         why(explain(error))
         return [None] * len(jobs)
     answers = reply.get("answers") or {}
     values = [_verdict(answers, index) for index in range(len(jobs))]
     if any(value is None for value in values):
-        why("OrcaRouter's answer left out some verdicts")
+        why("The AI service left some out.")
     return values
 
 

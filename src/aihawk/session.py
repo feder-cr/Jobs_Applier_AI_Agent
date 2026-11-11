@@ -13,14 +13,14 @@ from openai import AsyncOpenAI
 
 from aihawk.apply import MAILBOXES, Outcome, apply_to_job, signed_in, site_of
 from aihawk.apply import sign_in as sign_in_browser
-from aihawk.config import KEY_ENV, KEY_URL, Config, ConfigError, load_config
+from aihawk.config import KEY_ENV, Config, ConfigError, load_config
 from aihawk.database import load_manifest, search
 from aihawk.library import Library
-from aihawk.llm import SPEND, Mark, explain, make_client, money, refused
+from aihawk.llm import SPEND, Mark, explain, make_client, not_answering, refused
 from aihawk.plugins import Plugin, always_plugins, load_plugins, plugin_for
-from aihawk.profile import ensure_account_password, import_answers_file, install_resume, save_setting
-from aihawk.scoring import fits, question, score
-from aihawk.store import SENT_WORDS, SUBMITTED, Store, Stored, write_applied
+from aihawk.profile import CV_NAME_FILE, ensure_account_password, import_answers_file, install_resume, save_setting
+from aihawk.scoring import NOT_JUDGED, NotAnswering, fits, question, score
+from aihawk.store import SUBMITTED, Store, Stored, write_applied
 from aihawk.telemetry import Telemetry
 
 # Jev reads the next WIDE postings the search ranked best and scores each of them: about what one of its requests holds,
@@ -65,12 +65,12 @@ class Session:
         self._client = None
 
     def refuse_key(self) -> str:
-        """OrcaRouter refused the key. One typed in is forgotten, so the next question asks for another; one from the environment is named."""
+        """The AI service refused the key. One typed in is forgotten, so the next question asks for another; one from the environment is named."""
         self._client = None
         if self.config.key_from_environment():
-            return f"OrcaRouter refused the key in the {KEY_ENV} variable. Set it to a key from {KEY_URL}, then start AIHawk again."
+            return f"The AI service refused the key in the {KEY_ENV} variable. Set a valid one there, then start AIHawk again."
         self.config.key_file.unlink(missing_ok=True)
-        return f"OrcaRouter refused the key, so AIHawk forgot it. Get one at {KEY_URL} and type it in again."
+        return "The AI service refused the key, so AIHawk forgot it. Paste a new one."
 
     def needs_resume(self) -> bool:
         return not self.config.cv.is_file() or not self.config.filters.include
@@ -124,8 +124,9 @@ class Session:
 
     async def read(self, log: Log) -> int:
         """Jev reads the next WIDE postings the search ranked best and scores each one by how sure it is that the job is in
-        line with the candidate. A posting Jev gave no answer for is set aside, not asked again and again. Returns how
-        many were scored."""
+        line with the candidate. A posting Jev gave no answer for is set aside, not asked again and again. A request that got
+        no answer at all leaves its postings as they were and raises NotAnswering once the others are kept. Returns how many
+        were scored."""
         batch = self.store.with_status("new")[:WIDE]
         if not batch:
             return 0
@@ -141,24 +142,30 @@ class Session:
         try:
             values = await fits(self.client, self.config.decision_model, cv, jobs, asked, reasons.append)
         except Exception as error:
-            # Only the client can fail here; a batch that fails is a failed verdict inside fits.
-            if refused(error):
+            # Only the client can fail here; a batch that fails is a failed verdict inside fits. A key it refuses is for the
+            # screen; one it cannot reach is asked about again, not set aside.
+            if not not_answering(error):
                 raise
-            values = [None] * len(jobs)
-            reasons.append(explain(error))
+            values = [NOT_JUDGED] * len(jobs)
+        unjudged = [value is NOT_JUDGED for value in values]
         failed = [job.id for job, value in zip(jobs, values, strict=True) if value is None]
         if failed:
-            why = "; ".join(dict.fromkeys(reasons))
-            log(f"{len(failed):,} of {len(jobs):,} jobs could not be read" + (f" ({why})." if why else "."))
+            why = " ".join(dict.fromkeys(reasons))
+            log(f"{len(failed):,} of {len(jobs):,} jobs could not be read." + (f" {why}" if why else ""))
             self.store.set_statuses(failed, "passed_over")
         for job, value in zip(jobs, values, strict=True):
-            if value is not None:
+            if isinstance(value, float):
                 self.store.set_score(job.id, score(value))
-        self.telemetry.scored(
-            postings=len(jobs), answered=len(jobs) - len(failed), seconds=round(time.monotonic() - started, 1),
-            scoring_model=self.config.decision_model,
-        )
-        return len(jobs) - len(failed)
+        answered = len(jobs) - len(failed) - sum(unjudged)
+        self.telemetry.scored(postings=len(jobs), answered=answered, seconds=round(time.monotonic() - started, 1), scoring_model=self.config.decision_model)
+        if any(unjudged):
+            raise NotAnswering
+        return answered
+
+    def resume_name(self) -> str:
+        """The name of the file the person gave as their resume; empty when it was not kept."""
+        name = self.config.data_dir / "cvs" / CV_NAME_FILE
+        return name.read_text(encoding="utf-8").strip() if name.is_file() else ""
 
     def _own_cv(self) -> Path:
         """The person's CV as they gave it, which goes with every form."""
@@ -167,15 +174,17 @@ class Session:
             raise ConfigError("your CV file is not kept: load your resume again")
         return kept[0]
 
-    async def send(self, items: list[Stored], log: Log, done: Callable[[], None]) -> list[tuple[Stored, Outcome]]:
-        """Send each application once; each with what came of it."""
+    async def send(
+        self, items: list[Stored], log: Log, begin: Callable[[int, int, Stored], None], done: Callable[[Stored, Outcome], None]
+    ) -> list[tuple[Stored, Outcome]]:
+        """Send each application once; each with what came of it. `begin` is told which one starts, of how many, and `done`
+        what came of each when it ends."""
         results = []
-        for item in items:
-            mark = SPEND.mark()
+        for number, item in enumerate(items, 1):
+            begin(number, len(items), item)
             outcome = await self.apply(item, log)
             results.append((item, outcome))
-            done()
-            log(f"{item.job.company}: {SENT_WORDS.get(outcome.status, outcome.status)}. {outcome.proof.evidence} ({money(SPEND.since(mark)[0])})".replace("  (", " ("))
+            done(item, outcome)
         return results
 
     async def apply(self, item: Stored, log: Log) -> Outcome:
@@ -196,7 +205,6 @@ class Session:
         started = time.monotonic()
         try:
             cv_file = self._own_cv()
-            log(f"{item.job.company}: filling the form")
             outcome = await apply_to_job(
                 self.client, self.config.model, job, cv, answers, cv_file, self.config.data_dir, self.config.browser_profile, guidance, account)
         except Exception as error:
@@ -214,8 +222,8 @@ class Session:
         # The file for the person outside the app. One that another program holds open must not stop the next send.
         try:
             write_applied(self.config.workspace / "applied.csv", self.store.sent())
-        except OSError as error:
-            log(f"applied.csv was not written: {error}")
+        except OSError:
+            log("applied.csv could not be saved. Close it if another program has it open.")
         return outcome
 
     async def _record(self, item: Stored, host: str, outcome: Outcome, mark: Mark) -> dict[str, tuple[int, int]]:
@@ -223,7 +231,7 @@ class Session:
         if outcome.made_account and (email := self.store.answers().get("email")):
             # Written whatever the form did: the account exists on that site either way, and the next form there signs in.
             self.store.set_account(host, email)
-        self.store.set_status(item.job.id, outcome.status, outcome.summary)
+        self.store.set_status(item.job.id, outcome.status, outcome.summary, outcome.reason)
         self.store.set_proof(item.job.id, outcome.proof)
         await SPEND.settle(self.client)
         cost, used = SPEND.since(mark)

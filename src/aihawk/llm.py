@@ -7,6 +7,7 @@ from typing import Any
 
 from openai import (
     APIConnectionError,
+    APIStatusError,
     APITimeoutError,
     AsyncOpenAI,
     AuthenticationError,
@@ -143,19 +144,28 @@ def refused(error: BaseException) -> bool:
     return isinstance(error, AuthenticationError)
 
 
+def not_answering(error: BaseException) -> bool:
+    """Whether the service failed to answer, not that it answered no: no connection, too slow, too busy, or broken on its side.
+    The same request can work a moment later, so the postings in it are asked about again, not set aside."""
+    if isinstance(error, APIConnectionError | RateLimitError):
+        return True
+    return isinstance(error, APIStatusError) and (error.status_code == 408 or error.status_code >= 500)
+
+
 def explain(error: Exception) -> str:
-    """What a failed model call says in plain words. The detail stays after it, and the key is never in it."""
+    """What a failed model call says in plain words and what to do about it. The error's own text stays out: it is for the
+    makers, and the key can be in it."""
     if isinstance(error, APITimeoutError):
-        return f"OrcaRouter did not answer in time. Try again in a moment. ({error})"
+        return "The AI service did not answer in time. Try again in a moment."
     if isinstance(error, APIConnectionError):
-        return f"OrcaRouter cannot be reached: check your internet connection and try again. ({error})"
+        return "Cannot reach the AI service. Check your internet connection."
     if isinstance(error, RateLimitError):
-        return f"OrcaRouter is asking AIHawk to slow down: wait a few minutes and try again. ({error})"
+        return "The AI service is busy. Wait a minute."
     if isinstance(error, InternalServerError):
-        return f"OrcaRouter failed on its side: try again in a few minutes. ({error})"
+        return "The AI service has a problem on its side. Try again in a few minutes."
     if isinstance(error, BadRequestError):
-        return f"OrcaRouter rejected the request. ({error})"
-    return f"Something failed: {error}"
+        return "The AI service did not accept the request."
+    return "Something went wrong. Try again in a moment."
 
 
 def make_client(config: Config) -> AsyncOpenAI:
