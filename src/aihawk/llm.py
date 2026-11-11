@@ -152,9 +152,29 @@ def not_answering(error: BaseException) -> bool:
     return isinstance(error, APIStatusError) and (error.status_code == 408 or error.status_code >= 500)
 
 
+def account_problem(error: BaseException) -> bool:
+    """Whether the service refused for what is about the account and not about one posting: no credit left (402), no right to
+    ask (403), or nothing there to ask (404). Asking again changes nothing, and nothing is set aside for it."""
+    return isinstance(error, APIStatusError) and error.status_code in (402, 403, 404)
+
+
+def no_credit(error: BaseException) -> bool:
+    """Whether the account's credit is finished: the service answers 402."""
+    return isinstance(error, APIStatusError) and error.status_code == 402
+
+
+def known(error: BaseException) -> bool:
+    """Whether `explain` has words for this kind of error. One it has none for is unexpected, and goes to the error log."""
+    return isinstance(error, APIConnectionError | RateLimitError | InternalServerError | BadRequestError) or account_problem(error)
+
+
 def explain(error: Exception) -> str:
     """What a failed model call says in plain words and what to do about it. The error's own text stays out: it is for the
     makers, and the key can be in it."""
+    if no_credit(error):
+        return "Your OrcaRouter credit is finished. Add credit at orcarouter.ai, then press → to go on."
+    if account_problem(error):
+        return "The AI service refused the request. Check your OrcaRouter account at orcarouter.ai, then press → to go on."
     if isinstance(error, APITimeoutError):
         return "The AI service did not answer in time. Try again in a moment."
     if isinstance(error, APIConnectionError):

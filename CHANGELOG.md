@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The jobs show up as they come: the first chunk is searched and read as soon as it is here, and the list grows after each chunk, with the rows you are reading held in place and the jobs you selected kept. The wait line counts megabytes and says about how long is left.
+- The key is tried when you paste it, and a key OrcaRouter does not accept is asked for again; Ctrl+C copies selected text instead of leaving, and Ctrl+O at the key question opens the address. Finished credit stops the scoring and the sending with a plain line, and no job is set aside for it.
+- A form that gets no answer from the AI service waits 20 to 60 seconds and goes on, instead of failing after 14. The browser's download is said on the screen and starts in the background once the jobs are all here. On Linux without a desktop or the browser's libraries, an application says so at once.
+- An unexpected error shows one plain line and writes its details to `errors.log` in the data folder, keys masked.
 - The install needs no git: the one-line command brings AIHawk's code as an archive, 7 MB where the clone of its repository was 180, and the first start is about a minute shorter. A start with no connection opens the copy already on the computer.
 - A request the AI service does not answer (no connection, too busy, down) no longer sets the jobs aside for good: they are asked again after a pause, and after four tries the screen says to press the right arrow. Jobs an earlier version set aside this way are read again. A search that finds nothing says so, an empty list says which key comes next, and a new search lists its own jobs only.
 - Sending says which job it is on, ends with one summary line, and marks each job in the list: ✓ sent, ? sent but not confirmed, ✗ not sent, with the reason in plain words. Quitting while applications are sent asks first. The key, resume, mail and send questions say what they are for, errors drop their technical tails, and the log shows three lines.

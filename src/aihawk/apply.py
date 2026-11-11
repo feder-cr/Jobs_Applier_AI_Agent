@@ -8,13 +8,16 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import ctypes.util
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,11 +31,18 @@ from openai import AsyncOpenAI
 
 from aihawk.config import DRY_RUN_ENV, KEY_ENV, dry_run
 from aihawk.database import Job
-from aihawk.llm import SPEND, chat, structured
+from aihawk.llm import SPEND, chat, not_answering, structured
 from aihawk.store import Proof, safe_name
 
 OPEN_DEADLINE_S = 900.0
 OPEN_RETRY_S = 10.0
+# A form makes about ten requests a minute, and the service's limit is a window of up to a minute: the client's own retries
+# last 14 seconds. A call that gets no answer waits these many seconds, or as long as the service says, and tries again.
+RATE_WAITS = (20, 40, 60, 60)
+RATE_WAIT_MAX = 120.0
+# Where the application tells the screen what it waits for: set by the one that runs it, so that what the model is sent
+# and the signature of apply_to_job stay as they are.
+NOTE: ContextVar[Callable[[str], None] | None] = ContextVar("note", default=None)
 # The mailbox may be reached this many times in one form: a code that is not there by then is not coming, and looking on costs
 # steps. A visit is an arrival from somewhere else; inside the mailbox the model moves about freely, since finding one message
 # takes several pages.
@@ -64,7 +74,30 @@ WHY_NOT_SENT = {
     REFUSED_BY_FORM: "the form refused it",
     DRY_RUN: "it was a trial, nothing is sent",
     "other": "the form could not be filled",
+    "no_credit": "your OrcaRouter credit is finished: add credit at orcarouter.ai",
+    "no_display": "the browser needs a desktop",
+    "browser_libraries": "the browser needs a few system packages",
 }
+
+PLATFORM = sys.platform
+# What the browser needs on Linux, which the person is told when it is missing: the first line is for Ubuntu 24.04, whose
+# libraries have a t64 in their names, and the second for Debian and the Ubuntus before it. Both checked with apt on 2026-11-12.
+APT_LINE = (
+    "sudo apt-get install -y libgtk-3-0t64 libasound2t64 libx11-xcb1 libdbus-glib-1-2"
+    " || sudo apt-get install -y libgtk-3-0 libasound2 libx11-xcb1 libdbus-glib-1-2"
+)
+
+
+def missing_for_the_browser() -> tuple[str, str] | None:
+    """On Linux the browser opens a window: with no desktop, or without the libraries a window needs, it cannot, and trying
+    would only wait for a download and then fail. The reason, and what to tell the person; None when it can open."""
+    if not PLATFORM.startswith("linux"):
+        return None
+    if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+        return "no_display", "The browser needs a desktop: run AIHawk on a computer with a screen."
+    if ctypes.util.find_library("gtk-3") is None:
+        return "browser_libraries", f"The browser needs a few system packages. On Debian or Ubuntu: {APT_LINE}"
+    return None
 
 
 def why_not_sent(reason: str) -> str:
@@ -361,7 +394,7 @@ class _Watch:
         """Why the run is going round in circles, when a model reading its last calls is sure of it; "" otherwise."""
         lines = "\n".join(call.line for call in self.calls[-LOOP_CHECK_CALLS:])
         try:
-            verdict = await structured(client, model, LOOP_CHECK_SYSTEM, lines, "loop_check", LOOP_CHECK_SCHEMA)
+            verdict = await patiently(lambda: structured(client, model, LOOP_CHECK_SYSTEM, lines, "loop_check", LOOP_CHECK_SCHEMA))
         except Exception:  # noqa: BLE001  A check that fails leaves the run to go on.
             return ""
         return str(verdict.get("reason", "")) if verdict.get("stuck") and float(verdict.get("confidence", 0)) >= LOOP_CHECK_SURE else ""
@@ -388,7 +421,7 @@ async def fill_form(session: Browser, tools: list[dict[str, Any]], client: Async
     messages: list[Any] = [{"role": "system", "content": instructions(guidance, page_rules)}, {"role": "user", "content": brief}]
     watch = _Watch()
     while True:
-        response, request_id = await chat(client, model=model, messages=messages, tools=[*tools, FINISH_TOOL])
+        response, request_id = await patiently(lambda: chat(client, model=model, messages=messages, tools=[*tools, FINISH_TOOL]))
         SPEND.note(model, getattr(response, "usage", None), request_id)
         message = response.choices[0].message
         messages.append(message.model_dump(exclude_none=True))
@@ -471,7 +504,7 @@ async def _address_now(session: Browser) -> str:
 async def _read_result(session: Browser, client: AsyncOpenAI, model: str, guidance: str, address: str) -> tuple[str, dict[str, Any]]:
     """The page's text, and what the verifying model makes of it after a send."""
     text = tool_text(await session.call_tool("browser_read_text", {"selector": "body"}))
-    return text, await structured(client, model, verify_system(guidance), f"The page's address: {address}\n\n{text}", "submit_outcome", VERIFY_SCHEMA)
+    return text, await patiently(lambda: structured(client, model, verify_system(guidance), f"The page's address: {address}\n\n{text}", "submit_outcome", VERIFY_SCHEMA))
 
 
 async def submit_and_verify(session: Browser, client: AsyncOpenAI, model: str, selector: str, summary: str, guidance: str, shot: Path) -> Outcome:
@@ -591,6 +624,51 @@ async def run_on_page(
     return replace(sent, made_account=report.made_account, steps=report.steps)
 
 
+def getting_the_browser(answer: str) -> str:
+    """What the server's answer to browser_open says, in a line for the screen, while the browser's engine comes down: how far
+    it is when the server says, else its size. Empty when the answer is about something else."""
+    if "engine" not in answer.lower():
+        return ""
+    if far := re.search(r"(\d+)% of (\d+) MB", answer):
+        return f"Getting the browser, only the first time: {far[1]}% of {far[2]} MB…"
+    if "verified" in answer or "extracted" in answer:
+        return "Getting the browser, only the first time: almost done…"
+    return "Getting the browser, only the first time: about 270 MB…"
+
+
+def retry_after(error: BaseException) -> float | None:
+    """How long the service asked to wait, in seconds, when its answer says so, never more than RATE_WAIT_MAX."""
+    headers = getattr(getattr(error, "response", None), "headers", None) or {}
+    for name, scale in (("retry-after-ms", 0.001), ("retry-after", 1.0)):
+        try:
+            seconds = float(headers.get(name)) * scale
+        except (TypeError, ValueError):
+            continue
+        if seconds > 0:
+            return min(seconds, RATE_WAIT_MAX)
+    return None
+
+
+async def patiently(call: Callable[[], Awaitable[Any]]) -> Any:
+    """One call to the model, asked again after a wait when the service does not answer it (too many requests, busy, no
+    connection): minutes of work on a form are not thrown away for a window of a minute. After the last wait the error is
+    the call's own. The screen is told while it waits, and again when it is working."""
+    for wait in (*RATE_WAITS, None):
+        try:
+            return await call()
+        except Exception as error:
+            if wait is None or not not_answering(error):
+                raise
+            seconds = retry_after(error) or wait
+            note = NOTE.get()
+            if note:
+                what = "asked to slow down" if getattr(error, "status_code", 0) == 429 else "is not answering"
+                note(f"The AI service {what}: waiting {round(seconds)} seconds…")
+            await asyncio.sleep(seconds)
+            if note:
+                note("")
+
+
 async def _open_browser(session: Browser, profile: Path) -> None:
     # While the engine downloads, the server answers with its progress instead of a browser. Its words are its own to
     # change: the browser is ready when it can go to a page, and an action on one that is not open is an error.
@@ -602,9 +680,13 @@ async def _open_browser(session: Browser, profile: Path) -> None:
             raise RuntimeError(f"the browser did not open: {tool_text(result)}")
         ready = await session.call_tool("browser_navigate", {"url": "about:blank"})
         if not ready.isError:
+            if told := NOTE.get():
+                told("")
             return
         if time.monotonic() > deadline:
             raise RuntimeError(f"the browser was not ready in time: {tool_text(result)}")
+        if (note := NOTE.get()) and (words := getting_the_browser(tool_text(result))):
+            note(words)
         await asyncio.sleep(OPEN_RETRY_S)
 
 
@@ -652,6 +734,8 @@ async def apply_to_job(
     account: tuple[str, str] | None = None,
 ) -> Outcome:
     """Open the browser on the person's profile, fill the job's form and send it: the person's selection and Enter came before."""
+    if (missing := missing_for_the_browser()) is not None:
+        return Outcome("blocked", missing[1], reason=missing[0])
     shot = data_dir / "proofs" / f"{safe_name(job.id)}.png"
     async with _server(cv_file.parent, data_dir / "browser") as (session, page_rules):
         listed = await session.list_tools()

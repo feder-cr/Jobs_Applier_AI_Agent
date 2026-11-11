@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import math
+import time
 import webbrowser
+from collections import deque
 from pathlib import Path
 from typing import ClassVar
 
@@ -12,13 +15,14 @@ from textual import events, on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
-from textual.widgets import DataTable, Footer, Static
+from textual.widgets import DataTable, Footer, Input, Static
 
+from aihawk import errors
 from aihawk.apply import MAILBOXES, Outcome, mail_provider, why_not_sent
 from aihawk.config import KEY_ENV, KEY_URL, ConfigError
 from aihawk.database import DatabaseError
-from aihawk.library import LibraryError
-from aihawk.llm import explain, refused
+from aihawk.library import LibraryError, Stopped
+from aihawk.llm import account_problem, explain, refused
 from aihawk.scoring import NotAnswering
 from aihawk.screens import WIDE_ENOUGH, Confirm, JobDetails, Rows, Said, SendBatch, SentList, Settings, SignIn, StopSending, TextPrompt, clipped
 from aihawk.session import Session
@@ -51,8 +55,10 @@ KEY_QUESTION = "Paste your OrcaRouter key"
 KEY_HINT = (
     "AIHawk uses OrcaRouter, a paid AI service, to read your resume and fill the forms: a few cents per application.\n"
     f"Get a key at {KEY_URL.removeprefix('https://www.')}\n"
-    "It stays on this computer · Enter saves · Esc later"
+    "Ctrl+O opens it in your browser · It stays on this computer\n"
+    "Enter saves · Esc later"
 )
+KEY_REFUSED = "OrcaRouter did not accept that key. Check it and paste it again."
 MAIL_LATER = "Mail left for later: e, then Your mail."
 MAIL_NAMES = {"gmail": "Gmail", "outlook": "Outlook"}
 RESUME_HINT = "PDF, .docx or text · Enter reads it · Esc later"
@@ -64,6 +70,9 @@ NO_JOBS = "No jobs found for these places and days. Press e to change them."
 # How long scoring waits after each request that got no answer, in seconds, before it asks again. After the last wait one more
 # failure stops it: the person asks again with the right arrow.
 RETRY_PAUSES = (15, 30, 60, 120)
+# The speed of a download is read from the last half minute of it, and not before it has run this long.
+SPEED_SECONDS = 30
+SPEED_AFTER = 3
 # The colour of a tried job's sign in the list: sent is green, sent but not confirmed is yellow, not sent is red.
 MARK_COLOURS = {"submitted": "green", "unconfirmed": "yellow", "refused": "red", "blocked": "red", "failed": "red"}
 
@@ -113,7 +122,7 @@ class AIHawk(App[None]):
         Binding("r", "new_resume", show=False),
         Binding("q", "quit", "Quit"),
         # Textual's own Ctrl+C only says "press ctrl+q", and an input under it copies: at any prompt Ctrl+C now leaves.
-        Binding("ctrl+c", "quit", show=False, priority=True),
+        Binding("ctrl+c", "leave", show=False, priority=True),
     ]
 
     def __init__(self, workspace: Path, resume: Path | None = None) -> None:
@@ -131,11 +140,23 @@ class AIHawk(App[None]):
         # again over the chunks come since the last one.
         self.progress: tuple[int, int] | None = None
         self.more_found = False
-        # The chunks this computer had when it was last short of the search's days, plus one.
-        self.ready_at = 0
+        # The bytes of the jobs here and the bytes they come to, and when each count was told: the last half minute of them gives
+        # the speed. Only one round of scoring runs at a time, whoever asks for it.
+        self.bytes: tuple[int, int] = (0, 0)
+        self.speed: deque[tuple[float, int]] = deque()
+        self.scoring = asyncio.Lock()
+        # Whether the person had to wait for the jobs, and was told they are all here; whether the first job was shown.
+        self.waited = False
+        self.told_ready = False
+        self.first_job_shown = False
+        # What the log says about scoring that did not go through, which the count of the download must not cover.
+        self.stuck = ""
         self.signing_in = False
-        # Why the key is being asked for again, for the question to say.
+        # Why the key is being asked for again, for the question to say; and whether the start stopped for want of one.
         self.key_problem = ""
+        self.sending = ""
+        self.waiting_for_key = False
+        self.restart = False
         self.columns_for = 0
         self.with_location = True
         # The room each of Company, Role and Location has, for the ellipsis where a word is cut.
@@ -205,7 +226,7 @@ class AIHawk(App[None]):
         """Says what went wrong, in plain words, and `then`, the next step. A key the AI service refused is forgotten when it
         came from the file, and asked for again."""
         if not refused(error):
-            self.say(f"{explain(error)}{then}")
+            self.say(f"{errors.explained(error)}{then}")
             return
         line = self.session.refuse_key()
         self.say(line)
@@ -253,6 +274,10 @@ class AIHawk(App[None]):
         for item in page:
             table.add_row(*self.row(item), key=item.job.id)
         self.show_count()
+        if page and not self.first_job_shown:
+            # The moment there is something to look at, for how long a person waits to see their first job.
+            self.first_job_shown = True
+            self.session.telemetry.step("first_jobs")
         ids = [item.job.id for item in page]
         if current in ids:
             table.move_cursor(row=ids.index(current))
@@ -280,7 +305,7 @@ class AIHawk(App[None]):
     @work(exclusive=True, group="flow")
     async def start(self) -> None:
         # A new search is a new list: its pages are made again.
-        self.pages, self.page, self.wanted = [], 0, None
+        self.pages, self.page, self.wanted, self.stuck = [], 0, None, ""
         self.refresh_jobs()
         session = self.session
         try:
@@ -291,16 +316,25 @@ class AIHawk(App[None]):
             if not session.mail()[1]:
                 session.telemetry.step("mail_asked")
                 session.telemetry.step("mail_ready" if await self.set_up_mail() else "mail_later")
-            # The jobs scored before, by an earlier search: the first pages, sorted as they are.
+            # The jobs scored before, by an earlier search: the first pages, sorted as they are. While the jobs still come
+            # there is the one page, the best so far, which each round of scoring makes again.
             scored = [item.job.id for item in session.store.all() if item.score is not None]
-            self.pages = [scored[start : start + PAGE] for start in range(0, len(scored), PAGE)]
+            complete = session.library.complete()
+            if complete:
+                self.pages = [scored[start : start + PAGE] for start in range(0, len(scored), PAGE)]
+            else:
+                self.pages = [scored[:PAGE]] if scored else []
             self.refresh_jobs()
-            # The jobs come in the background, a chunk at a time: those of the days the search looks back, all of them
-            # before anything is searched, so the first matches are the best ones.
+            # The jobs come in the background, a chunk at a time, the newest first. What is here is searched as soon as there is
+            # something, and again after each chunk.
             self.bring_jobs()
-            if not session.library.ready():
+            if not complete:
                 session.telemetry.step("jobs_downloading")
+                self.waited = True
                 self.show_progress()
+            else:
+                session.bring_engine()
+            if not session.library.has_postings():
                 return
             await session.find()
             await self.score()
@@ -326,14 +360,27 @@ class AIHawk(App[None]):
         """The key asked for and kept; False when the person has none for now."""
         telemetry = self.session.telemetry
         telemetry.step("key_asked")
-        key = await self.key_prompt()
+        key = await self.take_key()
         if not key:
             telemetry.step("key_missing")
             self.say(NO_KEY, again=True)
+            self.waiting_for_key = True
             return False
         self.session.save_key(key)
         telemetry.step("key_saved")
         return True
+
+    async def take_key(self) -> str | None:
+        """A key the person pasted and the service accepts, or None when they leave the question. A key it refuses is asked for
+        again, with why in the question. One it cannot answer for, with no connection, is kept: the check never blocks."""
+        while True:
+            key = await self.key_prompt()
+            if not key:
+                return None
+            self.say("Checking the key…", again=True)
+            if await self.session.key_accepted(key):
+                return key
+            self.key_problem = KEY_REFUSED
 
     async def read_resume(self) -> bool:
         """The resume given on the command line or asked for, until it is a file, and read; False when the person has none for now."""
@@ -352,7 +399,7 @@ class AIHawk(App[None]):
                 self.say("No file at that path.")
                 path = None
         self.resume = None
-        self.say(f"Reading {path.name}…", again=True)
+        self.say("Reading your resume: about half a minute…", again=True)
         try:
             await self.session.load_resume(path)
         except Exception as error:
@@ -372,7 +419,7 @@ class AIHawk(App[None]):
 
     async def key_prompt(self) -> str | None:
         problem, self.key_problem = self.key_problem, ""
-        return await self.push_screen_wait(TextPrompt(KEY_QUESTION, placeholder="sk-orca-...", password=True, hint=KEY_HINT, problem=problem))
+        return await self.push_screen_wait(TextPrompt(KEY_QUESTION, placeholder="sk-orca-...", password=True, hint=KEY_HINT, problem=problem, link=KEY_URL))
 
     async def resume_prompt(self) -> Path | None:
         """The file the person names, as a path; None when they name none."""
@@ -396,27 +443,53 @@ class AIHawk(App[None]):
         reserve: Jev reads the next round while the person reads, so a page they turn to is there. A round takes Jev a few
         seconds; until the first jobs are on this computer, the line below counts the chunks coming. A round the AI service
         does not answer is asked again after a pause that grows, and after the last one the person is told how to ask."""
+        async with self.scoring:
+            await self.read_rounds()
+
+    async def read_rounds(self) -> None:
+        """The rounds themselves, one at a time. While the jobs still come every job found is read, the best first, and the
+        page shown is made again after each round; when they are all here, only as many as the pages need."""
         session = self.session
         store = session.store
         failures = 0
         while True:
             self.make_pages()
-            if not store.with_status("new") or (len(self.pages) >= self.page + 2 and len(self.spare()) >= AHEAD):
+            complete = session.library.complete()
+            if not store.with_status("new") or (complete and len(self.pages) >= self.page + 2 and len(self.spare()) >= AHEAD):
                 break
             self.show_progress()
             try:
                 await session.read(self.say)
             except NotAnswering:
                 if failures == len(RETRY_PAUSES):
-                    self.say("Still no answer. Check your connection, then press → to try again.", again=True)
+                    self.stuck = "Still no answer. Check your connection, then press → to try again."
+                    self.say(self.stuck, again=True)
                     return
-                self.say(f"The AI service is not answering. Trying again in {RETRY_PAUSES[failures]} seconds…", again=True)
+                self.stuck = f"The AI service is not answering. Trying again in {RETRY_PAUSES[failures]} seconds…"
+                self.say(self.stuck, again=True)
                 await asyncio.sleep(RETRY_PAUSES[failures])
                 failures += 1
+            except Exception as error:
+                if not account_problem(error):
+                    raise
+                # Asking again changes nothing until the account does: the jobs stay as they were, and the person is told what to do.
+                self.stuck = explain(error)
+                self.say(self.stuck, again=True)
+                return
             else:
                 failures = 0
+                self.stuck = ""
         self.make_pages()
         self.check_empty()
+
+    async def read_new(self) -> None:
+        """The jobs a search just found are read, unless an application holds the browser: it ends by asking again."""
+        if self.applying():
+            return
+        try:
+            await self.score()
+        except Exception as error:  # noqa: BLE001  Said on the screen, as in start.
+            self.failed(error)
 
     def check_empty(self) -> None:
         """Says so when the search is over and found no job: not while the jobs are still coming, or some wait to be read."""
@@ -428,7 +501,9 @@ class AIHawk(App[None]):
     async def bring_jobs(self) -> None:
         """The database brought to this computer, the newest jobs first; each chunk that comes is searched."""
         try:
-            await self.session.sync(self.chunks_came, self.found_more)
+            await self.session.sync(self.chunks_came, self.found_more, self.bytes_came)
+        except Stopped:
+            pass
         except (LibraryError, DatabaseError) as error:
             self.say(str(error))
         except Exception as error:  # noqa: BLE001  Said on the screen, as in start.
@@ -439,25 +514,47 @@ class AIHawk(App[None]):
                 self.refresh_jobs()
 
     def chunks_came(self, done: int, size: int) -> None:
-        # Whether the person was waiting for the jobs: told by the count before this chunk, not by this one's.
-        waiting = self.progress is not None and self.progress[0] < self.ready_at
         self.progress = (done, size)
-        if not self.session.library.ready():
-            self.ready_at = done + 1
         if not self.is_running:
             return
-        self.refresh_jobs()
-        if waiting and self.session.library.ready():
+        if self.session.library.complete() and self.waited and not self.told_ready:
             # The count of the wait gives way: the person sees it is over.
+            self.told_ready = True
             self.session.telemetry.step("jobs_ready", chunks=done)
-            self.query_one(Said).say("Ready.", again=True)
+            self.query_one(Said).say("All the jobs are here.", again=True)
+            self.session.bring_engine()
         else:
             self.show_progress()
 
+    def bytes_came(self, done: int, total: int) -> None:
+        """How many bytes of the jobs are here, of how many. Told at least every two seconds while a chunk comes."""
+        now = time.monotonic()
+        self.bytes = (done, total)
+        self.speed.append((now, done))
+        while len(self.speed) > 2 and now - self.speed[0][0] > SPEED_SECONDS:
+            self.speed.popleft()
+        if self.is_running and not self.session.library.complete():
+            self.show_progress()
+
+    def download_line(self) -> str:
+        """The wait for the jobs on one line: how many bytes are here of how many, about how long is left once the speed is
+        known, and whether there is something to look at already."""
+        done, total = self.bytes
+        below = "The first ones are already below." if self.pages and self.pages[0] else "The first ones appear in a moment."
+        if not total:
+            return f"Getting the jobs, first time only: {int(self.session.library.readiness() * 100)}%. {below}"
+        line = f"Getting the jobs, first time only: {done / 1e6:.0f} of {total / 1e6:.0f} MB"
+        start, first = self.speed[0] if self.speed else (0.0, 0)
+        end, last = self.speed[-1] if self.speed else (0.0, 0)
+        if len(self.speed) > 1 and end - start >= SPEED_AFTER and last > first:
+            left = (total - done) / ((last - first) / (end - start))
+            line += ", less than a minute left" if left <= 60 else f", about {math.ceil(left / 60)} minutes left"
+        return f"{line}. {below}"
+
     def found_more(self) -> None:
-        """New jobs on this computer: the search runs again over them, once for however many came while it ran. Not
-        before every chunk of the search's days is here."""
-        if not self.session.library.ready():
+        """New jobs on this computer: the search runs again over them, once for however many came while it ran. As soon as
+        the first chunk is here, and after each one."""
+        if not self.session.library.has_postings():
             return
         self.more_found = True
         if self.is_running and not any(worker.group == "find" and worker.is_running for worker in self.workers):
@@ -469,7 +566,7 @@ class AIHawk(App[None]):
             while self.more_found and self.is_running:
                 self.more_found = False
                 await self.session.find()
-                self.keep_ahead()
+                await self.read_new()
                 self.check_empty()
         except DatabaseError as error:
             self.say(str(error))
@@ -482,6 +579,9 @@ class AIHawk(App[None]):
     def make_pages(self) -> None:
         """Pages from the jobs scored and not on one, up to the one after the page shown. A page is PAGE of them, sorted
         once; a shorter one only when Jev has nothing left to read. A page the person waited for opens."""
+        if not self.session.library.complete():
+            self.live_page()
+            return
         said = self.query_one(Said)
         while len(self.pages) < self.page + 2:
             spare = self.spare()
@@ -497,14 +597,43 @@ class AIHawk(App[None]):
                 said.say(f"Page {number} ready.", again=True)
             self.refresh_jobs()
 
-    def show_progress(self) -> None:
-        """How far the page the person waits for is, on one line: only while they wait, the first page or one turned to.
-        Until the jobs of the search's days are on this computer, how far that is."""
-        if self.wanted is None and len(self.pages) > self.page and self.session.library.ready():
+    def live_page(self) -> None:
+        """While the jobs still come there is the one page, the best of what is scored so far, and it is made again after each
+        round: the rows from the top to the cursor are kept as they are, so what the person is reading does not move; a job they
+        selected stays; the rest of the page is the best of the others. What does not fit is in the reserve, for the later
+        pages. With the cursor on the first row nothing is kept, and the page is just the best so far."""
+        ranked = [item.job.id for item in self.session.store.all() if item.score is not None]
+        if not ranked:
             return
+        rank = {job_id: number for number, job_id in enumerate(ranked)}
+        shown = self.pages[0] if self.pages else []
+        table = self.query_one(DataTable)
+        row = table.cursor_row if table.row_count else 0
+        held = [job_id for job_id in shown[: row + 1] if job_id in rank] if row > 0 else []
+        chosen = [job_id for job_id in self.selected if job_id in rank and job_id not in held]
+        taken = {*held, *chosen}
+        room = max(PAGE - len(held) - len(chosen), 0)
+        page = [*held, *sorted([*chosen, *[job_id for job_id in ranked if job_id not in taken][:room]], key=rank.__getitem__)]
+        if self.wanted == 0:
+            self.wanted = None
+        if page != shown:
+            self.pages = [page]
+            self.refresh_jobs()
+            if not row:
+                # A person who has not moved down the page is reading from its top: that is the best job, whichever it is now.
+                table.move_cursor(row=0)
+            # The line of the wait says there is something to look at.
+            self.show_progress()
+
+    def show_progress(self) -> None:
+        """The one line that says what is being waited for: the jobs coming, with how far and how long, or the scoring of them,
+        which only the first page or one turned to waits on. A scoring that did not go through keeps its own line."""
         said = self.query_one(Said)
-        if not self.session.library.ready():
-            said.say(f"Getting the jobs: only the first time, a few minutes. {int(self.session.library.readiness() * 100)}%", again=True)
+        if not self.session.library.complete():
+            if not self.stuck:
+                said.say(self.download_line(), again=True)
+            return
+        if self.wanted is None and len(self.pages) > self.page:
             return
         said.say("Reading the jobs against your resume…", again=True)
 
@@ -517,6 +646,9 @@ class AIHawk(App[None]):
         if not self.pages:
             # No page yet: the arrow asks for the first, which is what the person who sees an empty list is trying.
             target = 0
+        elif target >= len(self.pages) and not self.session.library.complete():
+            self.say("More pages when all the jobs are here.", again=True)
+            return
         if target < len(self.pages):
             self.page = target
             self.wanted = None
@@ -657,6 +789,9 @@ class AIHawk(App[None]):
             self.say("Searching again.")
             self.forget_untried()
             self.start()
+        elif self.restart:
+            self.restart = False
+            self.start()
 
     def mail_words(self) -> str:
         email, provider = self.session.mail()
@@ -737,9 +872,27 @@ class AIHawk(App[None]):
         if config.key_from_environment():
             self.say(f"The key comes from the {KEY_ENV} variable, which wins over one typed here.")
             return
-        key = await self.key_prompt()
+        key = await self.take_key()
         if key:
             self.session.save_key(key)
+            if self.waiting_for_key:
+                # The start stopped for want of a key: with one, it goes on with the resume and the rest.
+                self.waiting_for_key = False
+                self.restart = True
+
+    def action_leave(self) -> None:
+        """Ctrl+C: copies what is selected on the screen and stays, as everywhere else; with nothing selected it leaves."""
+        focused = self.focused
+        if isinstance(focused, Input) and not focused.password and focused.selected_text:
+            focused.action_copy()
+            return
+        selected = self.screen.get_selected_text()
+        if selected:
+            self.copy_to_clipboard(selected)
+            self.screen.clear_selection()
+            self.notify("Copied.", timeout=2)
+            return
+        self.action_quit()
 
     def action_new_resume(self) -> None:
         self.new_resume()
@@ -815,7 +968,13 @@ class AIHawk(App[None]):
 
     def started(self, number: int, total: int, item: Stored) -> None:
         """The line while a batch is sent: which one it is on, and that the person can watch the browser. It changes in place."""
-        self.say(f"Sending {number} of {total}: {item.job.company}. A few minutes each; you can watch the browser.", again=True)
+        self.sending = f"Sending {number} of {total}: {item.job.company}. A few minutes each; you can watch the browser."
+        self.say(self.sending, again=True)
+
+    def waiting_note(self, line: str) -> None:
+        """What an application waits for, in the line of the batch: the service asked it to slow down, or the browser is coming.
+        An empty line is the work going on again."""
+        self.say(line or self.sending, again=True)
 
     def ended(self, item: Stored, outcome: Outcome) -> None:
         """What came of one application, in a line, and the list's sign for it."""
@@ -831,7 +990,7 @@ class AIHawk(App[None]):
     async def send(self, items: list[Stored]) -> list[tuple[Stored, Outcome]]:
         """The applications, each with what came of it; a failure is said on the screen, and the batch stops where it failed."""
         try:
-            return await self.session.send(items, self.say, self.started, self.ended)
+            return await self.session.send(items, self.say, self.started, self.ended, self.waiting_note)
         except Exception as error:  # noqa: BLE001  Said on the screen, as in start.
             self.failed(error)
             return []

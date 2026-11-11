@@ -11,8 +11,9 @@ from typing import Any
 
 from openai import APIStatusError, AsyncOpenAI
 
+from aihawk import errors
 from aihawk.database import Job
-from aihawk.llm import explain, not_answering, refused
+from aihawk.llm import account_problem, not_answering, refused
 
 DESCRIPTION_CHARS = 24000
 DECISION_ENDPOINT = "/systemone"
@@ -89,15 +90,16 @@ async def _read(client: AsyncOpenAI, model: str, cv: str, jobs: list[Job], asked
     try:
         reply = await client.post(DECISION_ENDPOINT, body=request_body(model, cv, jobs, asked), cast_to=dict)
     except Exception as error:
-        # A refused key fails every request alike: splitting would only ask again, so it is raised for the screen.
-        if refused(error):
+        # A refused key, or an account with no credit, fails every request alike: splitting would only ask again, so it is raised
+        # for the screen, and no posting is set aside for it.
+        if refused(error) or account_problem(error):
             raise
         if too_large(error) and len(jobs) > 1:
             middle = len(jobs) // 2
             return [*await _read(client, model, cv, jobs[:middle], asked, why), *await _read(client, model, cv, jobs[middle:], asked, why)]
         if not_answering(error):
             return [NOT_JUDGED] * len(jobs)
-        why(explain(error))
+        why(errors.explained(error))
         return [None] * len(jobs)
     answers = reply.get("answers") or {}
     values = [_verdict(answers, index) for index in range(len(jobs))]

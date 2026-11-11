@@ -12,6 +12,8 @@ from __future__ import annotations
 import errno
 import json
 import shutil
+import threading
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -27,10 +29,21 @@ COLUMNS = ("url", "title", "company", "location", "country", "posted_at", "descr
 STATE = "state.json"
 # Deltas kept apart before they are merged into one: a search reads them all, and a computer used every day gets five.
 DELTAS_APART = 8
+# A download is read this many bytes at a time, and the person is told how far it is no more often than every half second.
+READ_BYTES = 1 << 18
+TELL_EVERY = 0.5
 
 
 class LibraryError(Exception):
-    """The database cannot be brought to this computer."""
+    """The database cannot be brought to this computer. `status` is the server's answer when it gave one, such as 404."""
+
+    def __init__(self, message: str, status: int = 0) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+class Stopped(LibraryError):
+    """The download was stopped because AIHawk is closing."""
 
 
 def _literal(paths: list[Path]) -> str:
@@ -47,6 +60,9 @@ class Library:
         # The days a search looks back: only the chunks holding postings that new are downloaded, all of them before a
         # search runs. None: every chunk. The owner's decision of 2026-11-09, with 15 days by default.
         self.days: int | None = None
+        # Set when AIHawk closes: a download in its thread stops at its next part, instead of going on for minutes after the
+        # screen is gone.
+        self.stopping = threading.Event()
         if (folder / STATE).is_file():
             try:
                 self.state = json.loads((folder / STATE).read_text(encoding="utf-8"))
@@ -87,8 +103,17 @@ class Library:
         total = sum(int(chunk.get("rows", 0)) or 1 for chunk in needed)
         return sum(int(chunk.get("rows", 0)) or 1 for chunk in needed if chunk["name"] in have) / total if total else 1.0
 
-    def ready(self) -> bool:
-        return self.complete()
+    def has_postings(self) -> bool:
+        """Whether anything is here to search: the first chunk or the first delta is enough for a search to run, and each one
+        that comes after makes it find more."""
+        return bool(self.chunk_files() or self.delta_files())
+
+    def bytes_of_needed(self) -> tuple[int, int]:
+        """The bytes of the chunks a search over `days` reads that are here, and of all of them. 0 for both when the manifest
+        gives no sizes."""
+        have = set(self.state.get("have", []))
+        needed = self.needed()
+        return sum(int(chunk.get("bytes", 0)) for chunk in needed if chunk["name"] in have), sum(int(chunk.get("bytes", 0)) for chunk in needed)
 
     def view(self, connection: duckdb.DuckDBPyConnection) -> bool:
         """`postings`, in this connection: every posting here at its newest, with `described` saying whether it has a text.
@@ -129,10 +154,14 @@ class Library:
 
     # Bringing it here.
 
-    def sync(self, manifest: dict[str, Any], location: str, progress: Callable[[int, int], None] = lambda done, size: None, arrived: Callable[[], None] = lambda: None) -> None:
+    def sync(
+        self, manifest: dict[str, Any], location: str, progress: Callable[[int, int], None] = lambda done, size: None, arrived: Callable[[], None] = lambda: None,
+        on_bytes: Callable[[int, int], None] = lambda done, total: None,
+    ) -> None:
         """This computer's database brought to the manifest's build: the deltas it has not seen, then the chunks it does not
-        have, one at a time, `arrived` told after each that changes what a search finds, and `progress` the chunks here of
-        how many. A delta chain that cannot be followed, or a build the dataset no longer has, starts over from the newest."""
+        have, one at a time, `arrived` told after each that changes what a search finds, `progress` the chunks here of how
+        many, and `on_bytes` the bytes here of the bytes the chunks come to, at least every half second while one downloads.
+        A delta chain that cannot be followed, or a build the dataset no longer has, starts over from the newest."""
         base = manifest.get("base_url") or location.replace("\\", "/").rsplit("/", 1)[0]
         if not self.state or self._chain(manifest) is None:
             self._start(manifest, base)
@@ -147,21 +176,37 @@ class Library:
         needed = self.needed()
         total = len(needed)
         progress(sum(1 for chunk in needed if chunk["name"] in self.state["have"]), total)
+        here, size = self.bytes_of_needed()
+        on_bytes(here, size)
         for chunk in needed:
             if chunk["name"] in self.state["have"]:
                 continue
+            told = 0.0
+            partial = 0
+
+            def read(count: int, here: int = here, size: int = size) -> None:
+                nonlocal partial, told
+                if self.stopping.is_set():
+                    raise Stopped("The download was stopped.")
+                partial += count
+                if time.monotonic() - told >= TELL_EVERY:
+                    told = time.monotonic()
+                    on_bytes(here + partial, size)
+
             try:
-                self._fetch(f"{self.state['base_url']}/{chunk['name']}", self.chunks / chunk["name"])
+                self._fetch(f"{self.state['base_url']}/{chunk['name']}", self.chunks / chunk["name"], read)
             except LibraryError as error:
-                gone = "(404)" in str(error) or "(401)" in str(error)
+                gone = error.status in (401, 404)
                 if not gone or self.state["build"] == manifest["build"]:
                     raise
                 # The build this computer started from is gone from the dataset: the newest one, from the start.
                 self._start(manifest, base)
-                self.sync(manifest, location, progress, arrived)
+                self.sync(manifest, location, progress, arrived, on_bytes)
                 return
             self.state["have"].append(chunk["name"])
             self._save()
+            here, size = self.bytes_of_needed()
+            on_bytes(here, size)
             progress(sum(1 for each in needed if each["name"] in self.state["have"]), total)
             arrived()
 
@@ -216,19 +261,27 @@ class Library:
         partial.replace(self.folder / STATE)
 
     @staticmethod
-    def _fetch(source: str, path: Path) -> None:
-        """A file into `path`, in one rename at the end: a search never reads half of one."""
+    def _fetch(source: str, path: Path, read: Callable[[int], None] = lambda count: None) -> None:
+        """A file into `path`, in one rename at the end: a search never reads half of one. `read` is told how many bytes
+        each part of it was."""
         path.parent.mkdir(parents=True, exist_ok=True)
         partial = path.with_suffix(".part")
         try:
             if source.startswith(("http://", "https://")):
-                with urllib.request.urlopen(urllib.request.Request(source, headers={"User-Agent": "AIHawk"}), timeout=120) as response, partial.open("wb") as out:
-                    shutil.copyfileobj(response, out, 1 << 20)
+                opened = urllib.request.urlopen(urllib.request.Request(source, headers={"User-Agent": "AIHawk"}), timeout=120)
             else:
-                shutil.copyfile(source, partial)
+                opened = open(source, "rb")  # noqa: SIM115  Closed by the with below.
+            with opened as response, partial.open("wb") as out:
+                while part := response.read(READ_BYTES):
+                    out.write(part)
+                    read(len(part))
+        except Stopped:
+            partial.unlink(missing_ok=True)
+            raise
         except OSError as error:
             partial.unlink(missing_ok=True)
             if error.errno == errno.ENOSPC:
                 raise LibraryError("The disk is full. AIHawk needs about 2 GB free for the jobs. Free some space, then start AIHawk again.") from error
-            raise LibraryError("Cannot download the jobs. Check your internet connection, then start AIHawk again.") from error
+            status = error.code if isinstance(error, urllib.error.HTTPError) else 0
+            raise LibraryError("Cannot download the jobs. Check your internet connection, then start AIHawk again.", status) from error
         partial.replace(path)
