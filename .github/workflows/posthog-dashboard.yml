@@ -21,5 +21,6 @@ jobs:
           python-version: "3.12"
       - name: Make the dashboard
         env:
-          POSTHOG_DASHBOARD_KEY: ${{ secrets.POSTHOG_DASHBOARD_KEY }}
+          # A key of its own that can write dashboards, or else the snapshot's key, if it can.
+          POSTHOG_DASHBOARD_KEY: ${{ secrets.POSTHOG_DASHBOARD_KEY || secrets.POSTHOG_API_KEY }}
         run: python scripts/posthog_dashboard.py
