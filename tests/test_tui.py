@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -14,7 +15,7 @@ import duckdb
 import httpx
 import pytest
 from click.testing import CliRunner
-from openai import APIConnectionError, APITimeoutError, AuthenticationError, InternalServerError, RateLimitError
+from openai import APIConnectionError, APIStatusError, APITimeoutError, AuthenticationError, InternalServerError, RateLimitError
 from pypdf import PdfWriter
 from textual.widgets import DataTable, Input, RichLog, Static
 
@@ -26,6 +27,7 @@ from aihawk.apply import Outcome
 from aihawk.cli import main as cli_main
 from aihawk.config import Config, ConfigError, load_config
 from aihawk.database import Job
+from aihawk.library import Library
 from aihawk.llm import explain
 from aihawk.profile import import_answers_file, install_resume, read_resume
 from aihawk.screens import Confirm, JobDetails, Said, SendBatch, SentDetails, SentList, Settings, SignIn, StopSending, TextPrompt
@@ -538,9 +540,11 @@ def test_a_start_says_each_step_and_closing_says_where_it_was_and_whether_it_sea
 
     asyncio.run(run())
     steps = [event["properties"]["step"] for event in tracked if event["event"] == "start_step"]
-    assert steps == ["resume_read", "jobs_downloading", "jobs_ready"]
+    # The first job is on screen once, and the jobs are all here once; which comes first depends on how fast the chunks come.
+    assert steps[:2] == ["resume_read", "jobs_downloading"] and sorted(steps[2:]) == ["first_jobs", "jobs_ready"]
     (closed,) = [event for event in tracked if event["event"] == "app_closed"]
     assert closed["properties"]["searched"] is True and closed["properties"]["last_step"] == steps[-1]
+    assert all(isinstance(event["properties"]["seconds"], float) for event in tracked if event["properties"].get("step") == "first_jobs")
 
 
 def test_a_resume_that_cannot_be_read_is_one_event_with_its_kind_and_not_two(home: Path, tmp_path: Path, tracked: list[dict[str, Any]]) -> None:
@@ -1554,7 +1558,8 @@ def test_the_key_prompt_says_what_orcarouter_is_that_it_costs_and_that_esc_is_al
             assert hint[0] == "AIHawk uses OrcaRouter, a paid AI service, to read your resume and fill the forms: a few cents per application."
             # The address on a line of its own, whole, the referral path in it.
             assert hint[1] == "Get a key at orcarouter.ai/ref/ref_accd17afb78fc95ac4d7"
-            assert hint[2] == "It stays on this computer · Enter saves · Esc later"
+            assert hint[2] == "Ctrl+O opens it in your browser · It stays on this computer"
+            assert hint[3] == "Enter saves · Esc later"
             rows = [row.rstrip() for row in ["".join(segment.text for segment in strip) for strip in app.screen._compositor.render_strips()]]
             assert any("orcarouter.ai/ref/ref_accd17afb78fc95ac4d7" in row for row in rows)
 
@@ -1764,5 +1769,613 @@ def test_the_log_shows_three_lines_so_a_message_of_three_lines_is_whole(home: Pa
             await pilot.pause(0.2)
             shown = [row.rstrip() for row in ["".join(segment.text for segment in strip) for strip in app.screen._compositor.render_strips()]]
             assert sum(row.lstrip().startswith("word") for row in shown) >= 3
+
+    asyncio.run(run())
+
+
+def two_chunk_home(home: Path, tmp_path: Path) -> None:
+    """The home's database in two chunks, as the pipeline publishes them: one with a posting that has a text, one with a title only."""
+    connection = duckdb.connect()
+    connection.execute("CREATE TABLE t (key VARCHAR, url VARCHAR, title VARCHAR, company VARCHAR, location VARCHAR, description VARCHAR, posted_at VARCHAR)")
+    connection.executemany(
+        "INSERT INTO t VALUES (?, ?, ?, ?, 'Milan', ?, NULL)",
+        [("high", "https://jobs.lever.co/beta/2", "Senior Python Engineer", "Bestco", "A posting. " * 30), ("low", "https://jobs.lever.co/acme/1", "Python Engineer", "Lowly", "A posting.")],
+    )
+    site = tmp_path / "two"
+    site.mkdir()
+    (home / "aihawk.yaml").write_text(f"database: {publish(connection, site, 2)}\n", encoding="utf-8")
+
+
+def hold_second_chunk(monkeypatch: pytest.MonkeyPatch) -> threading.Event:
+    """The second chunk waits for the event the test sets: the jobs come one chunk at a time, as they do over a slow line."""
+    gate = threading.Event()
+    fetch = Library._fetch
+
+    def slow(source: str, path: Path, read: Any = lambda count: None) -> None:
+        if path.name.startswith("titles_"):
+            gate.wait(20)
+        fetch(source, path, read)
+
+    monkeypatch.setattr(Library, "_fetch", staticmethod(slow))
+    return gate
+
+
+def test_the_jobs_of_the_first_chunk_are_shown_while_the_rest_still_comes_and_the_first_page_freezes_when_all_are_here(
+    home: Path, resume: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tracked: list[dict[str, Any]]
+) -> None:
+    two_chunk_home(home, tmp_path)
+    gate = hold_second_chunk(monkeypatch)
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        async with app.run_test(size=(120, 40)) as pilot:
+            for _ in range(200):
+                await pilot.pause(0.05)
+                if companies(app):
+                    break
+            assert companies(app) == ["Bestco"] and not app.session.library.complete()
+            line = last_line(app)
+            assert line.startswith("Getting the jobs, first time only:") and line.endswith(" MB. The first ones are already below.")
+            await pilot.press("space")
+            assert app.selected == {"https://jobs.lever.co/beta/2"}
+            gate.set()
+            await settle(pilot, app)
+            await pilot.pause(0.3)
+            assert app.session.library.complete()
+            # Page 1 is as it was when the jobs were all here; the job that came after is on the next.
+            assert app.pages == [["https://jobs.lever.co/beta/2"], ["https://jobs.lever.co/acme/1"]]
+            assert last_line(app) in ("All the jobs are here.", "Page 2 ready.")
+
+    asyncio.run(run())
+    steps = [event["properties"]["step"] for event in tracked if event["event"] == "start_step"]
+    assert steps.count("first_jobs") == 1 and steps.count("jobs_ready") == 1 and steps.index("first_jobs") < steps.index("jobs_ready")
+
+
+def test_while_the_jobs_come_the_right_arrow_says_when_more_pages_come(home: Path, resume: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    two_chunk_home(home, tmp_path)
+    gate = hold_second_chunk(monkeypatch)
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        async with app.run_test(size=(120, 40)) as pilot:
+            for _ in range(200):
+                await pilot.pause(0.05)
+                if companies(app):
+                    break
+            await pilot.press("right")
+            assert last_line(app) == "More pages when all the jobs are here."
+            assert app.page == 0
+            gate.set()
+            await settle(pilot, app)
+
+    asyncio.run(run())
+
+
+def live_app(home: Path, monkeypatch: pytest.MonkeyPatch, count: int, page: int) -> AIHawk:
+    """An app whose jobs are still coming, with `count` scored jobs, the best first: job 0 is the best."""
+    monkeypatch.setattr(tui_module, "PAGE", page)
+    app = AIHawk(home)
+    app.start = lambda: None  # type: ignore[method-assign]
+    for number in range(count):
+        job = Job(f"j{number:02d}", f"Firm {number:02d}", "Engineer", "Milan", f"https://x.example/{number:02d}", f"https://x.example/{number:02d}", "")
+        app.session.store.add(job)
+        app.session.store.set_score(job.id, 5.0 - number / 10)
+    app.session.library.complete = lambda: False  # type: ignore[method-assign]
+    return app
+
+
+def shown(app: AIHawk) -> list[str]:
+    return [str(row[2]).replace("Firm ", "") for row in (app.query_one(DataTable).get_row_at(index) for index in range(app.query_one(DataTable).row_count))]
+
+
+def test_the_live_page_with_the_cursor_on_the_first_row_is_just_the_best_so_far(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def run() -> None:
+        app = live_app(home, monkeypatch, 4, 3)
+        async with app.run_test(size=(120, 40)) as pilot:
+            app.make_pages()
+            await pilot.pause(0.1)
+            assert shown(app) == ["00", "01", "02"]
+            # A better job is scored: it takes the top, and the one it pushes out is in the reserve.
+            job = Job("best", "Firm best", "Engineer", "Milan", "https://x.example/best", "https://x.example/best", "")
+            app.session.store.add(job)
+            app.session.store.set_score("best", 5.5)
+            app.make_pages()
+            await pilot.pause(0.1)
+            assert shown(app) == ["best", "00", "01"] and app.spare()[:2] == ["j02", "j03"]
+            # The cursor is on the first row still: the best job, not the one it was on before.
+            assert app.query_one(DataTable).cursor_row == 0 and app.current_id() == "best"
+
+    asyncio.run(run())
+
+
+def test_the_live_page_keeps_the_rows_down_to_the_cursor_where_they_are_and_the_cursor_on_its_job(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def run() -> None:
+        app = live_app(home, monkeypatch, 6, 4)
+        async with app.run_test(size=(120, 40)) as pilot:
+            app.make_pages()
+            await pilot.pause(0.1)
+            assert shown(app) == ["00", "01", "02", "03"]
+            app.query_one(DataTable).move_cursor(row=1)
+            job = Job("best", "Firm best", "Engineer", "Milan", "https://x.example/best", "https://x.example/best", "")
+            app.session.store.add(job)
+            app.session.store.set_score("best", 5.5)
+            app.make_pages()
+            await pilot.pause(0.1)
+            # Rows 0 and 1 are as they were; the better job comes after them, above the rest.
+            assert shown(app) == ["00", "01", "best", "02"]
+            assert app.current_id() == "j01" and app.query_one(DataTable).cursor_row == 1
+
+    asyncio.run(run())
+
+
+def test_a_selected_job_stays_on_the_live_page_even_when_better_ones_come(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def run() -> None:
+        app = live_app(home, monkeypatch, 6, 3)
+        async with app.run_test(size=(120, 40)) as pilot:
+            app.make_pages()
+            await pilot.pause(0.1)
+            app.selected = {"j05"}
+            for number in range(3):
+                job = Job(f"new{number}", f"Firm new{number}", "Engineer", "Milan", f"https://x.example/new{number}", f"https://x.example/new{number}", "")
+                app.session.store.add(job)
+                app.session.store.set_score(job.id, 5.5 - number / 10)
+            app.make_pages()
+            await pilot.pause(0.1)
+            # The selected one stays, last because it ranks last, and the best of the others fill the rest of the page.
+            assert shown(app) == ["new0", "new1", "05"]
+
+    asyncio.run(run())
+
+
+def test_the_wait_line_counts_megabytes_and_says_how_long_once_the_speed_is_known(home: Path) -> None:
+    app = AIHawk(home)
+    app.bytes = (12_000_000, 667_000_000)
+    assert app.download_line() == "Getting the jobs, first time only: 12 of 667 MB. The first ones appear in a moment."
+    # One megabyte a second over the last half minute: 547 seconds left, ten minutes rounded up.
+    app.speed.extend([(100.0, 0), (130.0, 30_000_000)])
+    app.bytes = (120_000_000, 667_000_000)
+    app.pages = [["a"]]
+    assert app.download_line() == "Getting the jobs, first time only: 120 of 667 MB, about 10 minutes left. The first ones are already below."
+    app.bytes = (640_000_000, 667_000_000)
+    assert "less than a minute left" in app.download_line()
+    # Under three seconds of speed is no speed yet.
+    app.speed.clear()
+    app.speed.extend([(100.0, 0), (101.0, 1_000_000)])
+    assert "left" not in app.download_line()
+    # A manifest with no sizes falls back to the share of the rows.
+    app.bytes = (0, 0)
+    assert app.download_line().startswith("Getting the jobs, first time only: 0%.")
+
+
+def test_the_download_line_does_not_cover_a_scoring_that_did_not_go_through(home: Path) -> None:
+    async def run() -> None:
+        app = AIHawk(home)
+        app.start = lambda: None  # type: ignore[method-assign]
+        async with app.run_test(size=(120, 40)) as pilot:
+            app.bytes = (1_000_000, 10_000_000)
+            app.stuck = "Still no answer. Check your connection, then press → to try again."
+            app.say(app.stuck, again=True)
+            app.bytes_came(2_000_000, 10_000_000)
+            await pilot.pause(0.1)
+            assert last_line(app) == app.stuck
+            app.stuck = ""
+            app.bytes_came(3_000_000, 10_000_000)
+            await pilot.pause(0.1)
+            assert last_line(app).startswith("Getting the jobs, first time only: 3 of 10 MB")
+
+    asyncio.run(run())
+
+
+def accepting(*answers: bool) -> Any:
+    """What the service says to each key typed, in turn: yes or no."""
+    given = list(answers)
+    keys: list[str] = []
+
+    async def accepted(key: str) -> bool:
+        keys.append(key)
+        return given.pop(0)
+
+    accepted.keys = keys  # type: ignore[attr-defined]
+    return accepted
+
+
+def test_a_key_the_service_refuses_is_asked_for_again_with_why_in_the_question(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ORCAROUTER_API_KEY")
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        app.session.key_accepted = accepting(False, True)  # type: ignore[method-assign]
+        app.session.save_key = lambda key: (type(app.session.config).save_key(app.session.config, key), setattr(app.session, "_client", ScriptedModelForApp()))  # type: ignore[method-assign]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            app.screen.query_one(Input).value = "sk-orca-wrong"
+            await pilot.press("enter")
+            await pilot.pause(0.3)
+            # The resume is not asked: the same question, with why.
+            assert isinstance(app.screen, TextPrompt) and app.screen.question == "Paste your OrcaRouter key"
+            assert str(app.screen.query_one("#problem", Static).content) == "OrcaRouter did not accept that key. Check it and paste it again."
+            assert app.screen.query_one("#problem").display
+            app.screen.query_one(Input).value = "sk-orca-right"
+            await pilot.press("enter")
+            await settle(pilot, app)
+            assert companies(app) == ["Bestco", "Lowly", "Noplugin"]
+            assert app.session.key_accepted.keys == ["sk-orca-wrong", "sk-orca-right"]  # type: ignore[attr-defined]
+
+    asyncio.run(run())
+    assert (home / "key").read_text(encoding="utf-8") == "sk-orca-right"
+
+
+@pytest.mark.parametrize(("error", "kept"), [(status_error(AuthenticationError, 401), False), (APIConnectionError(request=REQUEST), True), (status_error(InternalServerError, 503), True), (APITimeoutError(request=REQUEST), True)])
+def test_only_a_refusal_is_a_no_to_a_key_and_a_service_that_does_not_answer_never_blocks_it(home: Path, error: Exception, kept: bool) -> None:
+    session = Session(home)
+
+    async def get(path: str, cast_to: type) -> Any:
+        assert path == "/models"
+        raise error
+
+    session.key_client = lambda key: SimpleNamespace(get=get)  # type: ignore[method-assign,assignment]
+    assert asyncio.run(session.key_accepted("sk-orca-x")) is kept
+    session.close()
+
+
+def test_a_key_the_service_accepts_is_a_yes(home: Path) -> None:
+    session = Session(home)
+
+    async def get(path: str, cast_to: type) -> Any:
+        return {"data": []}
+
+    session.key_client = lambda key: SimpleNamespace(get=get)  # type: ignore[method-assign,assignment]
+    assert asyncio.run(session.key_accepted("sk-orca-x")) is True
+    session.close()
+
+
+def test_a_key_given_from_the_settings_after_the_start_stopped_for_want_of_one_goes_on_with_the_start(
+    home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("ORCAROUTER_API_KEY")
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        app.session.key_accepted = accepting(True)  # type: ignore[method-assign]
+        app.session.save_key = lambda key: (type(app.session.config).save_key(app.session.config, key), setattr(app.session, "_client", ScriptedModelForApp()))  # type: ignore[method-assign]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            await pilot.press("escape")
+            await settle(pilot, app)
+            assert companies(app) == []
+            await pilot.press("e")
+            await wait_for_screen(pilot, Settings)
+            rows = [key.value for key in app.screen.query_one(DataTable).rows]
+            app.screen.query_one(DataTable).move_cursor(row=rows.index("key"))
+            await pilot.press("enter")
+            await wait_for_screen(pilot, TextPrompt)
+            app.screen.query_one(Input).value = "sk-orca-new"
+            await pilot.press("enter")
+            await wait_for_screen(pilot, Settings)
+            await pilot.press("escape")
+            await settle(pilot, app)
+            await pilot.pause(0.3)
+            assert companies(app) == ["Bestco", "Lowly", "Noplugin"]
+
+    asyncio.run(run())
+
+
+def test_a_key_changed_from_the_settings_is_checked_too_and_a_refused_one_is_asked_again(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ORCAROUTER_API_KEY")
+    (home / "key").write_text("sk-orca-old", encoding="utf-8")
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        app.session.key_accepted = accepting(False, True)  # type: ignore[method-assign]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            await pilot.press("e")
+            await wait_for_screen(pilot, Settings)
+            app.screen.query_one(DataTable).move_cursor(row=[key.value for key in app.screen.query_one(DataTable).rows].index("key"))
+            await pilot.press("enter")
+            await wait_for_screen(pilot, TextPrompt)
+            app.screen.query_one(Input).value = "sk-orca-bad"
+            await pilot.press("enter")
+            await pilot.pause(0.3)
+            assert isinstance(app.screen, TextPrompt) and app.screen.query_one("#problem").display
+            app.screen.query_one(Input).value = "sk-orca-good"
+            await pilot.press("enter")
+            await wait_for_screen(pilot, Settings)
+            await pilot.press("escape")
+
+    asyncio.run(run())
+    assert (home / "key").read_text(encoding="utf-8") == "sk-orca-good"
+
+
+def test_ctrl_c_copies_what_is_selected_and_stays_and_with_nothing_selected_it_leaves(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    copied: list[str] = []
+
+    async def run() -> None:
+        app = AIHawk(home)
+        app.start = lambda: None  # type: ignore[method-assign]
+        monkeypatch.setattr(app, "copy_to_clipboard", copied.append)
+        async with app.run_test(size=(80, 24)) as pilot:
+            monkeypatch.setattr(type(app.screen), "get_selected_text", lambda self: "orcarouter.ai/ref/ref_accd17afb78fc95ac4d7")
+            await pilot.press("ctrl+c")
+            await pilot.pause(0.1)
+            assert app.is_running and copied == ["orcarouter.ai/ref/ref_accd17afb78fc95ac4d7"]
+            monkeypatch.setattr(type(app.screen), "get_selected_text", lambda self: None)
+            await pilot.press("ctrl+c")
+            await pilot.pause(0.1)
+            assert not app.is_running
+
+    asyncio.run(run())
+
+
+def test_ctrl_c_on_a_selected_answer_in_a_text_question_copies_it_and_a_password_is_never_copied(home: Path, resume: Path) -> None:
+    async def run() -> None:
+        app = scripted_app(home, None)
+        copied: list[str] = []
+        app.copy_to_clipboard = copied.append  # type: ignore[method-assign]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            field = app.screen.query_one(Input)
+            field.value = "C:/Users/me/cv.pdf"
+            field.select_all()
+            await pilot.press("ctrl+c")
+            await pilot.pause(0.1)
+            assert app.is_running and copied == ["C:/Users/me/cv.pdf"]
+            await pilot.press("escape")
+
+    asyncio.run(run())
+
+
+def test_ctrl_o_at_the_key_question_opens_the_address_in_the_browser_and_the_hint_says_so(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ORCAROUTER_API_KEY")
+    opened: list[str] = []
+    import aihawk.screens as screens_module
+
+    monkeypatch.setattr(screens_module.webbrowser, "open", lambda url: opened.append(url) or True)
+
+    async def run() -> None:
+        app = AIHawk(home, None)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            assert "Ctrl+O opens it in your browser" in str(app.screen.query_one(".hint", Static).content)
+            await pilot.press("ctrl+o")
+            await pilot.pause(0.1)
+            assert opened == ["https://www.orcarouter.ai/ref/ref_accd17afb78fc95ac4d7"]
+            await pilot.press("escape")
+
+    asyncio.run(run())
+
+
+class NoCredit(ScriptedModelForApp):
+    """The account has no credit: every scoring request is answered 402."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.attempts = 0
+        self.broke = True
+
+    async def post(self, path: str, *, body: dict[str, Any], cast_to: type) -> dict[str, Any]:
+        self.attempts += 1
+        if self.broke:
+            raise status_error(APIStatusError, 402)
+        return await super().post(path, body=body, cast_to=cast_to)
+
+
+def test_with_no_credit_the_jobs_stay_new_scoring_stops_and_says_what_to_do_and_the_arrow_goes_on(home: Path, resume: Path) -> None:
+    async def run() -> None:
+        app = AIHawk(home, resume)
+        model = NoCredit()
+        app.session._client = model  # type: ignore[assignment]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            assert model.attempts == 1, "not retried in a loop"
+            assert last_line(app) == "Your OrcaRouter credit is finished. Add credit at orcarouter.ai, then press → to go on."
+            assert len(app.session.store.with_status("new")) == 3 and not app.session.store.with_status("passed_over")
+            # The line is not covered by the count of the jobs coming, and nothing says there are no more.
+            assert "No more jobs" not in logged(app) and "No jobs found" not in logged(app)
+            model.broke = False
+            await pilot.press("right")
+            await settle(pilot, app)
+            assert companies(app) == ["Bestco", "Lowly", "Noplugin"]
+
+    asyncio.run(run())
+
+
+def test_an_application_that_fails_for_want_of_credit_says_so_and_the_batch_stops(home: Path, resume: Path, restored_apply: Any) -> None:
+    calls: list[str] = []
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+
+        async def broke(client: Any, model: str, job: Any, *rest: Any, **keywords: Any) -> Outcome:
+            calls.append(job.company)
+            raise status_error(APIStatusError, 402)
+
+        import aihawk.session as session_module
+
+        session_module.apply_to_job = broke  # type: ignore[assignment]
+        async with app.run_test(size=(120, 40)) as pilot:
+            await send_batch(app, pilot, ["space", "space"])
+            await pilot.press("enter")
+            await wait_for_apply(pilot, app)
+            await pilot.pause(0.2)
+            said = app.query_one(Said).said
+            assert "Bestco: not sent, your OrcaRouter credit is finished: add credit at orcarouter.ai." in said
+            assert calls == ["Bestco"], "the second one was not tried"
+            (item,) = app.session.store.sent()
+            assert item.status == "failed" and item.reason == "no_credit"
+            assert item.note == "Your OrcaRouter credit is finished. Add credit at orcarouter.ai, then press → to go on."
+
+    asyncio.run(run())
+
+
+def test_what_an_application_waits_for_is_said_in_the_line_of_the_batch_and_the_batch_line_comes_back(home: Path, resume: Path, restored_apply: Any) -> None:
+    gate = asyncio.Event()
+    waiting = asyncio.Event()
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+
+        async def slowed(client: Any, model: str, job: Any, *rest: Any, **keywords: Any) -> Outcome:
+            note = apply_module.NOTE.get()
+            assert note is not None
+            note("The AI service asked to slow down: waiting 40 seconds…")
+            waiting.set()
+            await gate.wait()
+            note("")
+            return Outcome("submitted", "ok")
+
+        import aihawk.session as session_module
+
+        session_module.apply_to_job = slowed  # type: ignore[assignment]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await send_batch(app, pilot, ["space"])
+            await pilot.press("enter")
+            await asyncio.wait_for(waiting.wait(), 5)
+            await pilot.pause(0.1)
+            assert last_line(app) == "The AI service asked to slow down: waiting 40 seconds…"
+            gate.set()
+            await wait_for_apply(pilot, app)
+            assert apply_module.NOTE.get() is None, "the note is the application's own and ends with it"
+
+    asyncio.run(run())
+
+
+def test_the_engine_is_brought_in_the_background_once_and_only_when_it_is_not_here(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
+    import subprocess
+
+    started: list[tuple[list[str], dict[str, Any]]] = []
+
+    class Process:
+        def __init__(self, command: list[str], **keywords: Any) -> None:
+            started.append((command, keywords))
+            self.ended = False
+
+        def poll(self) -> int | None:
+            return 0 if self.ended else None
+
+        def terminate(self) -> None:
+            self.ended = True
+
+    monkeypatch.setattr(subprocess, "Popen", Process)
+    session = Session(home)
+    session.bring_engine()
+    assert started == [], "the engine is here: nothing is brought"
+    monkeypatch.setattr(Session, "engine_here", staticmethod(lambda: False))
+    session.bring_engine()
+    session.bring_engine()
+    assert len(started) == 1
+    command, keywords = started[0]
+    import sys as system
+
+    assert command == [system.executable, "-m", "invisible_playwright", "fetch"]
+    assert keywords["stdin"] == keywords["stdout"] == keywords["stderr"] == subprocess.DEVNULL
+    # It does not outlive AIHawk.
+    process = session.engine
+    assert process is not None and not process.ended  # type: ignore[attr-defined]
+    session.close()
+    assert process.ended  # type: ignore[attr-defined]
+
+
+def test_an_engine_that_cannot_be_started_is_no_ones_concern(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
+    import subprocess
+
+    def refuse(*arguments: Any, **keywords: Any) -> None:
+        raise OSError("no")
+
+    monkeypatch.setattr(subprocess, "Popen", refuse)
+    monkeypatch.setattr(Session, "engine_here", staticmethod(lambda: False))
+    session = Session(home)
+    session.bring_engine()
+    assert session.engine is None
+    session.close()
+
+
+def test_an_application_waits_for_the_engine_that_is_coming_and_says_so(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    class Process:
+        polls = 0
+
+        def poll(self) -> int | None:
+            self.polls += 1
+            return None if self.polls < 4 else 0
+
+    async def run() -> list[str]:
+        session = Session(home)
+        session.engine = Process()  # type: ignore[assignment]
+        told: list[str] = []
+        real = asyncio.sleep
+
+        async def quick(seconds: float) -> None:
+            await real(0)
+
+        monkeypatch.setattr(asyncio, "sleep", quick)
+        try:
+            await session.engine_coming(told.append)
+        finally:
+            session.engine = None
+            session.close()
+        return told
+
+    told = asyncio.run(run())
+    assert told[0] == "Getting the browser, only the first time: about 270 MB…" and told[-1] == ""
+
+
+def test_the_engine_is_brought_when_the_jobs_are_all_here_and_not_before(home: Path, resume: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    two_chunk_home(home, tmp_path)
+    gate = hold_second_chunk(monkeypatch)
+    brought: list[bool] = []
+    monkeypatch.setattr(Session, "bring_engine", lambda self: brought.append(self.library.complete()))
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        async with app.run_test(size=(120, 40)) as pilot:
+            for _ in range(200):
+                await pilot.pause(0.05)
+                if companies(app):
+                    break
+            assert brought == [], "the line of the wait is shared: not while the jobs come"
+            gate.set()
+            await settle(pilot, app)
+            await pilot.pause(0.2)
+
+    asyncio.run(run())
+    assert brought == [True]
+
+
+class Broken(ScriptedModelForApp):
+    """A model that fails in a way nobody foresaw."""
+
+    async def _create(self, **request: Any) -> Any:
+        raise KeyError("the private detail")
+
+
+def test_an_unexpected_error_says_where_the_details_are_and_shows_none_of_them(home: Path, resume: Path) -> None:
+    async def run() -> None:
+        app = AIHawk(home, resume)
+        app.session._client = Broken()  # type: ignore[assignment]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            await pilot.pause(0.2)
+            line = last_line(app)
+            assert line == "Something went wrong. Try again in a moment. Details are in errors.log. Press r and give the file again."
+            assert "private detail" not in logged(app)
+
+    asyncio.run(run())
+    assert "KeyError: 'the private detail'" in (home / "data" / "errors.log").read_text(encoding="utf-8")
+
+
+def test_while_the_resume_is_read_the_screen_says_how_long_it_takes(home: Path, resume: Path) -> None:
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        said: list[str] = []
+        original = app.session.load_resume
+
+        async def slow(path: Path) -> None:
+            said.append(last_line(app))
+            await original(path)
+
+        app.session.load_resume = slow  # type: ignore[method-assign]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+        assert said == ["Reading your resume: about half a minute…"]
 
     asyncio.run(run())

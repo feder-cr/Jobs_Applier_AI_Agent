@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import subprocess
+import sys
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
@@ -11,12 +13,13 @@ from pathlib import Path
 
 from openai import AsyncOpenAI
 
-from aihawk.apply import MAILBOXES, Outcome, apply_to_job, signed_in, site_of
+from aihawk import errors
+from aihawk.apply import MAILBOXES, NOTE, Outcome, apply_to_job, signed_in, site_of
 from aihawk.apply import sign_in as sign_in_browser
-from aihawk.config import KEY_ENV, Config, ConfigError, load_config
+from aihawk.config import DEFAULT_BASE_URL, KEY_ENV, Config, ConfigError, load_config
 from aihawk.database import load_manifest, search
 from aihawk.library import Library
-from aihawk.llm import SPEND, Mark, explain, make_client, not_answering, refused
+from aihawk.llm import SPEND, Mark, make_client, no_credit, not_answering, refused
 from aihawk.plugins import Plugin, always_plugins, load_plugins, plugin_for
 from aihawk.profile import CV_NAME_FILE, ensure_account_password, import_answers_file, install_resume, save_setting
 from aihawk.scoring import NOT_JUDGED, NotAnswering, fits, question, score
@@ -45,11 +48,55 @@ class Session:
         # The job database on this computer, which a search reads and the chunks still coming add to.
         self.library = Library(self.config.data_dir / "library")
         self.library.days = self.config.max_age_days
+        errors.use(self.config.data_dir, self.config.api_key() or "")
         # How many jobs the whole database holds, once its manifest has been read.
         self.database_jobs = 0
+        # The browser's engine coming down in the background, while the person looks at the jobs.
+        self.engine: subprocess.Popen[bytes] | None = None
 
     def close(self) -> None:
+        # The downloads are AIHawk's: they do not go on when AIHawk is closed.
+        self.library.stopping.set()
+        if self.engine is not None and self.engine.poll() is None:
+            self.engine.terminate()
         self.store.close()
+
+    @staticmethod
+    def engine_here() -> bool:
+        """Whether the browser's engine is on this computer. True when that cannot be told: nothing is then brought."""
+        try:
+            from invisible_core.download import engine_status
+
+            return bool(engine_status()[0])
+        except Exception:  # noqa: BLE001  The engine's own package says; if it cannot, the first application finds out.
+            return True
+
+    def bring_engine(self) -> None:
+        """Starts bringing the browser's engine here, about 270 MB, silently and once, so that the first application does not wait
+        for it. It is the engine's own `fetch`, in a process of its own that ends with AIHawk; a failure is no one's concern:
+        the application that needs the engine asks for it again."""
+        if self.engine is not None or self.engine_here():
+            return
+        flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        try:
+            self.engine = subprocess.Popen(
+                [sys.executable, "-m", "invisible_playwright", "fetch"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags,
+            )
+        except OSError:
+            self.engine = None
+
+    async def engine_coming(self, note: Callable[[str], None] | None) -> None:
+        """Waits for the engine that is being brought here, saying so: an application that opened the browser now would start a
+        second download of the same engine."""
+        if self.engine is None or self.engine.poll() is not None:
+            return
+        while self.engine.poll() is None:
+            if note:
+                note("Getting the browser, only the first time: about 270 MB…")
+            await asyncio.sleep(2)
+        if note:
+            note("")
 
     @property
     def client(self) -> AsyncOpenAI:
@@ -62,6 +109,7 @@ class Session:
 
     def save_key(self, key: str) -> None:
         self.config.save_key(key)
+        errors.use(self.config.data_dir, key)
         self._client = None
 
     def refuse_key(self) -> str:
@@ -71,6 +119,19 @@ class Session:
             return f"The AI service refused the key in the {KEY_ENV} variable. Set a valid one there, then start AIHawk again."
         self.config.key_file.unlink(missing_ok=True)
         return "The AI service refused the key, so AIHawk forgot it. Paste a new one."
+
+    def key_client(self, key: str) -> AsyncOpenAI:
+        """A client for a key not yet kept, to try it: no retries, and no waiting long on a service that does not answer."""
+        return AsyncOpenAI(base_url=DEFAULT_BASE_URL, api_key=key, max_retries=0, timeout=15.0)
+
+    async def key_accepted(self, key: str) -> bool:
+        """Whether the service takes this key: its list of models answers a key it does not know with 401 and nothing else is
+        asked. A service that cannot be reached does not say no, so the key is kept: the check never blocks."""
+        try:
+            await self.key_client(key).get("/models", cast_to=dict)
+        except Exception as error:  # noqa: BLE001  Only a refusal is an answer; anything else leaves the key to be tried for real.
+            return not refused(error)
+        return True
 
     def needs_resume(self) -> bool:
         return not self.config.cv.is_file() or not self.config.filters.include
@@ -99,7 +160,7 @@ class Session:
         where = await sign_in_browser(self.config.browser_profile, self.config.data_dir / "browser", wait, url)
         return signed_in(provider, where)
 
-    async def sync(self, progress: Callable[[int, int], None], arrived: Callable[[], None]) -> None:
+    async def sync(self, progress: Callable[[int, int], None], arrived: Callable[[], None], on_bytes: Callable[[int, int], None] = lambda done, total: None) -> None:
         """The job database on this computer brought to the newest build: what is new since the last time, then the chunks
         still missing, one by one. `arrived` is told after each that changes what a search finds, `progress` how many chunks
         are here of how many. Both are told on the loop, which alone touches the screen."""
@@ -113,6 +174,7 @@ class Session:
         await asyncio.to_thread(
             self.library.sync, manifest, self.config.database,
             lambda done, size: loop.call_soon_threadsafe(progress, done, size), lambda: loop.call_soon_threadsafe(arrived),
+            lambda done, total: loop.call_soon_threadsafe(on_bytes, done, total),
         )
 
     async def find(self) -> int:
@@ -175,19 +237,23 @@ class Session:
         return kept[0]
 
     async def send(
-        self, items: list[Stored], log: Log, begin: Callable[[int, int, Stored], None], done: Callable[[Stored, Outcome], None]
+        self, items: list[Stored], log: Log, begin: Callable[[int, int, Stored], None], done: Callable[[Stored, Outcome], None],
+        note: Callable[[str], None] | None = None,
     ) -> list[tuple[Stored, Outcome]]:
         """Send each application once; each with what came of it. `begin` is told which one starts, of how many, and `done`
-        what came of each when it ends."""
+        what came of each when it ends. `note` is told what an application waits for: a line, and an empty one when it is working again."""
         results = []
         for number, item in enumerate(items, 1):
             begin(number, len(items), item)
-            outcome = await self.apply(item, log)
+            outcome = await self.apply(item, log, note)
             results.append((item, outcome))
             done(item, outcome)
+            if outcome.reason == "no_credit":
+                # Every application after this one would fail the same way, after the browser opened for nothing.
+                break
         return results
 
-    async def apply(self, item: Stored, log: Log) -> Outcome:
+    async def apply(self, item: Stored, log: Log, note: Callable[[str], None] | None = None) -> Outcome:
         """Fill and send one application, once. What the page said is kept with it, and applied.csv is written."""
         if item.status in SUBMITTED:
             raise ConfigError(f"{item.job.company}: already sent, and not sent twice")
@@ -203,7 +269,9 @@ class Session:
         await SPEND.load_prices(self.client)
         mark = SPEND.mark()
         started = time.monotonic()
+        told = NOTE.set(note)
         try:
+            await self.engine_coming(note)
             cv_file = self._own_cv()
             outcome = await apply_to_job(
                 self.client, self.config.model, job, cv, answers, cv_file, self.config.data_dir, self.config.browser_profile, guidance, account)
@@ -211,7 +279,9 @@ class Session:
             # One job's failure is reported and recorded; the next job still runs.
             if refused(error):
                 raise
-            outcome = Outcome("failed", explain(error), reason=type(error).__name__)
+            outcome = Outcome("failed", errors.explained(error), reason="no_credit" if no_credit(error) else type(error).__name__)
+        finally:
+            NOTE.reset(told)
         used = await self._record(item, host, outcome, mark)
         # How it went, for AIHawk's makers, with nothing about the person or the job: see telemetry.py. The tokens each
         # model took in and gave out on this application, as the gateway counted them: no price, no currency.

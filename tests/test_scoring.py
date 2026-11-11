@@ -190,3 +190,23 @@ def test_only_the_request_that_got_no_answer_is_not_judged() -> None:
     jobs = postings(MAX_POSTINGS + 1)
     values = run(client, jobs)
     assert values[:MAX_POSTINGS] == [NOT_JUDGED] * MAX_POSTINGS and values[MAX_POSTINGS] == 0.5
+
+
+@pytest.mark.parametrize("status", [402, 403, 404])
+def test_what_is_about_the_account_and_not_about_a_posting_is_raised_and_no_posting_is_set_aside(status: int) -> None:
+    from openai import APIStatusError
+
+    client = AsyncOpenAI(base_url=DEFAULT_BASE_URL, api_key=KEY, max_retries=0, http_client=httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(status, json={"error": "no"}))))
+    with pytest.raises(APIStatusError) as raised:
+        run(client, postings(3))
+    assert raised.value.status_code == status
+
+
+def test_a_credit_that_is_finished_is_told_in_plain_words_and_what_to_do() -> None:
+    import httpx as http
+    from openai import APIStatusError
+
+    from aihawk.llm import explain
+
+    error = APIStatusError("Error code: 402", response=http.Response(402, request=http.Request("POST", "https://x.example")), body=None)
+    assert explain(error) == "Your OrcaRouter credit is finished. Add credit at orcarouter.ai, then press → to go on."

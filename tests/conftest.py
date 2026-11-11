@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 
 from aihawk import telemetry
@@ -18,6 +19,36 @@ class _Inline:
 
     def start(self) -> None:
         self.target(*self.args)
+
+
+@pytest.fixture(autouse=True)
+def no_engine_download(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test starts the browser's download: the engine is here, unless a test says it is not."""
+    from aihawk import session
+
+    monkeypatch.setattr(session.Session, "engine_here", staticmethod(lambda: True))
+
+
+@pytest.fixture(autouse=True)
+def a_computer_the_browser_can_open_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A test's browser is a scripted one: on a Linux machine with no desktop, as the ones that run these tests are, the
+    check for one would stop every application before it. A test of that check names its own system."""
+    from aihawk import apply
+
+    monkeypatch.setattr(apply, "PLATFORM", "a test")
+
+
+@pytest.fixture(autouse=True)
+def no_key_check_over_the_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A key typed in is tried against the service: in a test the service cannot be reached, which never blocks a key."""
+    from openai import APIConnectionError
+
+    from aihawk import session
+
+    async def unreachable(path: str, cast_to: type) -> None:
+        raise APIConnectionError(request=httpx.Request("GET", "https://api.orcarouter.ai/v1" + path))
+
+    monkeypatch.setattr(session.Session, "key_client", lambda self, key: SimpleNamespace(get=unreachable))
 
 
 @pytest.fixture(autouse=True)

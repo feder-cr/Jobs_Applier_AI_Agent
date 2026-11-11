@@ -69,11 +69,11 @@ WIDE_ENOUGH = 100
 class TextPrompt(ModalScreen[str | None]):
     """One question, one line of answer. Enter answers, Escape skips."""
 
-    BINDINGS: ClassVar = [Binding("escape", "skip", "Skip")]
+    BINDINGS: ClassVar = [Binding("escape", "skip", "Skip"), Binding("ctrl+o", "open_link", show=False)]
 
     def __init__(
         self, question: str, *, placeholder: str = "", password: bool = False, hint: str = "Enter · Esc goes back", value: str | None = None,
-        check: Callable[[str], str | None] | None = None, problem: str = "",
+        check: Callable[[str], str | None] | None = None, problem: str = "", link: str = "",
     ) -> None:
         super().__init__()
         # With a value to change, Enter on an empty line clears it, and only Esc leaves it as it is.
@@ -87,6 +87,8 @@ class TextPrompt(ModalScreen[str | None]):
         self.check = check
         # Something already wrong when the question opens, such as the key that was refused and is asked for again.
         self.problem = problem
+        # An address Ctrl+O opens in the person's browser, for a question whose answer is got there.
+        self.link = link
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
@@ -115,6 +117,10 @@ class TextPrompt(ModalScreen[str | None]):
 
     def action_skip(self) -> None:
         self.dismiss(None)
+
+    def action_open_link(self) -> None:
+        if self.link:
+            webbrowser.open(self.link)
 
 
 class SendBatch(ModalScreen[bool]):

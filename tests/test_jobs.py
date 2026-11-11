@@ -595,12 +595,93 @@ def test_only_the_chunks_of_the_searchs_days_are_downloaded_all_of_them_before_i
     library = Library(tmp_path / "here")
     library.days = 15
     seen: list[tuple[float, bool]] = []
-    library.sync(manifest, "unused", arrived=lambda: seen.append((round(library.readiness(), 2), library.ready())))
+    library.sync(manifest, "unused", arrived=lambda: seen.append((round(library.readiness(), 2), library.complete())))
     assert seen == [(0.67, False), (1.0, True)], "both new chunks, and a search only then"
     assert titles_here(library) == {"https://a/1": "New", "https://a/3": "New, no text"}
     # More days in the settings: the chunk they reach comes too.
     library.days = 60
-    assert not library.ready()
+    assert not library.complete()
     library.sync(manifest, "unused")
-    assert library.ready() and "https://a/2" in titles_here(library)
+    assert library.complete() and "https://a/2" in titles_here(library)
 
+
+
+def test_a_search_can_run_on_the_first_chunk_while_the_others_still_come(tmp_path: Path) -> None:
+    site = tmp_path / "site" / "b1"
+    chunk(site / "jobs_0.parquet", [("https://a/1", "Newest", "x" * 300)])
+    chunk(site / "jobs_1.parquet", [("https://a/2", "Next", "x" * 300)])
+    manifest = {"build": "b1", "base_url": site.as_posix(), "deltas": [], "chunks": [{"name": "jobs_0.parquet", "rows": 1}, {"name": "jobs_1.parquet", "rows": 1}]}
+    library = Library(tmp_path / "here")
+    assert not library.has_postings() and not library.complete()
+    seen: list[tuple[bool, bool]] = []
+    library.sync(manifest, "unused", arrived=lambda: seen.append((library.has_postings(), library.complete())))
+    assert seen == [(True, False), (True, True)], "something to search after the first chunk, and everything after the last"
+
+
+def test_the_bytes_that_came_are_told_from_nothing_to_all_of_them_and_never_go_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import aihawk.library as library_module
+
+    monkeypatch.setattr(library_module, "READ_BYTES", 64)
+    monkeypatch.setattr(library_module, "TELL_EVERY", 0.0)
+    site = tmp_path / "site" / "b1"
+    chunk(site / "jobs_0.parquet", [("https://a/1", "Newest", "x" * 3000)])
+    chunk(site / "jobs_1.parquet", [("https://a/2", "Next", "x" * 3000)])
+    sizes = [(site / name).stat().st_size for name in ("jobs_0.parquet", "jobs_1.parquet")]
+    manifest = {"build": "b1", "base_url": site.as_posix(), "deltas": [], "chunks": [
+        {"name": "jobs_0.parquet", "rows": 1, "bytes": sizes[0]}, {"name": "jobs_1.parquet", "rows": 1, "bytes": sizes[1]}]}
+    library = Library(tmp_path / "here")
+    told: list[tuple[int, int]] = []
+    library.sync(manifest, "unused", on_bytes=lambda done, total: told.append((done, total)))
+    assert told[0] == (0, sum(sizes)) and told[-1] == (sum(sizes), sum(sizes))
+    assert all(total == sum(sizes) for _, total in told)
+    assert [done for done, _ in told] == sorted(done for done, _ in told) and len(told) > 4, "told while a chunk comes, not only when it is whole"
+    assert library.bytes_of_needed() == (sum(sizes), sum(sizes))
+
+
+def test_a_download_is_told_at_most_every_half_second(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import aihawk.library as library_module
+
+    monkeypatch.setattr(library_module, "READ_BYTES", 16)
+    site = tmp_path / "site" / "b1"
+    chunk(site / "jobs_0.parquet", [("https://a/1", "Newest", "x" * 3000)])
+    manifest = {"build": "b1", "base_url": site.as_posix(), "deltas": [], "chunks": [{"name": "jobs_0.parquet", "rows": 1, "bytes": (site / "jobs_0.parquet").stat().st_size}]}
+    told: list[int] = []
+    Library(tmp_path / "here").sync(manifest, "unused", on_bytes=lambda done, total: told.append(done))
+    # Tens of reads, in far less than half a second: the start, the first read, and the end.
+    assert len(told) <= 4
+
+
+def test_a_build_the_dataset_no_longer_has_starts_over_from_the_newest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    site = tmp_path / "site"
+    chunk(site / "b2" / "jobs_0.parquet", [("https://a/9", "From b2", "x" * 300)])
+    library = Library(tmp_path / "here")
+    library.state = {"build": "b1", "at": "b1", "base_url": "https://old.example/b1", "chunks": [{"name": "jobs_0.parquet", "rows": 1}], "have": []}
+    library._save()
+
+    def served(request: object, timeout: float = 0) -> object:
+        url = request.full_url  # type: ignore[attr-defined]
+        if url.startswith("https://old.example/"):
+            raise urllib.error.HTTPError(url, 404, "Not Found", None, None)  # type: ignore[arg-type]
+        return (site / "b2" / "jobs_0.parquet").open("rb")
+
+    monkeypatch.setattr("urllib.request.urlopen", served)
+    manifest = {"build": "b2", "base_url": "https://new.example/b2", "chunks": [{"name": "jobs_0.parquet", "rows": 1}],
+                "deltas": [{"build": "b2", "after": "b1", "url": (site / "b2" / "jobs_0.parquet").as_posix()}]}
+    library.sync(manifest, "unused")
+    assert titles_here(library) == {"https://a/9": "From b2"} and library.state["build"] == "b2"
+
+
+def test_a_download_stops_at_its_next_part_when_aihawk_closes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import aihawk.library as library_module
+    from aihawk.library import Stopped
+
+    monkeypatch.setattr(library_module, "READ_BYTES", 64)
+    site = tmp_path / "site" / "b1"
+    chunk(site / "jobs_0.parquet", [("https://a/1", "Newest", "x" * 3000)])
+    chunk(site / "jobs_1.parquet", [("https://a/2", "Next", "x" * 3000)])
+    manifest = {"build": "b1", "base_url": site.as_posix(), "deltas": [], "chunks": [{"name": "jobs_0.parquet", "rows": 1}, {"name": "jobs_1.parquet", "rows": 1}]}
+    library = Library(tmp_path / "here")
+    library.stopping.set()
+    with pytest.raises(Stopped):
+        library.sync(manifest, "unused")
+    assert not library.chunk_files() and not list((tmp_path / "here").rglob("*.part"))

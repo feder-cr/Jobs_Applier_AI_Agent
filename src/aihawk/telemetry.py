@@ -4,8 +4,8 @@ Each event carries an id made at random the first time AIHawk runs on a computer
 nothing about the person: no name, email, CV, answer, job, company or link. What goes, and EVENTS below is the same list:
 
 - `app_started`: AIHawk's version and the operating system.
-- `start_step`: each step of a start, not only the first one (the key, the resume, the mail, the jobs' download), and the
-  seconds since AIHawk opened; `app_closed`: the last step reached, whether a search ran, how long AIHawk was open.
+- `start_step`: each step of a start, not only the first one (the key, the resume, the mail, the jobs' download, the
+  first job on the screen), and the seconds since AIHawk opened; `app_closed`: the last step reached, whether a search ran, how long AIHawk was open.
 - `search`: how many jobs the search found, and how many of them were new to this computer.
 - `jobs_scored`: how many postings Jev read in a round, how many it answered for, how long the round took.
 - `application`: how it ended (submitted, unconfirmed, refused, blocked, failed), why in one word, the kind of site (the
