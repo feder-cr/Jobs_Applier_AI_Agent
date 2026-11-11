@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The install needs no git: the one-line command brings AIHawk's code as an archive, 7 MB where the clone of its repository was 180, and the first start is about a minute shorter. A start with no connection opens the copy already on the computer.
 - A request the AI service does not answer (no connection, too busy, down) no longer sets the jobs aside for good: they are asked again after a pause, and after four tries the screen says to press the right arrow. Jobs an earlier version set aside this way are read again. A search that finds nothing says so, an empty list says which key comes next, and a new search lists its own jobs only.
 - Sending says which job it is on, ends with one summary line, and marks each job in the list: ✓ sent, ? sent but not confirmed, ✗ not sent, with the reason in plain words. Quitting while applications are sent asks first. The key, resume, mail and send questions say what they are for, errors drop their technical tails, and the log shows three lines.
 - AIHawk tells its makers, anonymously, how it is used: how a start went and where it stopped, how many jobs a search found, and how each application ended, with the tokens each model used and no price. Nothing about you or the jobs goes with it, and a dry run is not counted. The README lists every event. The badge counts the applications sent from these events.
