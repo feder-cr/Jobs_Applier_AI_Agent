@@ -1,8 +1,8 @@
 # counters.yml - the daily snapshot of the applications AIHawk has sent, and the README badge.
 #
 # The applications are counted in PostHog (src/aihawk/telemetry.py), and only there. The totals of a day exist only if
-# someone records them every day. This is that someone: no machine of ours, just the scheduler, the built-in GITHUB_TOKEN
-# and PostHog's read key as a secret. A run that fails sends GitHub's failure mail, and the run's log warns when
+# someone records them every day. This is that someone: no machine of ours, just the scheduler and PostHog's read key as
+# a secret. A run that fails sends GitHub's failure mail, and the run's log warns when
 # a day between two snapshots is missing. The way invisible_playwright records its browser launches.
 #
 # Everything it writes lives on the `badges` branch, which is not protected:
@@ -46,12 +46,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Self-test
-        run: python main/scripts/usage_counters.py --selftest
-
       - name: Record today's counters and redraw the badge
         env:
-          GITHUB_TOKEN: ${{ github.token }}
           # PostHog's read key: the applications are counted there.
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
         run: >

@@ -64,11 +64,6 @@ class Library:
         """The deltas downloaded, the oldest first: their names follow their builds' times."""
         return sorted(self.deltas.glob("delta-*.parquet")) if self.deltas.is_dir() else []
 
-    def postings_here(self) -> int:
-        """How many postings the chunks downloaded hold."""
-        have = set(self.state.get("have", []))
-        return sum(int(chunk.get("rows", 0)) for chunk in self.state.get("chunks", []) if chunk["name"] in have)
-
     def needed(self) -> list[dict[str, Any]]:
         """The chunks a search over `days` reads: those holding a posting that new. The chunks go newest first, so these
         are the first ones of each kind."""

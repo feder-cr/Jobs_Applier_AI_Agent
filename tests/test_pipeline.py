@@ -2,28 +2,17 @@
 
 from __future__ import annotations
 
-import importlib.util
 import json
-import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import duckdb
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
+from fakes import load_script
 
-
-def load(name: str):
-    spec = importlib.util.spec_from_file_location(name, ROOT / "pipeline" / f"{name}.py")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-build = load("build")
-publish = load("publish")
+build = load_script("pipeline", "build")
+publish = load_script("pipeline", "publish")
 
 
 def write_source(work: Path, name: str, rows: list[tuple]) -> None:

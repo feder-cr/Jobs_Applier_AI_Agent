@@ -8,21 +8,20 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from openai import AsyncOpenAI
 
 from aihawk.apply import MAILBOXES, Outcome, apply_to_job, signed_in, site_of
 from aihawk.apply import sign_in as sign_in_browser
-from aihawk.config import DEFAULT_BASE_URL, KEY_ENV, KEY_URL, Config, ConfigError, load_config
+from aihawk.config import KEY_ENV, KEY_URL, Config, ConfigError, load_config
 from aihawk.database import load_manifest, search
 from aihawk.library import Library
-from aihawk.llm import SPEND, explain, make_client, money, refused
+from aihawk.llm import SPEND, Mark, explain, make_client, money, refused
 from aihawk.plugins import Plugin, always_plugins, load_plugins, plugin_for
 from aihawk.profile import ensure_account_password, import_answers_file, install_resume, save_setting
-from aihawk.shortlist import fits, question, score
+from aihawk.scoring import fits, question, score
 from aihawk.store import SENT_WORDS, SUBMITTED, Store, Stored, write_applied
-from aihawk.telemetry import track
+from aihawk.telemetry import Telemetry
 
 # Jev reads the next WIDE postings the search ranked best and scores each of them: about what one of its requests holds,
 # 215 to 230 postings with their descriptions on 2026-11-08. What a round waits on is not Jev, three seconds for 512, but
@@ -39,6 +38,7 @@ class Session:
         self.config = load_config(workspace)
         self.plugins: tuple[Plugin, ...] = load_plugins(workspace)
         self.store = Store(self.config.store_file)
+        self.telemetry = Telemetry(self.config.data_dir)
         import_answers_file(self.config, self.store)
         ensure_account_password(self.store)
         self._client: AsyncOpenAI | None = None
@@ -99,15 +99,6 @@ class Session:
         where = await sign_in_browser(self.config.browser_profile, self.config.data_dir / "browser", wait, url)
         return signed_in(provider, where)
 
-    async def priced(self) -> None:
-        """The gateway's price list, read once, so each call's cost can be counted."""
-        await SPEND.load_prices(self.client)
-
-    async def settled(self) -> float:
-        """The money spent so far, with every call the gateway has a record for at what it charged."""
-        await SPEND.settle(self.client)
-        return SPEND.total
-
     async def sync(self, progress: Callable[[int, int], None], arrived: Callable[[], None]) -> None:
         """The job database on this computer brought to the newest build: what is new since the last time, then the chunks
         still missing, one by one. `arrived` is told after each that changes what a search finds, `progress` how many chunks
@@ -124,11 +115,11 @@ class Session:
             lambda done, size: loop.call_soon_threadsafe(progress, done, size), lambda: loop.call_soon_threadsafe(arrived),
         )
 
-    async def find(self, log: Log) -> int:
+    async def find(self) -> int:
         """Bring the postings for this search, of those on this computer, into the store; how many are new."""
         jobs = await asyncio.to_thread(search, self.library, self.config.filters, self.config.max_age_days)
         new = self.store.add_all(jobs)
-        track(self.config.data_dir, "search", found=len(jobs), new=new)
+        self.telemetry.search(found=len(jobs), new=new)
         return new
 
     async def read(self, log: Log) -> int:
@@ -148,7 +139,7 @@ class Session:
         asked = question(self.config.goals, _places(self.config))
         reasons: list[str] = []
         try:
-            values = await fits(self.client, self.config.decision_model, cv, jobs, asked, lambda _: None, reasons.append)
+            values = await fits(self.client, self.config.decision_model, cv, jobs, asked, reasons.append)
         except Exception as error:
             # Only the client can fail here; a batch that fails is a failed verdict inside fits.
             if refused(error):
@@ -162,9 +153,11 @@ class Session:
             self.store.set_statuses(failed, "passed_over")
         for job, value in zip(jobs, values, strict=True):
             if value is not None:
-                self.store.set_score(job.id, score(value), {})
-        track(self.config.data_dir, "jobs_scored", postings=len(jobs), answered=len(jobs) - len(failed),
-              seconds=round(time.monotonic() - started, 1), scoring_model=self.config.decision_model)
+                self.store.set_score(job.id, score(value))
+        self.telemetry.scored(
+            postings=len(jobs), answered=len(jobs) - len(failed), seconds=round(time.monotonic() - started, 1),
+            scoring_model=self.config.decision_model,
+        )
         return len(jobs) - len(failed)
 
     def _own_cv(self) -> Path:
@@ -178,11 +171,11 @@ class Session:
         """Send each application once; each with what came of it."""
         results = []
         for item in items:
-            before = SPEND.total
+            mark = SPEND.mark()
             outcome = await self.apply(item, log)
             results.append((item, outcome))
             done()
-            log(f"{item.job.company}: {SENT_WORDS.get(outcome.status, outcome.status)}. {outcome.proof.evidence} ({money(SPEND.total - before)})".replace("  (", " ("))
+            log(f"{item.job.company}: {SENT_WORDS.get(outcome.status, outcome.status)}. {outcome.proof.evidence} ({money(SPEND.since(mark)[0])})".replace("  (", " ("))
         return results
 
     async def apply(self, item: Stored, log: Log) -> Outcome:
@@ -196,15 +189,10 @@ class Session:
         answers = self.store.answers_text()
         host = site_of(job.apply_url)
         account = self.store.account(host)
-        extras = always_plugins(self.plugins)
-        # The site's own plugin first, then the ones that hold on every site, under a line that says which is which.
-        everywhere = "\n\n".join(extra.instructions for extra in extras)
-        guidance = "\n\n".join(
-            [*([plugin.instructions] if plugin else []), *([f"On every site, not only this one:\n\n{everywhere}"] if everywhere else [])]
-        )
-        await self.priced()
-        before = SPEND.total
-        tokens_before = dict(SPEND.tokens)
+        guidance = _guidance(plugin, always_plugins(self.plugins))
+        # The gateway's price list, read once, so each call's cost can be counted.
+        await SPEND.load_prices(self.client)
+        mark = SPEND.mark()
         started = time.monotonic()
         try:
             cv_file = self._own_cv()
@@ -216,26 +204,12 @@ class Session:
             if refused(error):
                 raise
             outcome = Outcome("failed", explain(error), reason=type(error).__name__)
-        if outcome.made_account and (email := self.store.answers().get("email")):
-            # Written whatever the form did: the account exists on that site either way, and the next form there signs in.
-            self.store.set_account(host, email)
-        self.store.set_status(item.job.id, outcome.status, outcome.summary)
-        self.store.set_proof(item.job.id, outcome.proof)
-        await SPEND.settle(self.client)
-        self.store.set_cost(item.job.id, SPEND.total - before)
+        used = await self._record(item, host, outcome, mark)
         # How it went, for AIHawk's makers, with nothing about the person or the job: see telemetry.py. The tokens each
         # model took in and gave out on this application, as the gateway counted them: no price, no currency.
-        used = {
-            model: (taken - tokens_before.get(model, (0, 0))[0], given - tokens_before.get(model, (0, 0))[1])
-            for model, (taken, given) in SPEND.tokens.items()
-        }
-        used = {model: pair for model, pair in used.items() if pair != (0, 0)}
-        track(
-            self.config.data_dir, "application", outcome=outcome.status, reason=outcome.reason, site=plugin.name if plugin else host,
-            plugin=plugin is not None, forms_model=self.config.model, scoring_model=self.config.decision_model,
-            gateway=urlsplit(DEFAULT_BASE_URL).hostname, steps=outcome.steps, seconds=round(time.monotonic() - started, 1),
-            models=sorted(used), input_tokens=sum(taken for taken, _ in used.values()), output_tokens=sum(given for _, given in used.values()),
-            tokens_by_model={model: {"input": taken, "output": given} for model, (taken, given) in used.items()},
+        self.telemetry.application(
+            outcome.status, outcome.reason, outcome.steps, round(time.monotonic() - started, 1), plugin.name if plugin else None, host,
+            self.config.model, self.config.decision_model, used,
         )
         # The file for the person outside the app. One that another program holds open must not stop the next send.
         try:
@@ -243,6 +217,25 @@ class Session:
         except OSError as error:
             log(f"applied.csv was not written: {error}")
         return outcome
+
+    async def _record(self, item: Stored, host: str, outcome: Outcome, mark: Mark) -> dict[str, tuple[int, int]]:
+        """What came of the application, kept with the job: its account, status, proof and cost. The tokens each model used."""
+        if outcome.made_account and (email := self.store.answers().get("email")):
+            # Written whatever the form did: the account exists on that site either way, and the next form there signs in.
+            self.store.set_account(host, email)
+        self.store.set_status(item.job.id, outcome.status, outcome.summary)
+        self.store.set_proof(item.job.id, outcome.proof)
+        await SPEND.settle(self.client)
+        cost, used = SPEND.since(mark)
+        self.store.set_cost(item.job.id, cost)
+        return used
+
+
+def _guidance(plugin: Plugin | None, everywhere: tuple[Plugin, ...]) -> str:
+    """What the model is told about the site: its own plugin first, then the ones that hold on every site, under a line that
+    says which is which."""
+    held = "\n\n".join(extra.instructions for extra in everywhere)
+    return "\n\n".join([*([plugin.instructions] if plugin else []), *([f"On every site, not only this one:\n\n{held}"] if held else [])])
 
 
 def _places(config: Config) -> str:

@@ -381,14 +381,13 @@ def test_applied_csv_has_the_columns_and_a_page_cannot_make_a_formula_of_a_cell(
     assert not path.with_name("applied.csv.tmp").exists()
 
 
-def test_the_list_weighs_the_judgment_and_the_title_together_and_keeps_what_jev_passed_over_below(tmp_path: Path) -> None:
+def test_the_list_weighs_the_score_and_the_title_together_and_keeps_what_jev_passed_over_below(tmp_path: Path) -> None:
     store = Store(tmp_path / "jobs.db")
     for name, lexical in (("judged-fit", 0.2), ("same-score-better-title", 1.0), ("unjudged", 0.9), ("passed", 1.0)):
         store.add(Job(name, "A", "T", "L", "u", "a", "d", lexical))
-    store.set_score("judged-fit", 4.0, {})
-    store.set_score("same-score-better-title", 4.0, {})
+    store.set_score("judged-fit", 4.0)
+    store.set_score("same-score-better-title", 4.0)
     store.set_statuses(["passed"], "passed_over")
-    store.set_evidence("passed", 2.0)
     assert [item.job.id for item in store.all()] == ["same-score-better-title", "judged-fit", "passed", "unjudged"]
 
 
@@ -477,11 +476,11 @@ def test_a_job_seen_again_keeps_its_score_and_status(tmp_path: Path) -> None:
     store = Store(tmp_path / "jobs.db")
     job = Job("x", "Co", "T", "L", "https://a.example/", "https://a.example/", "d")
     assert store.add(job) is True
-    store.set_score(job.id, 4.5, {"score": 4.5})
+    store.set_score(job.id, 4.5)
     store.set_status(job.id, "blocked", "a puzzle")
     assert store.add(job) is False
     item = store.get(job.id)
-    assert item is not None and (item.status, item.score, item.report) == ("blocked", 4.5, {"score": 4.5})
+    assert item is not None and (item.status, item.score) == ("blocked", 4.5)
 
 
 def test_a_new_folder_defaults_to_the_published_database(tmp_path: Path) -> None:
@@ -522,7 +521,7 @@ def test_the_chunks_come_one_by_one_and_a_search_reads_what_has_come(tmp_path: P
     told: list[tuple[int, int]] = []
     library.sync(manifest, "unused", lambda done, size: told.append((done, size)), lambda: seen.append(titles_here(library)))
     assert seen == [{"https://a/1": "Newest"}, {"https://a/1": "Newest", "https://a/2": "No text"}], "a search reads each chunk as it comes"
-    assert told == [(0, 2), (1, 2), (2, 2)] and library.complete() and library.postings_here() == 2
+    assert told == [(0, 2), (1, 2), (2, 2)] and library.complete()
     # A second start downloads nothing.
     library.sync(manifest, "unused", arrived=lambda: seen.append({}))
     assert len(seen) == 2

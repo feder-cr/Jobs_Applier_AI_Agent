@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- AIHawk tells its makers, anonymously, how it is used: how a start went and where it stopped, how many jobs a search found, and how each application ended, with the tokens each model used and no price. Nothing about you or the jobs goes with it, and a dry run is not counted. The README lists every event. The badge counts the applications sent from these events.
+- Jev alone scores the jobs: for each posting, whether it is in line with the resume, and how sure the answer is is the score. The list comes in pages of 50, the next one read while you read, and a posting Jev gave no answer for is set aside, not asked again and again.
+- The job database comes from Hugging Face, in chunks of complete postings, newest first. A search looks back 15 days by default (`max_age_days`), only the chunks those days need are downloaded, all before the first search, and after that only what changed.
+
 - Space and Enter both select a job, and `i` opens it: its role, company, place and the posting's own text, as paragraphs, with nothing else. `s`, the applications, is shown at the bottom; an application's details say how it went in plain words, and the models are no longer in the settings.
 - The one-command install runs on Python 3.14: on 3.15 PyYAML has no Windows build yet, and the install stopped asking for a C++ compiler.
 
@@ -9,14 +13,13 @@
 - Added [docs/data-sources.md](docs/data-sources.md), each source with its licence and how to ask for its removal, and [docs/configuration.md](docs/configuration.md).
 - A model error that a smaller batch cannot cure stops at once and says why, instead of ranking by title almost silently.
 - The job database is shown with its real date.
-- A posting the judge could not read is no longer passed over for good: a later search judges it.
-- After a send, the page is read once it has changed and stopped changing, up to 30 seconds, and the verdict sees its address: a slow confirmation page is no longer judged on the old form.
+- After a send, the page is read once it has changed and stopped changing, up to 30 seconds, and the verdict sees its address: a slow confirmation page is no longer read as the old form.
 - A posting whose title or company looks like screen markup, such as `[/x]`, no longer stops the screen.
 - A database of your own, named by `database` in `aihawk.yaml`, can no longer make AIHawk read a file on your computer: a posting whose address is not `http` or `https` is left out of a search. The published database already left those out.
-- A full disk while the job index downloads says the disk is full.
+- A full disk while the job database downloads says the disk is full.
 - A job whose source published no text is scored on the text of its own page where that can be read, which also finds postings that have closed.
 - The README shows real captures of the screen.
-- Sending says, per job, how it went, and the screen says what to do next. The list fits an 80-column terminal, the index download shows its progress, and a job's details can select it or open it.
+- Sending says, per job, how it went, and the screen says what to do next. The list fits an 80-column terminal, the job download shows its progress, and a job's details can select it or open it.
 - One command starts AIHawk, and everything else is on the screen: `e` opens the settings.
 - A form no longer stops to ask. The model fills every required field from what the CV says and implies, and a written field it has nothing for says to see the attached CV.
 - The checks on the model's calls are gone, for far less code: it is told not to send, and nothing holds it to that. See SECURITY.md.

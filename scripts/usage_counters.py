@@ -2,15 +2,13 @@
 """Daily snapshot of the applications AIHawk has sent, for all its users together, and the README badge drawn from it.
 
     python scripts/usage_counters.py --history H.csv --daily D.csv --badges DIR
-    python scripts/usage_counters.py --selftest
 
 Run once a day by .github/workflows/counters.yml, which keeps the files on the unprotected `badges` branch: no person and
 no machine of ours, every output a file on that branch. The way invisible_playwright records its browser launches.
 
 WHAT IS COUNTED. AIHawk sends an `application` event to PostHog for each application (src/aihawk/telemetry.py), read
-here with the project's read key, POSTHOG_API_KEY, a secret of the repository. PostHog alone counts, the owner's decision
-of 2026-11-11: what AIHawk counted on GitHub for its first two days is left behind. A day's applications are the
-difference between two daily totals, and a day nobody recorded is lost for good.
+here with the project's read key, POSTHOG_API_KEY, a secret of the repository. PostHog alone counts. A day's applications
+are the difference between two daily totals, and a day nobody recorded is lost for good.
 
 `sent` is what the badge shows: the applications whose send was clicked, confirmed by the page or not.
 """
@@ -30,7 +28,6 @@ from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
 
-REPO = "feder-cr/Jobs_Applier_AI_Agent"
 OUTCOMES = ("submitted", "unconfirmed", "refused", "blocked", "failed")
 SENT = ("submitted", "unconfirmed")
 
@@ -38,21 +35,8 @@ POSTHOG_QUERY = "https://us.posthog.com/api/projects/728626/query/"
 # AIHawk's own events: the project also holds a check made when it was set up, which is no computer of anyone's.
 EVENTS = ("app_started", "search", "jobs_scored", "application")
 
-Api = Callable[[str], object]
 # A HogQL query's rows.
 Query = Callable[[str], list[list[object]]]
-
-
-def github_api(token: str | None) -> Api:
-    def get(path: str) -> object:
-        request = urllib.request.Request("https://api.github.com" + path)
-        request.add_header("Accept", "application/vnd.github+json")
-        if token:
-            request.add_header("Authorization", "Bearer " + token)
-        with urllib.request.urlopen(request, timeout=60) as response:
-            return json.load(response)
-
-    return get
 
 
 def posthog_query(key: str) -> Query:
@@ -65,14 +49,13 @@ def posthog_query(key: str) -> Query:
     return query
 
 
-def collect(api: Api, query: Query) -> dict[str, int]:
-    """Each outcome's total in PostHog, the ones sent, all of them, the computers AIHawk has run on, and the stars."""
+def collect(query: Query) -> dict[str, int]:
+    """Each outcome's total in PostHog, the ones sent, all of them, and the computers AIHawk has run on."""
     events = {str(outcome): int(count) for outcome, count in query("SELECT properties.outcome, count() FROM events WHERE event = 'application' GROUP BY 1")}  # type: ignore[call-overload]
     out = {outcome: events.get(outcome, 0) for outcome in OUTCOMES}
     out["sent"] = sum(out[outcome] for outcome in SENT)
     out["applications"] = sum(out[outcome] for outcome in OUTCOMES)
     out["computers"] = int(query(f"SELECT count(DISTINCT distinct_id) FROM events WHERE event IN {EVENTS!r}")[0][0])  # type: ignore[call-overload]
-    out["stars"] = int(api(f"/repos/{REPO}")["stargazers_count"])  # type: ignore[index]
     return out
 
 
@@ -197,10 +180,10 @@ def write_badges(directory: Path, history: dict[str, dict[str, int]]) -> None:
 # ── entry point ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
 
-def run(api: Api, query: Query, history: Path, daily: Path, badges: Path, today: dt.date) -> int:
+def run(query: Query, history: Path, daily: Path, badges: Path, today: dt.date) -> int:
     day = today.isoformat()
     before = read_history(history)
-    written = append_snapshot(history, day, collect(api, query))
+    written = append_snapshot(history, day, collect(query))
     after = read_history(history)
     write_daily(daily, after)
     write_badges(badges, after)
@@ -212,75 +195,18 @@ def run(api: Api, query: Query, history: Path, daily: Path, badges: Path, today:
     return 0
 
 
-def selftest() -> int:
-    import tempfile
-
-    fails = []
-    answers = {f"/repos/{REPO}": {"stargazers_count": 5}}
-
-    def query(hogql: str) -> list[list[object]]:
-        return [[3]] if "DISTINCT" in hogql else [["submitted", 4], ["blocked", 2]]
-
-    expected = {"submitted": 4, "unconfirmed": 0, "refused": 0, "blocked": 2, "failed": 0, "sent": 4, "applications": 6, "computers": 3, "stars": 5}
-    if collect(answers.__getitem__, query) != expected:
-        fails.append("collect")
-    if format_count(4_616_723) != "4.61M" or format_count(2554) != "2.55k" or format_count(999) != "999":
-        fails.append("format")
-    history = {"2026-11-01": {"sent": 100}, "2026-11-02": {"sent": 160}, "2026-11-04": {"sent": 300}}
-    if per_day(history, ("sent",)) != [("2026-11-01", {"sent": 60})]:
-        fails.append("gap")
-    with tempfile.TemporaryDirectory() as folder:
-        path = Path(folder) / "h.csv"
-        append_snapshot(path, "2026-11-08", {"stars": 1})
-        if append_snapshot(path, "2026-11-08", {"stars": 2}) or read_history(path)["2026-11-08"]["stars"] != 1:
-            fails.append("idempotent")
-    print("selftest:", "OK" if not fails else "FAIL " + ", ".join(fails))
-    return 1 if fails else 0
-
-
-REPORT = (
-    ("events, last 24 hours", "SELECT event, count(), count(DISTINCT distinct_id) FROM events WHERE timestamp > now() - INTERVAL 1 DAY GROUP BY 1 ORDER BY 2 DESC"),
-    ("applications by outcome and reason, last 24 hours",
-     "SELECT properties.outcome, properties.reason, count() FROM events WHERE event = 'application' AND timestamp > now() - INTERVAL 1 DAY GROUP BY 1, 2 ORDER BY 3 DESC"),
-    ("applications by site, last 24 hours",
-     "SELECT properties.site, count(), countIf(properties.outcome = 'submitted') FROM events WHERE event = 'application' AND timestamp > now() - INTERVAL 1 DAY GROUP BY 1 ORDER BY 2 DESC LIMIT 15"),
-    ("tokens by forms model, last 24 hours",
-     "SELECT properties.forms_model, sum(toInt(properties.input_tokens)), sum(toInt(properties.output_tokens)), count() FROM events WHERE event = 'application' AND timestamp > now() - INTERVAL 1 DAY GROUP BY 1"),
-    ("versions, last 24 hours", "SELECT properties.version, count(DISTINCT distinct_id) FROM events WHERE timestamp > now() - INTERVAL 1 DAY GROUP BY 1 ORDER BY 2 DESC"),
-    ("last event", "SELECT max(timestamp) FROM events WHERE event <> 'aihawk_setup_check'"),
-)
-
-
-def report(query: Query) -> int:
-    """What PostHog has received lately, printed: for a look by hand, from .github/workflows/posthog-report.yml."""
-    for title, hogql in REPORT:
-        print(f"== {title}")
-        for row in query(hogql):
-            print("  " + " | ".join(str(value) for value in row))
-    return 0
-
-
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--selftest", action="store_true")
-    parser.add_argument("--report", action="store_true", help="Print what PostHog received in the last 24 hours.")
     parser.add_argument("--history", type=Path)
     parser.add_argument("--daily", type=Path)
     parser.add_argument("--badges", type=Path)
     arguments = parser.parse_args()
-    if arguments.selftest:
-        return selftest()
-    if arguments.report:
-        if not (key := os.environ.get("POSTHOG_API_KEY")):
-            parser.error("POSTHOG_API_KEY is not set")
-        return report(posthog_query(key))
     if not (arguments.history and arguments.daily and arguments.badges):
         parser.error("--history, --daily and --badges are required")
-    api = github_api(os.environ.get("GITHUB_TOKEN"))
     key = os.environ.get("POSTHOG_API_KEY")
     if not key:
-        parser.error("POSTHOG_API_KEY is not set: the applications since 2026-11-11 are counted in PostHog")
-    return run(api, posthog_query(key), arguments.history, arguments.daily, arguments.badges, dt.datetime.now(dt.UTC).date())
+        parser.error("POSTHOG_API_KEY is not set: the applications are counted in PostHog")
+    return run(posthog_query(key), arguments.history, arguments.daily, arguments.badges, dt.datetime.now(dt.UTC).date())
 
 
 if __name__ == "__main__":

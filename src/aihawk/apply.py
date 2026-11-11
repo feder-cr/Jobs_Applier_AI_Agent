@@ -15,7 +15,7 @@ import sys
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -25,7 +25,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from openai import AsyncOpenAI
 
-from aihawk.config import KEY_ENV
+from aihawk.config import DRY_RUN_ENV, KEY_ENV, dry_run
 from aihawk.database import Job
 from aihawk.llm import SPEND, chat, structured
 from aihawk.store import Proof, safe_name
@@ -37,12 +37,18 @@ OPEN_RETRY_S = 10.0
 # takes several pages.
 MAILBOX_VISITS = 2
 NO_CODE = "No code arrived in the mailbox."
-# Why a form stopped, in one word, as the model reports it: counted, with the stops the code makes itself, by telemetry.py.
+# Why a form stopped, in one word, as the model reports it in finish_form. The reasons are counted by telemetry.py, with the
+# stops the code makes itself, named below.
 BLOCKED_BY = ("captcha", "login", "closed", "broken_page", "missing_info", "other")
+STUCK = "stuck"
+NO_CODE_REASON = "no_code"
+MAILBOX_SIGNED_OUT = "mailbox_signed_out"
+REFUSED_BY_FORM = "refused_by_form"
+NEVER_CLICKED = "never_clicked"
+DRY_RUN = "dry_run"
+FORM_NOT_LOADED = "form_not_loaded"
 # What a form ends with when the mailbox it opened sent the browser to a sign-in page: the person signs in, and it is sent again.
 MAIL_NOT_SIGNED_IN = "The mailbox is not signed in."
-# Set in the environment, the form is filled and the send control named, and nothing is sent: a trial of a site or a plugin.
-DRY_RUN_ENV = "AIHAWK_DRY_RUN"
 # Set in the environment, every step the model takes on a page is written to data/trace.log; a dry run always is.
 TRACE_ENV = "AIHAWK_TRACE"
 # The mailboxes a code can be read from: where each opens, and the host a signed-in one stays on (its sign-in page is elsewhere).
@@ -192,11 +198,26 @@ class Outcome:
     proof: Proof = field(default_factory=Proof)
     # Whether the model made a candidate account on the site while filling this form, so the next form there signs in.
     made_account: bool = False
-    # Whether the form stopped at a mailbox that is not signed in, so the person signs in and it is tried again.
-    needs_mail: bool = False
     # Why it did not go through, in one word (BLOCKED_BY, or one of the stops the code makes); empty when it did.
     reason: str = ""
     # How many turns the model took on the form.
+    steps: int = 0
+
+    @property
+    def needs_mail(self) -> bool:
+        """Whether the form stopped at a mailbox that is not signed in, so the person signs in and it is tried again."""
+        return self.reason == MAILBOX_SIGNED_OUT
+
+
+@dataclass(frozen=True)
+class Report:
+    """How the model's work on a form ended: what finish_form said, or why the code ended it first, and the turns it took."""
+
+    status: str  # ready | blocked
+    summary: str
+    submit_selector: str = ""
+    blocked_by: str = ""
+    made_account: bool = False
     steps: int = 0
 
 
@@ -238,9 +259,9 @@ def _keep_latest_picture(messages: list[Any]) -> None:
             message["content"] = "A picture of the page was taken here; the latest one is below."
 
 
-def _blocked(summary: str, reason: str) -> dict[str, Any]:
+def _blocked(summary: str, reason: str, steps: int) -> Report:
     """A run that ends before the form is ready, as finish_form would report it, with why in one word."""
-    return {"status": "blocked", "blocked_by": reason, "summary": summary, "submit_selector": ""}
+    return Report("blocked", summary, blocked_by=reason, steps=steps)
 
 
 @dataclass
@@ -331,8 +352,8 @@ async def _not_one(session: Browser, selector: str) -> str:
     return f"{selector} matches {count} elements on this page, and a click sends only the first. Name the one control that sends the form, then call finish_form again."
 
 
-async def fill_form(session: Browser, tools: list[dict[str, Any]], client: AsyncOpenAI, model: str, brief: str, guidance: str = "", page_rules: str = "") -> dict[str, Any]:
-    """The model works on the open page until it calls finish_form; returns what it reported. There is no limit on steps:
+async def fill_form(session: Browser, tools: list[dict[str, Any]], client: AsyncOpenAI, model: str, brief: str, guidance: str = "", page_rules: str = "") -> Report:
+    """The model works on the open page until it calls finish_form; returns how it ended. There is no limit on steps:
     a form takes the steps it needs, and the watch ends a run that goes nowhere."""
     messages: list[Any] = [{"role": "system", "content": instructions(guidance, page_rules)}, {"role": "user", "content": brief}]
     watch = _Watch()
@@ -343,7 +364,7 @@ async def fill_form(session: Browser, tools: list[dict[str, Any]], client: Async
         messages.append(message.model_dump(exclude_none=True))
         if not message.tool_calls:
             if why := watch.talked():
-                return {**_blocked(why, "stuck"), "steps": watch.turns}
+                return _blocked(why, STUCK, watch.turns)
             messages.append({"role": "user", "content": "Use the tools, and end with finish_form."})
             continue
         watch.turn()
@@ -360,21 +381,24 @@ async def fill_form(session: Browser, tools: list[dict[str, Any]], client: Async
                     messages.append({"role": "tool", "tool_call_id": call.id, "content": doubt})
                     watch.saw(name, arguments, doubt)
                     continue
-                return {**arguments, "steps": watch.turns}
+                return Report(
+                    str(arguments.get("status", "")), str(arguments.get("summary", "")), str(arguments.get("submit_selector", "")),
+                    str(arguments.get("blocked_by") or ""), bool(arguments.get("made_account")), watch.turns,
+                )
             # The plugins say two visits to the mailbox; the code holds the model to it, whatever it reasons.
             if name == "browser_navigate" and watch.one_visit_too_many(str(arguments.get("url", ""))):
-                return {**_blocked(NO_CODE, "no_code"), "steps": watch.turns}
+                return _blocked(NO_CODE, NO_CODE_REASON, watch.turns)
             result = await session.call_tool(name, arguments)
             if name == "browser_navigate" and watch.in_mailbox and not _is_mailbox(await _address_now(session)):
                 # The mailbox sent the browser to its sign-in page: that is the person's to do, once.
-                return {**_blocked(MAIL_NOT_SIGNED_IN, "mailbox_signed_out"), "mailbox_signed_out": True, "steps": watch.turns}
+                return _blocked(MAIL_NOT_SIGNED_IN, MAILBOX_SIGNED_OUT, watch.turns)
             pictures = _images(result)
             seen += pictures
             messages.append({"role": "tool", "tool_call_id": call.id, "content": tool_text(result) or "Done: what it shows comes next."})
             watch.saw(name, arguments, tool_text(result), "".join(part["image_url"]["url"] for part in pictures))
         why, warning = await watch.after(client, model)
         if why:
-            return {**_blocked(why, "stuck"), "steps": watch.turns}
+            return _blocked(why, STUCK, watch.turns)
         if warning:
             messages.append({"role": "user", "content": warning})
         if seen:
@@ -384,9 +408,8 @@ async def fill_form(session: Browser, tools: list[dict[str, Any]], client: Async
 
 async def _where(session: Browser, shot: Path) -> tuple[str, str]:
     """The address the page is on now, and a picture of it, kept at `shot`. What cannot be had is left out: the verdict stands."""
-    url, screenshot = "", ""
-    with suppress(Exception):
-        url = str((await _page(session) or {}).get("url", ""))
+    screenshot = ""
+    url = await _address_now(session)
     with suppress(Exception):
         picture = next(part.data for part in (await session.call_tool("browser_take_screenshot")).content if getattr(part, "type", "") == "image")
         shot.parent.mkdir(parents=True, exist_ok=True)
@@ -415,7 +438,7 @@ async def _address_now(session: Browser) -> str:
     return ""
 
 
-async def _judge(session: Browser, client: AsyncOpenAI, model: str, guidance: str, address: str) -> tuple[str, dict[str, Any]]:
+async def _read_result(session: Browser, client: AsyncOpenAI, model: str, guidance: str, address: str) -> tuple[str, dict[str, Any]]:
     """The page's text, and what the verifying model makes of it after a send."""
     text = tool_text(await session.call_tool("browser_read_text", {"selector": "body"}))
     return text, await structured(client, model, verify_system(guidance), f"The page's address: {address}\n\n{text}", "submit_outcome", VERIFY_SCHEMA)
@@ -443,14 +466,14 @@ async def submit_and_verify(session: Browser, client: AsyncOpenAI, model: str, s
         page = await _settled(session, before)
         address = str((page or {}).get("url", ""))
         try:
-            text, verdict = await _judge(session, client, model, guidance, address)
+            text, verdict = await _read_result(session, client, model, guidance, address)
         except Exception as error:  # noqa: BLE001  It was clicked: a failure to read the result is not a failure to send.
             verdict = {"outcome": "unknown", "evidence": f"the page could not be read: {error}"}
             break
         if verdict["outcome"] == "submitted" or page is None:
             break
         # A page that moved on after it was read is read again where it went: a Workday form showed its Review step for
-        # seconds after the click, was judged a refusal on it, and was then at the address of a completed application.
+        # seconds after the click, was read as a refusal on it, and was then at the address of a completed application.
         moved = await _address_now(session) not in ("", address)
         if not moved and (verdict["outcome"] == "rejected" or page == before):
             break
@@ -460,10 +483,10 @@ async def submit_and_verify(session: Browser, client: AsyncOpenAI, model: str, s
     if verdict["outcome"] == "submitted":
         return Outcome("submitted", f"{summary}\nConfirmed: {verdict['evidence']}", proof=proof)
     if verdict["outcome"] == "rejected":
-        return Outcome("refused", f"the form refused it: {verdict['evidence']}", proof, reason="refused_by_form")
+        return Outcome("refused", f"the form refused it: {verdict['evidence']}", proof, reason=REFUSED_BY_FORM)
     if never_clicked:
         # On Breezy a hidden button was the one the selector found: the form was filled and nothing left it.
-        return Outcome("blocked", f"{summary}\nThe send control was never clicked, so nothing was sent.", proof, reason="never_clicked")
+        return Outcome("blocked", f"{summary}\nThe send control was never clicked, so nothing was sent.", proof, reason=NEVER_CLICKED)
     # It was clicked and may have gone: this must never be retried as if it had not.
     return Outcome("unconfirmed", f"{summary}\nClicked, not confirmed by the page: {verdict['evidence']}", proof=proof)
 
@@ -515,29 +538,27 @@ async def run_on_page(
         f"The form: {job.apply_url}\nThe job: {job.title} at {job.company}\nThe CV file to upload: {cv_file}\n"
         f"{_account_line(job, account)}\n\nThe CV:\n{cv_text}\n\nThe answers:\n{answers}"
     )
-    dry_run = bool(os.environ.get(DRY_RUN_ENV, "").strip())
-    tracing = dry_run or bool(os.environ.get(TRACE_ENV, "").strip())
+    trial = dry_run()
+    tracing = trial or bool(os.environ.get(TRACE_ENV, "").strip())
     if tracing:
         # A trial is for looking: every step goes to a file beside the proofs, and the password never does.
         traced = _Traced(session, shot.parent.parent / "trace.log", _secrets_in(answers))
-        traced.note(f"== {job.company}: {job.title} at {job.apply_url}{' (dry run)' if dry_run else ''}")
+        traced.note(f"== {job.company}: {job.title} at {job.apply_url}{' (dry run)' if trial else ''}")
         session = traced
     report = await fill_form(session, tools, client, model, brief, guidance, page_rules)
-    summary = str(report.get("summary", ""))
     if tracing:
-        traced.note(f"== finish_form: {json.dumps(report, ensure_ascii=False)[:500]}")
-    made = bool(report.get("made_account"))
-    steps = int(report.get("steps", 0))
-    if report.get("status") != "ready" or not report.get("submit_selector"):
-        reason = str(report.get("blocked_by") or "other")
-        return Outcome("blocked", summary, made_account=made, needs_mail=bool(report.get("mailbox_signed_out")), reason="other" if reason == "none" else reason, steps=steps)
-    if dry_run:
+        traced.note(f"== finish_form: {json.dumps(asdict(report), ensure_ascii=False)[:500]}")
+    if report.status != "ready" or not report.submit_selector:
+        reason = "other" if report.blocked_by in ("", "none") else report.blocked_by
+        return Outcome("blocked", report.summary, made_account=report.made_account, reason=reason, steps=report.steps)
+    if trial:
         # A trial of the flow: the form is filled and the send control named, and nothing leaves for the employer.
         url, screenshot = await _where(session, shot)
         proof = Proof("", url, "", "", "", screenshot)
-        return Outcome("blocked", f"Dry run ({DRY_RUN_ENV} is set): filled, send control {report['submit_selector']} found, nothing sent.\n{summary}", proof, made_account=made, reason="dry_run", steps=steps)
-    sent = await submit_and_verify(session, client, model, str(report["submit_selector"]), summary, guidance, shot)
-    return replace(sent, made_account=made, steps=steps)
+        summary = f"Dry run ({DRY_RUN_ENV} is set): filled, send control {report.submit_selector} found, nothing sent.\n{report.summary}"
+        return Outcome("blocked", summary, proof, made_account=report.made_account, reason=DRY_RUN, steps=report.steps)
+    sent = await submit_and_verify(session, client, model, report.submit_selector, report.summary, guidance, shot)
+    return replace(sent, made_account=report.made_account, steps=report.steps)
 
 
 async def _open_browser(session: Browser, profile: Path) -> None:
@@ -613,7 +634,7 @@ async def apply_to_job(
         try:
             navigated = await session.call_tool("browser_navigate", {"url": job.apply_url})
             if navigated.isError:
-                return Outcome("blocked", f"the form did not load: {tool_text(navigated)}", reason="form_not_loaded")
+                return Outcome("blocked", f"the form did not load: {tool_text(navigated)}", reason=FORM_NOT_LOADED)
             return await run_on_page(session, tools, client, model, job, cv_text, answers, cv_file, shot, guidance, page_rules, account)
         finally:
             await session.call_tool("browser_close", {})
@@ -661,6 +682,6 @@ async def sign_in(profile: Path, home: Path, wait: Callable[[], Awaitable[None]]
             await session.call_tool("browser_navigate", {"url": url})
             await wait()
             await session.call_tool("browser_navigate", {"url": url})
-            return str((await _page(session) or {}).get("url", ""))
+            return await _address_now(session)
         finally:
             await session.call_tool("browser_close", {})

@@ -37,21 +37,10 @@ def score(certainty: float) -> float:
     return round(1 + 4 * min(1.0, max(0.0, certainty)), 1)
 
 
-async def fits(
-    client: AsyncOpenAI, model: str, cv: str, jobs: list[Job], asked: str, progress: Callable[[int], None], why: Callable[[str], None]
-) -> list[float | None]:
-    """How sure Jev is that each posting is in line, in order; None where it gave no answer. The groups go at once, and
-    `progress` is told the postings done so far. `why` is told, once per failed request, in plain words why."""
-    done = 0
-
-    async def read(group: list[Job]) -> list[float | None]:
-        nonlocal done
-        values = await _read(client, model, cv, group, asked, why)
-        done += len(group)
-        progress(done)
-        return values
-
-    parts = await asyncio.gather(*(read(group) for group in groups(model, cv, jobs, asked)))
+async def fits(client: AsyncOpenAI, model: str, cv: str, jobs: list[Job], asked: str, why: Callable[[str], None]) -> list[float | None]:
+    """How sure Jev is that each posting is in line, in order; None where it gave no answer. The groups go at once. `why` is
+    told, once per failed request, in plain words why."""
+    parts = await asyncio.gather(*(_read(client, model, cv, group, asked, why) for group in groups(model, cv, jobs, asked)))
     return [value for part in parts for value in part]
 
 

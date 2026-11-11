@@ -30,9 +30,8 @@ _WORD_TEXT = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 PROFILE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["name", "plan", "cities", "locations", "countries", "goals", "answers"],
+    "required": ["plan", "cities", "locations", "countries", "goals", "answers"],
     "properties": {
-        "name": {"type": "string"},
         "plan": {
             "type": "object",
             "additionalProperties": False,
@@ -192,7 +191,7 @@ async def install_resume(client: AsyncOpenAI, config: Config, path: Path, store:
         "countries": [code.strip().upper() for code in profile["countries"]],
         "plan": profile["plan"],
     }
-    settings.update({"name": profile["name"], "goals": profile["goals"], "filters": filters})
+    settings.update({"goals": profile["goals"], "filters": filters})
     settings_path.write_text(yaml.safe_dump(settings, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     store.add_answers({key: value for key, value in profile["answers"].items() if value.strip()}, source="cv")

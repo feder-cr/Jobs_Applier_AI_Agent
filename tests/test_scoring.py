@@ -15,7 +15,7 @@ from openai import AsyncOpenAI
 
 from aihawk.config import DEFAULT_BASE_URL, load_config
 from aihawk.database import Job
-from aihawk.shortlist import DESCRIPTION_CHARS, MAX_CHARS, MAX_POSTINGS, fits, question, score
+from aihawk.scoring import DESCRIPTION_CHARS, MAX_CHARS, MAX_POSTINGS, fits, question, score
 
 KEY = "sk-test-key"
 JOB = Job("g:a:1", "Acme", "Python Engineer", "Rome", "u", "a", "Build Python services.")
@@ -37,7 +37,7 @@ def answering(certainty: float, seen: list[httpx.Request]) -> Any:
 
 
 def run(client: AsyncOpenAI, jobs: list[Job], cv: str = "cv", why: Callable[[str], None] = lambda reason: None) -> list[float | None]:
-    return asyncio.run(fits(client, "typesafe/jev-1.14", cv, jobs, ASKED, lambda done: None, why))
+    return asyncio.run(fits(client, "typesafe/jev-1.14", cv, jobs, ASKED, why))
 
 
 def postings(count: int, description: str = "") -> list[Job]:

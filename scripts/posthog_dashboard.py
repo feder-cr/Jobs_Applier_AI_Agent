@@ -19,19 +19,19 @@ import sys
 import urllib.request
 from typing import Any
 
-API = "https://us.posthog.com/api/projects/728626"
+PROJECT = 728626
+API = f"https://us.posthog.com/api/projects/{PROJECT}"
 NAME = "AIHawk"
 
 
-def trends(event: str, *, math: str = "total", math_property: str | None = None, breakdown: str | None = None,
+def trends(event: str, *, math: str = "total", breakdown: str | None = None,
            display: str = "ActionsLineGraph", date_from: str = "-30d", where: dict[str, Any] | None = None,
            sums: tuple[str, ...] = ()) -> dict[str, Any]:
     """A trends query over one event, as PostHog's insight API takes it: one series, or with `sums` one series summing
     each of those properties."""
-    series: dict[str, Any] = {"kind": "EventsNode", "event": event, "name": event, "math": math}
-    if math_property:
-        series["math_property"] = math_property
-    every = [{"kind": "EventsNode", "event": event, "name": name, "math": "sum", "math_property": name} for name in sums] or [series]
+    every = [{"kind": "EventsNode", "event": event, "name": name, "math": "sum", "math_property": name} for name in sums] or [
+        {"kind": "EventsNode", "event": event, "name": event, "math": math}
+    ]
     source: dict[str, Any] = {
         "kind": "TrendsQuery",
         "series": every,
@@ -52,7 +52,7 @@ CHARTS = [
     ("Applications by site and outcome", trends("application", breakdown="site", display="ActionsTable", date_from="-7d")),
     ("Tokens a day, read and written, by forms model", trends("application", sums=("input_tokens", "output_tokens"), breakdown="forms_model", display="ActionsBar")),
     ("Computers that opened AIHawk", trends("app_started", math="dau")),
-    ("First start: the steps people reach", trends("first_run", math="dau", breakdown="step", display="ActionsTable", date_from="-7d")),
+    ("Start steps people reach", trends("start_step", math="dau", breakdown="step", display="ActionsTable", date_from="-7d")),
     ("Closed before a search: at which step", trends("app_closed", math="dau", breakdown="last_step", display="ActionsPie", date_from="-7d", where={"searched": False})),
 ]
 
@@ -85,7 +85,7 @@ def main() -> int:
     for name, query in CHARTS:
         call(key, "POST", "/insights/", {"name": name, "query": query, "dashboards": [dashboard["id"]]})
         print(f"chart: {name}")
-    print(f"dashboard: https://us.posthog.com/project/728626/dashboard/{dashboard['id']}")
+    print(f"dashboard: https://us.posthog.com/project/{PROJECT}/dashboard/{dashboard['id']}")
     return 0
 
 

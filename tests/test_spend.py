@@ -88,7 +88,8 @@ def test_an_account_is_kept_per_host_and_read_back(tmp_path: Path) -> None:
     known = store.account("nvidia.wd5.myworkdayjobs.com")
     assert known is not None and known[0] == "ada@example.com" and known[1].startswith("20")
     store.set_account("nvidia.wd5.myworkdayjobs.com", "other@example.com")
-    assert store.accounts() == {"nvidia.wd5.myworkdayjobs.com": "other@example.com"}
+    changed = store.account("nvidia.wd5.myworkdayjobs.com")
+    assert changed is not None and changed[0] == "other@example.com"
     store.close()
 
 

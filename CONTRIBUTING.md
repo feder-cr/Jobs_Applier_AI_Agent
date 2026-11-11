@@ -46,7 +46,7 @@ The workflow is `.github/workflows/tests.yml`. It runs on every push to `main`, 
 - **browser**, on Ubuntu: installs the Firefox libraries and xvfb, then `xvfb-run -a -s "-screen 0 1920x1080x24" pytest -m browser`.
 - **gate**: passes only if both jobs pass.
 
-The other workflow, `.github/workflows/jobs-database.yml`, builds the job database and publishes it as a release. It runs on a schedule and by hand, not on pull requests.
+The other workflow, `.github/workflows/jobs-database.yml`, builds the job database and publishes it to the Hugging Face dataset AIHawk reads. It runs on a schedule and by hand, not on pull requests.
 
 ## Before you open a pull request
 

@@ -14,7 +14,7 @@ import pytest
 from mcp import ClientSession
 from mcp.client.stdio import stdio_client
 
-from aihawk.apply import _open_browser, _server, apply_to_job, fill_form, server_parameters, tool_text
+from aihawk.apply import _open_browser, _server, apply_to_job, server_parameters
 from aihawk.database import Job
 from fakes import ScriptedModel, tool_call
 
@@ -97,24 +97,6 @@ root.getElementById('shadow').onclick = () => { %s };
 MIXED_SEND_LIGHT = mixed("Submit application", "Add another")
 # The page's own match is harmless and the shadow one is a send button; the click by `.go` must reach the page's own one.
 MIXED_HARMLESS_LIGHT = mixed("Add another", "Submit application")
-
-
-class Elsewhere(BaseHTTPRequestHandler):
-    """Another host of the loopback: a form that leaves the site lands here."""
-
-    posts: ClassVar[list[bytes]] = []
-
-    def do_POST(self) -> None:
-        Elsewhere.posts.append(self.rfile.read(int(self.headers["Content-Length"])))
-        body = b"<title>Thanks</title><h1>Thank you, your application was received</h1>"
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def log_message(self, *args: Any) -> None:
-        pass
 
 
 class Site(BaseHTTPRequestHandler):
@@ -207,41 +189,6 @@ def test_a_form_whose_send_control_is_in_a_shadow_root_reaches_ready_and_is_sent
     outcome = asyncio.run(apply_to_job(model, "m", job, "cv", "answers", tmp_path / "cv.pdf", tmp_path, tmp_path / "browser-profile"))  # type: ignore[arg-type]
     assert outcome.status == "submitted", outcome.summary
     assert len(Site.posts) == 1
-
-
-def drive(site: str, path: str, tmp_path: Path, calls: list[Any]) -> tuple[dict[str, Any], ScriptedModel, list[str]]:
-    """Calls by the model on a page of the site, then finish_form; returns the report, the model, and what the page recorded."""
-
-    async def go() -> tuple[dict[str, Any], ScriptedModel, list[str]]:
-        async with _server(tmp_path, tmp_path / "browser") as (session, _):
-            await _open_browser(session, tmp_path / "browser-profile")
-            try:
-                await session.call_tool("browser_navigate", {"url": site + path})
-                model = ScriptedModel(*calls, [tool_call("finish_form", status="blocked", summary="checked", submit_selector="")])
-                report = await fill_form(session, [], model, "m", "brief", form_url=site)
-                clicked = json.loads(tool_text(await session.call_tool("browser_evaluate", {"expression": "window.clicked || []"})))
-                return report, model, clicked
-            finally:
-                await session.call_tool("browser_close", {})
-
-    return asyncio.run(go())
-
-
-@pytest.fixture
-def elsewhere() -> Any:
-    Elsewhere.posts = []
-    server = ThreadingHTTPServer(("127.0.0.2", 0), Elsewhere)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    yield f"http://127.0.0.2:{server.server_port}/"
-    server.shutdown()
-
-
-def run_select(site: str, path: str, tmp_path: Path, model: ScriptedModel) -> Any:
-    cv = tmp_path / "cvs" / "cv.pdf"
-    cv.parent.mkdir(parents=True, exist_ok=True)
-    cv.write_bytes(b"%PDF-1.4 Ada Rossi")
-    job = Job("t:2", "Acme", "Engineer", "Rome", site, site + path, "d")
-    return asyncio.run(apply_to_job(model, "m", job, "cv", "answers", cv, tmp_path, tmp_path / "browser-profile"))  # type: ignore[arg-type]
 
 
 def test_the_browser_starts_with_the_model_key_kept_out_of_its_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

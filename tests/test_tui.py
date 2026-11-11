@@ -21,6 +21,7 @@ from textual.widgets import DataTable, Input, RichLog, Static
 import aihawk.tui as tui_module
 from aihawk import apply as apply_module
 from aihawk import session as session_module
+from aihawk import telemetry
 from aihawk.apply import Outcome
 from aihawk.cli import main as cli_main
 from aihawk.config import Config, ConfigError, load_config
@@ -34,7 +35,6 @@ from aihawk.tui import AIHawk
 from fakes import ScriptedBrowser, publish
 
 PROFILE = {
-    "name": "Ada Rossi",
     "plan": {
         "nodes": [{"id": "role", "weight": 1.5, "forms": [{"text": "Python Engineer", "weight": 1.0}, {"text": "Python Developer", "weight": 1.0}]}],
         "arcs": [],
@@ -136,10 +136,10 @@ async def settle(pilot: Any, app: AIHawk) -> None:
     raise AssertionError("the flow never settled")
 
 
-def test_a_judged_posting_with_no_text_keeps_its_score_and_the_row_carries_no_status(home: Path) -> None:
+def test_a_scored_posting_with_no_text_keeps_its_score_and_the_row_carries_no_status(home: Path) -> None:
     app = AIHawk(home)
-    judged = Stored(Job("x", "Co", "Engineer", "Milan", "u", "u", ""), "scored", 3.0, None, None, None)
-    read = Stored(Job("y", "Co", "Engineer", "Milan", "u", "u", "A posting."), "scored", 3.0, None, None, None)
+    judged = Stored(Job("x", "Co", "Engineer", "Milan", "u", "u", ""), "scored", 3.0, None)
+    read = Stored(Job("y", "Co", "Engineer", "Milan", "u", "u", "A posting."), "scored", 3.0, None)
     # The row says the score and nothing else; that the text was missing is said in the details, on Enter.
     assert app.row(judged)[1] == "3.0" and len(app.row(judged)) == len(app.row(read)) == 5
     assert str(app.row(judged)[0]) == "" and str(app.row(read)[0]) == ""
@@ -272,45 +272,55 @@ def test_space_space_a_then_enter_sends_each_selected_job_once_and_asks_no_quest
     assert Path(calls[0]["cv_file"]).is_file()
 
 
-def test_every_application_is_sent_to_posthog_with_how_it_went_and_nothing_about_the_person_and_a_dry_run_is_not(
-    home: Path, resume: Path, restored_apply: Any, tracked: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+async def send_applications(home: Path, resume: Path, keys: list[str], outcomes: list[Outcome]) -> None:
+    """The jobs the keys select, applied to with scripted outcomes."""
+    app = scripted_app(home, resume)
+    fake_apply(app, outcomes, [])
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(pilot, app)
+        await pilot.press(*keys, "a")
+        await wait_for_screen(pilot, SendBatch)
+        await pilot.press("enter")
+        await wait_for_apply(pilot, app)
+
+
+def test_an_application_is_sent_to_posthog_with_how_it_went_and_the_tokens_and_no_price(
+    home: Path, resume: Path, restored_apply: Any, tracked: list[dict[str, Any]]
 ) -> None:
-    import threading
-
-    from aihawk import telemetry
-
-    async def send(keys: list[str], outcomes: list[Outcome]) -> None:
-        app = scripted_app(home, resume)
-        fake_apply(app, outcomes, [])
-        async with app.run_test(size=(140, 40)) as pilot:
-            await settle(pilot, app)
-            await pilot.press(*keys, "a")
-            await wait_for_screen(pilot, SendBatch)
-            await pilot.press("enter")
-            await wait_for_apply(pilot, app)
-        for thread in threading.enumerate():
-            if thread.name == "telemetry":
-                thread.join()
-
-    asyncio.run(send(["space", "space"], [Outcome("submitted", "sent", steps=12), Outcome("blocked", "a puzzle", reason="captcha", steps=4)]))
+    asyncio.run(send_applications(home, resume, ["space", "space"], [Outcome("submitted", "sent", steps=12), Outcome("blocked", "a puzzle", reason="captcha", steps=4)]))
     applications = [event for event in tracked if event["event"] == "application"]
     assert [(event["properties"]["outcome"], event["properties"]["reason"], event["properties"]["steps"]) for event in applications] == [
         ("submitted", "", 12), ("blocked", "captcha", 4)]
     sent = applications[0]
     assert sent["api_key"] == telemetry.PROJECT_KEY and sent["properties"]["site"] == "lever" and sent["properties"]["plugin"] is True
     assert sent["properties"]["gateway"] == "api.orcarouter.ai" and sent["properties"]["forms_model"]
-    # Tokens, read and written, and no price: the owner turns them into money himself.
     assert {"input_tokens", "output_tokens", "models", "tokens_by_model"} <= set(sent["properties"]) and "cost" not in sent["properties"]
     assert {"app_started", "search", "jobs_scored"} <= {event["event"] for event in tracked}
-    # One id for this computer, made at random and kept: nothing in any event is the person's or the job's.
+
+
+def test_no_event_carries_anything_about_the_person_or_the_job_and_all_have_one_id(
+    home: Path, resume: Path, restored_apply: Any, tracked: list[dict[str, Any]]
+) -> None:
+    outcomes = [Outcome("submitted", "sent"), Outcome("submitted", "sent"), Outcome("submitted", "sent")]
+    asyncio.run(send_applications(home, resume, ["space", "space", "space"], outcomes))
     assert len({event["distinct_id"] for event in tracked}) == 1
     text = json.dumps(tracked)
-    assert not any(word in text for word in ("Ada", "ada@example.com", "Bestco", "Lowly", "jobs.lever.co/beta"))
-    # A dry run fills the form and sends nothing: nothing is sent to PostHog either.
+    assert not any(word in text for word in ("Ada", "ada@example.com", "Bestco", "Lowly", "Noplugin", "jobs.lever.co/beta", "nobody.example"))
+
+
+def test_a_form_on_a_company_host_is_the_site_other_and_its_host_is_in_no_event(
+    home: Path, resume: Path, restored_apply: Any, tracked: list[dict[str, Any]]
+) -> None:
+    asyncio.run(send_applications(home, resume, ["down", "down", "space"], [Outcome("submitted", "sent")]))
+    (application,) = [event for event in tracked if event["event"] == "application"]
+    assert application["properties"]["site"] == "other" and application["properties"]["plugin"] is False
+    assert "nobody" not in json.dumps(tracked)
+
+
+def test_a_dry_run_is_not_counted(home: Path, resume: Path, restored_apply: Any, tracked: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AIHAWK_DRY_RUN", "1")
-    before = len(tracked)
-    asyncio.run(send(["down", "down", "space"], [Outcome("blocked", "Dry run: nothing sent.")]))
-    assert len(tracked) == before
+    asyncio.run(send_applications(home, resume, ["space"], [Outcome("blocked", "Dry run: nothing sent.")]))
+    assert tracked == []
 
 
 def test_escape_on_the_batch_sends_none_and_the_selection_stays(home: Path, resume: Path, restored_apply: Any) -> None:
@@ -517,25 +527,33 @@ def test_a_second_start_goes_straight_to_the_list_without_asking(home: Path, res
     assert asyncio.run(run(None)) == [0]
 
 
-def test_the_first_start_says_each_step_and_closing_says_where_it_was_and_whether_it_searched(
+def test_a_start_says_each_step_and_closing_says_where_it_was_and_whether_it_searched(
     home: Path, resume: Path, tracked: list[dict[str, Any]]
 ) -> None:
-    import threading
-
     async def run() -> None:
         app = scripted_app(home, resume)
         async with app.run_test(size=(140, 40)) as pilot:
             await settle(pilot, app)
 
     asyncio.run(run())
-    for thread in threading.enumerate():
-        if thread.name == "telemetry":
-            thread.join()
-    steps = [event["properties"]["step"] for event in tracked if event["event"] == "first_run"]
-    assert "resume_read" in steps and steps.index("resume_read") < len(steps)
-    assert all(event["properties"]["seconds"] >= 0 for event in tracked if event["event"] == "first_run")
+    steps = [event["properties"]["step"] for event in tracked if event["event"] == "start_step"]
+    assert steps == ["resume_read", "jobs_downloading", "jobs_ready"]
     (closed,) = [event for event in tracked if event["event"] == "app_closed"]
     assert closed["properties"]["searched"] is True and closed["properties"]["last_step"] == steps[-1]
+
+
+def test_a_resume_that_cannot_be_read_is_one_event_with_its_kind_and_not_two(home: Path, tmp_path: Path, tracked: list[dict[str, Any]]) -> None:
+    empty = tmp_path / "empty.txt"
+    empty.write_text("too short", encoding="utf-8")
+
+    async def run() -> None:
+        app = scripted_app(home, empty)
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
+
+    asyncio.run(run())
+    failures = [event["properties"] for event in tracked if event["event"] == "start_step"]
+    assert [(step["step"], step["error"], step["kind"]) for step in failures] == [("resume_failed", "ConfigError", ".txt")]
 
 
 @pytest.mark.parametrize("name", ["cv.txt", "cv.md"])
@@ -785,7 +803,7 @@ def test_a_page_shows_whole_and_sorted_and_a_later_score_never_moves_it(home: Pa
         for n in range(4):
             store.add(Job(f"j{n}", f"Firm {n}", "Engineer", "Milan", f"https://a.example/{n}", f"https://a.example/{n}", "d"))
         for job_id, score in (("j0", 2.0), ("j1", 4.0), ("j2", 3.0)):
-            store.set_score(job_id, score, {})
+            store.set_score(job_id, score)
         app.start = lambda: None  # type: ignore[method-assign]
         app.keep_ahead = lambda: None  # type: ignore[method-assign]
         async with app.run_test(size=(140, 40)) as pilot:
@@ -795,7 +813,7 @@ def test_a_page_shows_whole_and_sorted_and_a_later_score_never_moves_it(home: Pa
             assert companies(app) == ["Firm 1", "Firm 2", "Firm 0"]
             await pilot.press("down")
             # A job scored later is not this page's: the page, and the cursor on it, stay as they are.
-            store.set_score("j3", 5.0, {})
+            store.set_score("j3", 5.0)
             app.refresh_jobs()
             await pilot.pause()
             assert companies(app) == ["Firm 1", "Firm 2", "Firm 0"] and app.current_id() == "j2"
@@ -836,7 +854,7 @@ def test_home_and_end_take_the_cursor_and_a_new_width_refits_the_columns_and_the
     asyncio.run(run())
 
 
-def test_a_posting_with_no_description_is_judged_on_its_title_and_no_page_is_read(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_posting_with_no_description_is_scored_on_its_title_and_no_page_is_read(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     session = Session(home)
     session._client = ScriptedModelForApp()  # type: ignore[assignment]
     asyncio.run(session.load_resume(resume))

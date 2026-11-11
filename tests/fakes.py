@@ -2,10 +2,24 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
+import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def load_script(folder: str, name: str) -> ModuleType:
+    """A program of the repository (in scripts/ or pipeline/), loaded by its file: it is not part of the package."""
+    spec = importlib.util.spec_from_file_location(name, ROOT / folder / f"{name}.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def tool_call(name: str, call_id: str = "call", **arguments: Any) -> SimpleNamespace:
