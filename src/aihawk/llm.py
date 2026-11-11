@@ -1,4 +1,4 @@
-"""The one model gateway, OrcaRouter: OpenAI's chat API, and the decision model's /systemone call."""
+"""The one model gateway, OrcaRouter: OpenAI's chat API, the cost of its calls and how a failed call is told."""
 
 from __future__ import annotations
 
@@ -17,12 +17,17 @@ from openai import (
 
 from aihawk.config import DEFAULT_BASE_URL, KEY_ENV, KEY_URL, Config, ConfigError
 
-# The SDK's own default is ten minutes a try, and a model that hangs would hold a judgment that long.
+# The SDK's own default is ten minutes a try, and a model that hangs would hold a request that long.
 TIMEOUT = 180.0
 
 
+# A spend's total and tokens at one moment: see Spend.mark.
+Mark = tuple[float, dict[str, tuple[int, int]]]
+
+
 class Spend:
-    """What the model calls cost, in dollars: each call's tokens at the gateway's own price for its model, added up.
+    """What the model calls cost, in dollars: each call's tokens at the gateway's own price for its model, added up. The
+    tokens each model took in and gave out are counted too, every call, priced or not.
 
     The prices come from the gateway's /models list, read once, and give each call's cost the moment it ends. The gateway also keeps
     a record of what it charged for each request: `settle` reads it for the calls since the last settling and corrects the total,
@@ -37,7 +42,7 @@ class Spend:
         self.unpriced = 0
         self.loaded = False
         self.pending: list[tuple[str, float]] = []  # the gateway's id of each call not yet settled, and its estimate
-        # The tokens each model took in and gave out, every call counted, priced or not.
+        # The tokens each model took in and gave out.
         self.tokens: dict[str, tuple[int, int]] = {}
 
     async def load_prices(self, client: AsyncOpenAI) -> None:
@@ -59,18 +64,17 @@ class Spend:
     def note(self, model: str, usage: Any, request_id: str = "") -> float:
         """One call's cost, estimated from its usage and added to the total; its gateway id kept for settling. Zero, and one more
         unpriced call, when the price is unknown."""
-        estimate = 0.0
-        if usage is not None:
-            taken, given = self.tokens.get(model, (0, 0))
-            self.tokens[model] = (taken + int(getattr(usage, "prompt_tokens", 0) or 0), given + int(getattr(usage, "completion_tokens", 0) or 0))
         if usage is None:
-            # A client that says nothing about tokens: nothing to estimate, and nothing to call unpriced.
+            # A client that says nothing about tokens: nothing to count or estimate, and nothing to call unpriced.
             if request_id:
                 self.pending.append((request_id, 0.0))
             return 0.0
+        prompt = int(getattr(usage, "prompt_tokens", 0) or 0)
+        completion = int(getattr(usage, "completion_tokens", 0) or 0)
+        taken, given = self.tokens.get(model, (0, 0))
+        self.tokens[model] = (taken + prompt, given + completion)
+        estimate = 0.0
         if (price := self.prices.get(model)) is not None:
-            prompt = int(getattr(usage, "prompt_tokens", 0) or 0)
-            completion = int(getattr(usage, "completion_tokens", 0) or 0)
             details = getattr(usage, "prompt_tokens_details", None)
             cached = int(getattr(details, "cached_tokens", 0) or 0)
             estimate = (prompt - cached) * price[0] + cached * price[2] + completion * price[1]
@@ -80,6 +84,20 @@ class Spend:
         if request_id:
             self.pending.append((request_id, estimate))
         return estimate
+
+    def mark(self) -> Mark:
+        """Where the count stands now, to ask later what came after it."""
+        return self.total, dict(self.tokens)
+
+    def since(self, mark: Mark) -> tuple[float, dict[str, tuple[int, int]]]:
+        """What the calls after `mark` cost, and the tokens each model took in and gave out in them; a model that took none is left out."""
+        total, before = mark
+        used = {}
+        for model, (taken, given) in self.tokens.items():
+            taken_before, given_before = before.get(model, (0, 0))
+            if (taken, given) != (taken_before, given_before):
+                used[model] = (taken - taken_before, given - given_before)
+        return self.total - total, used
 
     async def settle(self, client: AsyncOpenAI) -> None:
         """What the gateway says it charged for each call not yet settled, in place of the estimate. A record it does not have yet

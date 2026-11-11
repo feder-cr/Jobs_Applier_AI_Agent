@@ -19,11 +19,11 @@ import duckdb
 from aihawk.config import Arc, Filters, Form, Node, Plan
 from aihawk.library import Library
 
-# How many postings a search brings back to be judged. Past these, a title fits the search too little to be worth a look.
+# How many postings a search brings back to be scored. Past these, a title fits the search too little to be worth a look.
 RECALL = 600
 # What being in the person's own city is worth, against a node of the plan: about as much as a named skill.
 CITY_WEIGHT = 1.5
-# What a posting with no description keeps of its score: judged on its title alone, it needs a title twice as fitting to
+# What a posting with no description keeps of its score: ranked on its title alone, it needs a title twice as fitting to
 # come before one that has a description.
 UNDESCRIBED = 0.5
 # What a remote posting's location says when it does not narrow the job to a place: the database writes "Remote" for one
@@ -205,7 +205,7 @@ def search(library: Library, filters: Filters, max_age_days: int, limit: int = R
 
     The plan's nodes score a title by their best wording that it holds, weighted by how rare the wording is among the
     postings of this place: "Python" tells more than "Engineer". Arcs then scale the title, and the person's own city adds
-    to it. A posting is known by its address. Its description is read when a job is judged, not here.
+    to it. A posting is known by its address. Its description is read when a job is scored, not here.
     """
     plan = _plan_of(filters)
     nodes = tuple(node for node in plan.nodes if node.forms)

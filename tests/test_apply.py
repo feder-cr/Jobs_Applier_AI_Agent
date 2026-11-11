@@ -19,6 +19,7 @@ from aihawk.apply import (
     PAGE_CHARS,
     SYSTEM,
     Outcome,
+    Report,
     apply_to_job,
     fill_form,
     instructions,
@@ -26,6 +27,7 @@ from aihawk.apply import (
     server_parameters,
     sign_in,
 )
+from aihawk.config import DRY_RUN_ENV
 from aihawk.database import Job
 from fakes import ScriptedBrowser, ScriptedModel, tool_call
 
@@ -190,7 +192,7 @@ def test_the_same_call_with_the_same_answer_is_warned_then_stopped_and_nothing_i
     browser = ScriptedBrowser()
     model = ScriptedModel(*[[tool_call("browser_press_key", key="End")] for _ in range(LOOP_STOP)])
     report = asyncio.run(fill_form(browser, [], model, "m", "brief"))  # type: ignore[arg-type]
-    assert report["status"] == "blocked" and "going round in circles: browser_press_key" in report["summary"]
+    assert report.status == "blocked" and "going round in circles: browser_press_key" in report.summary
     told = [m["content"] for m in model.requests[-1]["messages"] if isinstance(m, dict) and m.get("role") == "user"]
     assert sum("nothing on the page changes" in str(text) for text in told) == 1
     assert len(browser.calls) == LOOP_STOP and browser.clicks() == []
@@ -209,13 +211,13 @@ def test_a_key_that_moves_down_a_list_is_not_a_loop() -> None:
     steps = [[tool_call("browser_press_key", key="ArrowDown")] for _ in range(3 * LOOP_STOP)]
     model = ScriptedModel(*steps, [tool_call("finish_form", status="blocked", summary="list read", submit_selector="")])
     report = asyncio.run(fill_form(_MovingList(), [], model, "m", "brief"))  # type: ignore[arg-type]
-    assert report["summary"] == "list read"
+    assert report.summary == "list read"
 
 
 def test_a_model_that_only_talks_is_stopped() -> None:
     model = ScriptedModel("thinking", "still thinking", "nearly")
     report = asyncio.run(fill_form(ScriptedBrowser(), [], model, "m", "brief"))  # type: ignore[arg-type]
-    assert report["status"] == "blocked" and "without using the tools" in report["summary"]
+    assert report.status == "blocked" and "without using the tools" in report.summary
 
 
 def test_waiting_for_a_code_that_never_comes_ends_at_the_fifth_look_with_nothing_new() -> None:
@@ -223,7 +225,7 @@ def test_waiting_for_a_code_that_never_comes_ends_at_the_fifth_look_with_nothing
     look = [tool_call("browser_evaluate", expression=wait), tool_call("browser_read_text", selector="body")]
     model = ScriptedModel(*[look for _ in range(LOOP_STOP)])
     report = asyncio.run(fill_form(ScriptedBrowser(), [], model, "m", "brief"))  # type: ignore[arg-type]
-    assert report["status"] == "blocked" and "browser_evaluate, browser_read_text" in report["summary"]
+    assert report.status == "blocked" and "browser_evaluate, browser_read_text" in report.summary
 
 
 @pytest.mark.parametrize(("confidence", "stopped"), [(0.95, True), (0.5, False)])
@@ -233,8 +235,8 @@ def test_a_loop_no_fingerprint_sees_is_stopped_when_a_model_is_sure_of_it(monkey
     steps = [[tool_call("browser_press_key", key="ArrowDown")], [tool_call("browser_press_key", key="ArrowDown")], verdict]
     model = ScriptedModel(*steps, [tool_call("finish_form", status="blocked", summary="went on", submit_selector="")])
     report = asyncio.run(fill_form(_MovingList(), [], model, "m", "brief"))  # type: ignore[arg-type]
-    assert (report["summary"] == "Stopped going round in circles: uploads the CV and fills the fields again") is stopped
-    assert (report["summary"] == "went on") is not stopped
+    assert (report.summary == "Stopped going round in circles: uploads the CV and fills the fields again") is stopped
+    assert (report.summary == "went on") is not stopped
 
 
 class SignedOutMailbox(ScriptedBrowser):
@@ -256,7 +258,7 @@ def test_a_mailbox_that_sends_the_browser_to_its_sign_in_page_ends_the_form_for_
 def test_a_signed_in_mailbox_goes_on() -> None:
     model = ScriptedModel([tool_call("browser_navigate", url="https://mail.google.com/mail/u/0/")], [tool_call("finish_form", status="blocked", summary="code read", submit_selector="")])
     report = asyncio.run(fill_form(ScriptedBrowser(), [], model, "m", "brief"))  # type: ignore[arg-type]
-    assert report["summary"] == "code read" and "mailbox_signed_out" not in report
+    assert report.summary == "code read" and not report.blocked_by
 
 
 def test_a_send_control_that_matches_several_elements_goes_back_to_the_model() -> None:
@@ -266,7 +268,7 @@ def test_a_send_control_that_matches_several_elements_goes_back_to_the_model() -
         [tool_call("finish_form", status="ready", summary="filled", submit_selector="#send")],
     )
     report = asyncio.run(fill_form(browser, [], model, "m", "brief"))  # type: ignore[arg-type]
-    assert report["submit_selector"] == "#send"
+    assert report.submit_selector == "#send"
     told = [m["content"] for m in model.requests[-1]["messages"] if isinstance(m, dict) and m.get("role") == "tool"]
     assert "matches 3 elements" in told[-1]
     assert browser.clicks() == []
@@ -282,11 +284,11 @@ def test_the_plugins_text_reaches_the_verifying_model_as_its_rules_while_the_pag
     assert guidance not in verifying[1]["content"]
 
 
-def test_a_send_slow_to_show_is_judged_on_the_page_it_reached_with_its_address(tmp_path: Path) -> None:
+def test_a_send_slow_to_show_is_read_on_the_page_it_reached_with_its_address(tmp_path: Path) -> None:
     model = ScriptedModel(ready(), json.dumps({"outcome": "submitted", "evidence": "the page"}))
     outcome = run(model, SlowSend(reads_until_moved=8), tmp_path / "shot.png")
-    judged = model.requests[-1]["messages"][-1]["content"]
-    assert "https://u/thanks" in judged and "Application received" in judged and "the form" not in judged
+    read = model.requests[-1]["messages"][-1]["content"]
+    assert "https://u/thanks" in read and "Application received" in read and "the form" not in read
     assert outcome.proof.text == "Application received" and outcome.proof.url == "https://u/thanks"
 
 
@@ -473,7 +475,7 @@ class MovesAfterItIsRead(ScriptedBrowser):
         return result
 
 
-def test_a_page_judged_before_it_moved_on_is_judged_again_where_it_went(tmp_path: Path) -> None:
+def test_a_page_read_before_it_moved_on_is_read_again_where_it_went(tmp_path: Path) -> None:
     says = (json.dumps({"outcome": "rejected", "evidence": "still the Review step"}), VERIFIED)
     browser = MovesAfterItIsRead()
     outcome = run(ScriptedModel(ready(), *says), browser, tmp_path / "proof.png")
@@ -547,7 +549,7 @@ def test_what_goes_wrong_in_the_browser_comes_out_as_itself(tmp_path: Path, monk
 
 def test_a_dry_run_fills_the_form_names_the_send_control_and_sends_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # A trial of a site or a plugin with a test CV: the environment variable stops the application before the click.
-    monkeypatch.setenv(apply_module.DRY_RUN_ENV, "1")
+    monkeypatch.setenv(DRY_RUN_ENV, "1")
     browser = ScriptedBrowser({"#send": SUBMIT}, page={"url": "https://u/apply", "text": "the form"})
     outcome = asyncio.run(run_on_page(browser, [], ScriptedModel(ready()), "m", JOB, "cv", "account_password: Secret!9x\nemail: a@b.c", Path("cv.pdf"), tmp_path / "proofs" / "shot.png"))  # type: ignore[arg-type]
     assert outcome.status == "blocked"
@@ -607,7 +609,7 @@ def test_moving_about_inside_one_mailbox_visit_is_free(tmp_path: Path) -> None:
         ready(),
     )
     report = asyncio.run(fill_form(browser, [], model, "m", "the brief"))  # type: ignore[arg-type]
-    assert report["status"] == "ready" and mailbox_pages(browser) == 3
+    assert report.status == "ready" and mailbox_pages(browser) == 3
 
 
 def test_the_third_arrival_at_the_mailbox_ends_the_form_blocked(tmp_path: Path) -> None:
@@ -622,7 +624,7 @@ def test_the_third_arrival_at_the_mailbox_ends_the_form_blocked(tmp_path: Path) 
         ready(),
     )
     report = asyncio.run(fill_form(browser, [], model, "m", "the brief"))  # type: ignore[arg-type]
-    assert report == {"status": "blocked", "blocked_by": "no_code", "summary": apply_module.NO_CODE, "submit_selector": "", "steps": 5}
+    assert report == Report("blocked", apply_module.NO_CODE, blocked_by=apply_module.NO_CODE_REASON, steps=5)
     assert mailbox_pages(browser) == 2
 
 

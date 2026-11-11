@@ -24,6 +24,9 @@ DEFAULT_QUICK_MODEL = "google/gemini-3.5-flash"
 # Answers, for each posting, whether it is in line with the candidate, and how sure it is: that is the posting's score.
 DEFAULT_DECISION_MODEL = "typesafe/jev-1.14"
 # The Hugging Face dataset the pipeline publishes to. It was GitHub's releases until 2026-11-08: see pipeline/publish.py.
+# Set in the environment, an application is a trial: the form is filled and the send control named, and nothing is sent, nor
+# counted. Read in one place, so what is sent and what is counted can never disagree about it.
+DRY_RUN_ENV = "AIHAWK_DRY_RUN"
 DEFAULT_DATABASE = "https://huggingface.co/datasets/feder-cr/jobs/resolve/main/library/manifest.json"
 # The manifest of the layout before 2026-11-09, which a settings file may still name: it means the default now.
 OLD_DATABASE = "https://huggingface.co/datasets/feder-cr/jobs/resolve/main/manifest.json"
@@ -85,7 +88,6 @@ class Filters:
 @dataclass(frozen=True)
 class Config:
     workspace: Path
-    name: str = ""
     goals: str = ""
     database: str = DEFAULT_DATABASE
     max_age_days: int = DEFAULT_MAX_AGE_DAYS
@@ -134,6 +136,11 @@ class Config:
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.key_file.touch(mode=0o600, exist_ok=True)
         self.key_file.write_text(key.strip(), encoding="utf-8")
+
+
+def dry_run() -> bool:
+    """Whether this run is a trial that sends nothing."""
+    return bool(os.environ.get(DRY_RUN_ENV, "").strip())
 
 
 def default_home() -> Path:
@@ -241,7 +248,6 @@ def load_config(workspace: Path) -> Config:
         raise ConfigError("filters must be a mapping with include, exclude, locations, cities, countries and plan")
     return Config(
         workspace=workspace,
-        name=str(raw.get("name") or ""),
         goals=str(raw.get("goals") or ""),
         database=DEFAULT_DATABASE if str(raw.get("database") or OLD_DATABASE) == OLD_DATABASE else str(raw["database"]),
         max_age_days=_days(raw.get("max_age_days", DEFAULT_MAX_AGE_DAYS), "max_age_days"),

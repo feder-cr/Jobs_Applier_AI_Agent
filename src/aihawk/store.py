@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import csv
-import json
 import os
 import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 from aihawk.database import Job, posting_keys
 from aihawk.secret import is_sealed, seal, unseal
@@ -26,9 +24,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     description TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'new',
     score REAL,
-    report TEXT,
     lexical REAL NOT NULL DEFAULT 0,
-    evidence REAL,
     note TEXT,
     sent_at TEXT,
     final_url TEXT,
@@ -65,13 +61,13 @@ CREATE TABLE IF NOT EXISTS answers (
 """
 
 # new -> scored -> refused | blocked | failed | submitted | unconfirmed, or new -> passed_over when Jev gave no answer.
-# shortlisted is an earlier version's, a job waiting for its judge: see JEV_ONLY.
+# shortlisted is a status an older store may still hold, for a job waiting to be scored: see JEV_ONLY.
 SUBMITTED = ("submitted", "unconfirmed")
 # How far along a job is, for keeping one of two rows that turn out to be the same posting: a sent one is never lost.
 PROGRESS = ("new", "passed_over", "shortlisted", "scored", "failed", "blocked", "refused", "unconfirmed", "submitted")
 # The store's ids follow key.sql; 2 is the key that knows a Workday or SmartRecruiters posting under any of its links.
 KEY_VERSION = 2
-# 3: Jev alone scores; the jobs an earlier version left to its judge are new again.
+# 3: Jev alone scores; the jobs an older store left waiting or passed over, with no score, are new again.
 JEV_ONLY = 3
 # 4: a job's id is its address, as the database's since 2026-11-09, and its key is kept beside it: the same posting under
 # another of its links is known by the key, and never comes back as new, to be sent twice.
@@ -119,9 +115,7 @@ class Stored:
     job: Job
     status: str
     score: float | None
-    report: dict[str, Any] | None
     note: str | None
-    evidence: float | None = None
 
 
 def _now() -> str:
@@ -179,7 +173,7 @@ class Store:
         if self._db.execute("PRAGMA user_version").fetchone()[0] < KEY_VERSION:
             self._rekey()
         if self._db.execute("PRAGMA user_version").fetchone()[0] < JEV_ONLY:
-            # An earlier version's jobs that its judge never scored, waiting or passed over: Jev reads them again.
+            # Jobs waiting or passed over that were never scored: Jev reads them again.
             self._db.execute("UPDATE jobs SET status = 'new' WHERE status IN ('shortlisted', 'passed_over') AND score IS NULL")
             self._db.execute(f"PRAGMA user_version = {JEV_ONLY}")
             self._db.commit()
@@ -254,8 +248,7 @@ class Store:
 
     @classmethod
     def _stored(cls, row: sqlite3.Row) -> Stored:
-        report = json.loads(row["report"]) if row["report"] else None
-        return Stored(cls._job(row), row["status"], row["score"], report, row["note"], row["evidence"])
+        return Stored(cls._job(row), row["status"], row["score"], row["note"])
 
     def sent(self) -> list[Sent]:
         """Every job tried, the newest first."""
@@ -279,12 +272,12 @@ class Store:
     def all(self) -> list[Stored]:
         """What the person sees, the best first: the scored by the score and the title's fit together, then the rest by the title's fit."""
         items = [self._stored(row) for row in self._db.execute("SELECT * FROM jobs").fetchall()]
-        judged = sorted(
+        scored = sorted(
             (item for item in items if item.score is not None),
             key=lambda item: (-(item.score + LEXICAL_SHARE * item.job.lexical), -item.job.lexical, item.job.id),
         )
         rest = sorted((item for item in items if item.score is None), key=lambda item: (-item.job.lexical, item.job.id))
-        return judged + rest
+        return scored + rest
 
     # The accounts the applications made, one per site: next time the model signs in instead of registering again.
     def account(self, host: str) -> tuple[str, str] | None:
@@ -298,9 +291,6 @@ class Store:
             (host.lower(), email, _now()),
         )
         self._db.commit()
-
-    def accounts(self) -> dict[str, str]:
-        return {row["host"]: row["email"] for row in self._db.execute("SELECT host, email FROM accounts ORDER BY host")}
 
     # The answers: what the person said about themselves, given to the model with the CV when a form is filled.
     def answers(self) -> dict[str, str]:
@@ -338,15 +328,8 @@ class Store:
             self._db.execute("DELETE FROM answers WHERE name = ?", (name,))
         self._db.commit()
 
-    def set_evidence(self, job_id: str, evidence: float) -> None:
-        self._db.execute("UPDATE jobs SET evidence = ?, updated = ? WHERE id = ?", (evidence, _now(), job_id))
-        self._db.commit()
-
-    def set_score(self, job_id: str, score: float, report: dict[str, Any]) -> None:
-        self._db.execute(
-            "UPDATE jobs SET status = 'scored', score = ?, report = ?, updated = ? WHERE id = ?",
-            (score, json.dumps(report, ensure_ascii=False), _now(), job_id),
-        )
+    def set_score(self, job_id: str, score: float) -> None:
+        self._db.execute("UPDATE jobs SET status = 'scored', score = ?, updated = ? WHERE id = ?", (score, _now(), job_id))
         self._db.commit()
 
     def set_statuses(self, job_ids: list[str], status: str) -> None:

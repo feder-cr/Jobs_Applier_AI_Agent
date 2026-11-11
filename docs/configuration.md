@@ -10,7 +10,7 @@ With the environment variable `AIHAWK_DRY_RUN` set to anything, an application s
 
 ## What it costs
 
-AIHawk counts the tokens of every model call and prices them with the gateway's own list, read once per start. The log says what each application and each scoring cost. Jev's calls, which score the jobs, are not counted: they go through another endpoint and cost under a cent per hundred postings.
+AIHawk counts the tokens of every model call and prices them with the gateway's own list, read once per start. The log says what each application cost. Jev's calls, which score the jobs, are not counted: they go through another endpoint and cost under a cent per hundred postings.
 
 ## The accounts it made
 
@@ -22,7 +22,6 @@ What the forms are told about you beyond the CV (email, phone, location, links, 
 
 | Key | Default | What it does |
 |---|---|---|
-| `name` | empty | Your name for this search, shown at the top of the list. |
 | `goals` | empty | What you are looking for, in your own words. Jev reads it. |
 | `database` | `https://huggingface.co/datasets/feder-cr/jobs/resolve/main/library/manifest.json` | Where the job database is: the URL of its `manifest.json`, or the path of a local one. AIHawk downloads into `data/library` the chunks the search's days need, the newest jobs first; after that, only what changed. |
 | `max_age_days` | `15` | How many days back a search looks; "Posted within (days)" in Settings. AIHawk downloads only the part of the database these days need, all of it before the first search. The database holds the last 60 days, so a larger number finds nothing more. A posting its source does not date is dated by the day the database first saw it. |
