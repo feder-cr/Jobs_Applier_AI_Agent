@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import time
 import webbrowser
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from rich.text import Text
 from textual import events, on, work
@@ -91,6 +92,10 @@ class AIHawk(App[None]):
         self.pages: list[list[str]] = []
         self.page = 0
         self.wanted: int | None = None
+        # How far the start came, whether a search ran, and when the app opened: sent when it closes (see step).
+        self.last_step = "opened"
+        self.searched = False
+        self.opened = 0.0
         # The chunks of the database on this computer, and of how many, while they come; and whether a search has to run
         # again over the chunks come since the last one.
         self.progress: tuple[int, int] | None = None
@@ -115,8 +120,14 @@ class AIHawk(App[None]):
     def on_mount(self) -> None:
         self.query_one(DataTable).focus()
         self.show_heading()
+        self.opened = time.monotonic()
         track(self.session.config.data_dir, "app_started")
         self.start()
+
+    def step(self, name: str, **properties: Any) -> None:
+        """How far the start has come, for AIHawk's makers: where people stop before their first search. See telemetry.py."""
+        self.last_step = name
+        track(self.session.config.data_dir, "first_run", step=name, seconds=round(time.monotonic() - self.opened, 1), **properties)
 
     def on_resize(self, event: events.Resize) -> None:
         # The event's size: the app's own still says the old one here, and the columns were cut for the screen before.
@@ -140,6 +151,9 @@ class AIHawk(App[None]):
         self.refresh_jobs(current)
 
     def on_unmount(self) -> None:
+        # Whether the person searched before closing, and where the start was: who leaves, and at which step.
+        track(self.session.config.data_dir, "app_closed", last_step=self.last_step, searched=self.searched,
+              seconds=round(time.monotonic() - self.opened, 1) if self.opened else 0.0)
         self.session.close()
 
     # What the person sees.
@@ -212,28 +226,41 @@ class AIHawk(App[None]):
         session = self.session
         try:
             if session.needs_key():
+                self.step("key_asked")
                 key = await self.push_screen_wait(TextPrompt(KEY_QUESTION, placeholder="sk-orca-...", password=True, hint=KEY_HINT))
                 if not key:
+                    self.step("key_missing")
                     self.say("Without a key AIHawk cannot read. Press e when you have one.")
                     return
                 session.save_key(key)
+                self.step("key_saved")
             if self.resume or session.needs_resume():
                 path = self.resume
+                if path is None:
+                    self.step("resume_asked")
                 while path is None:
                     answer = await self.push_screen_wait(TextPrompt(RESUME_QUESTION, placeholder=str(Path.home() / "resume.pdf"), hint=RESUME_HINT))
                     if not answer:
+                        self.step("resume_missing")
                         self.say("Press e when you have a resume.")
                         return
                     path = Path(answer.strip("\"' ")).expanduser()
                     if not path.is_file():
+                        self.step("resume_not_found")
                         self.say(f"No file at {path}.")
                         path = None
                 self.resume = None
                 self.say(f"Reading {path.name}.")
-                await session.load_resume(path)
+                try:
+                    await session.load_resume(path)
+                except Exception as error:
+                    self.step("resume_failed", error=type(error).__name__, kind=path.suffix.lower())
+                    raise
+                self.step("resume_read", kind=path.suffix.lower())
                 self.show_heading()
             if not session.mail()[1]:
-                await self.set_up_mail()
+                self.step("mail_asked")
+                self.step("mail_ready" if await self.set_up_mail() else "mail_later")
             # The jobs scored before, by an earlier search: the first pages, sorted as they are.
             scored = [item.job.id for item in session.store.all() if item.score is not None]
             self.pages = [scored[start : start + PAGE] for start in range(0, len(scored), PAGE)]
@@ -242,13 +269,17 @@ class AIHawk(App[None]):
             # before anything is searched, so the first matches are the best ones.
             self.bring_jobs()
             if not session.library.ready():
+                self.step("jobs_downloading")
                 self.show_progress()
                 return
             await session.find(self.say)
+            self.searched = True
             await self.score()
         except (ConfigError, DatabaseError) as error:
+            self.step("start_error", error=type(error).__name__)
             self.say(str(error))
         except Exception as error:  # noqa: BLE001  The screen stays up and says what went wrong, instead of a traceback over it.
+            self.step("start_error", error=type(error).__name__)
             self.failed(error)
         finally:
             self.show_heading()
@@ -292,6 +323,7 @@ class AIHawk(App[None]):
         self.refresh_jobs()
         if waiting and self.session.library.ready():
             # The count of the wait gives way: the person sees it is over.
+            self.step("jobs_ready", chunks=done)
             self.query_one(Said).say("Ready.", again=True)
         else:
             self.show_progress()
@@ -311,6 +343,7 @@ class AIHawk(App[None]):
             while self.more_found and self.is_running:
                 self.more_found = False
                 await self.session.find(self.say)
+                self.searched = True
                 self.keep_ahead()
         except DatabaseError as error:
             self.say(str(error))

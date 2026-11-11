@@ -52,6 +52,8 @@ CHARTS = [
     ("Applications by site and outcome", trends("application", breakdown="site", display="ActionsTable", date_from="-7d")),
     ("Tokens a day, read and written, by forms model", trends("application", sums=("input_tokens", "output_tokens"), breakdown="forms_model", display="ActionsBar")),
     ("Computers that opened AIHawk", trends("app_started", math="dau")),
+    ("First start: the steps people reach", trends("first_run", math="dau", breakdown="step", display="ActionsTable", date_from="-7d")),
+    ("Closed before a search: at which step", trends("app_closed", math="dau", breakdown="last_step", display="ActionsPie", date_from="-7d", where={"searched": False})),
 ]
 
 
