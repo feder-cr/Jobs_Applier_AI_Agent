@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import re
 import sys
 from pathlib import Path
@@ -18,6 +19,7 @@ def test_every_chart_reads_an_event_and_properties_aihawk_sends() -> None:
     sent = "".join((ROOT / "src" / "aihawk" / name).read_text(encoding="utf-8") for name in ("session.py", "tui.py"))
     events = set(re.findall(r'track\([^,]+, "(\w+)"', sent))
     assert {"app_started", "search", "jobs_scored", "application"} <= events
+    assert "cost" not in json.dumps(dashboard.CHARTS), "no price on the dashboard: tokens only"
     for _, query in dashboard.CHARTS:
         source = query["source"]
         for series in source["series"]:

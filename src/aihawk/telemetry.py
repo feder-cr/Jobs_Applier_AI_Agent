@@ -7,7 +7,8 @@ nothing about the person: no name, email, CV, answer, job or link. What goes:
 - `search`: how many jobs the search found, of how many in the database.
 - `jobs_scored`: how many postings Jev read in a round, how many it answered for, how long the round took.
 - `application`: how it ended (submitted, unconfirmed, refused, blocked, failed), why in one word, the kind of site
-  (the plugin's name, or the form's host), the models, the gateway, the steps, the seconds and the cost.
+  (the plugin's name, or the form's host), the models, the gateway, the steps, the seconds, and the tokens each model took
+  in and gave out. No price and no currency: the owner turns tokens into money himself, as of 2026-11-12.
 
 The owner's decision of 2026-11-11: it cannot be turned off, and the README says so. A dry run is not counted. The project
 key is PostHog's write-only key, made to be public: it can send events and read nothing.

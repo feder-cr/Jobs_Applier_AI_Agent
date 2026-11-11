@@ -37,6 +37,8 @@ class Spend:
         self.unpriced = 0
         self.loaded = False
         self.pending: list[tuple[str, float]] = []  # the gateway's id of each call not yet settled, and its estimate
+        # The tokens each model took in and gave out, every call counted, priced or not.
+        self.tokens: dict[str, tuple[int, int]] = {}
 
     async def load_prices(self, client: AsyncOpenAI) -> None:
         """The price list, once. A gateway that does not give one leaves every call unpriced; nothing else stops."""
@@ -58,6 +60,9 @@ class Spend:
         """One call's cost, estimated from its usage and added to the total; its gateway id kept for settling. Zero, and one more
         unpriced call, when the price is unknown."""
         estimate = 0.0
+        if usage is not None:
+            taken, given = self.tokens.get(model, (0, 0))
+            self.tokens[model] = (taken + int(getattr(usage, "prompt_tokens", 0) or 0), given + int(getattr(usage, "completion_tokens", 0) or 0))
         if usage is None:
             # A client that says nothing about tokens: nothing to estimate, and nothing to call unpriced.
             if request_id:

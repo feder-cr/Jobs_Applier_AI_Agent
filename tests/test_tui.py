@@ -299,6 +299,8 @@ def test_every_application_is_sent_to_posthog_with_how_it_went_and_nothing_about
     sent = applications[0]
     assert sent["api_key"] == telemetry.PROJECT_KEY and sent["properties"]["site"] == "lever" and sent["properties"]["plugin"] is True
     assert sent["properties"]["gateway"] == "api.orcarouter.ai" and sent["properties"]["forms_model"]
+    # Tokens, read and written, and no price: the owner turns them into money himself.
+    assert {"input_tokens", "output_tokens", "models", "tokens_by_model"} <= set(sent["properties"]) and "cost" not in sent["properties"]
     assert {"app_started", "search", "jobs_scored"} <= {event["event"] for event in tracked}
     # One id for this computer, made at random and kept: nothing in any event is the person's or the job's.
     assert len({event["distinct_id"] for event in tracked}) == 1
