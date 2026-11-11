@@ -30,6 +30,15 @@ def no_engine_download(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def a_computer_the_browser_can_open_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A test's browser is a scripted one: on a Linux machine with no desktop, as the ones that run these tests are, the
+    check for one would stop every application before it. A test of that check names its own system."""
+    from aihawk import apply
+
+    monkeypatch.setattr(apply, "PLATFORM", "a test")
+
+
+@pytest.fixture(autouse=True)
 def no_key_check_over_the_network(monkeypatch: pytest.MonkeyPatch) -> None:
     """A key typed in is tried against the service: in a test the service cannot be reached, which never blocks a key."""
     from openai import APIConnectionError
