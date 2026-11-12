@@ -18,7 +18,7 @@ from textual.containers import Horizontal
 from textual.widgets import DataTable, Footer, Input, Static
 
 from aihawk import errors
-from aihawk.apply import MAILBOXES, Outcome, mail_provider, why_not_sent
+from aihawk.apply import MAILBOXES, Outcome, mail_provider, no_browser_here, why_not_sent
 from aihawk.config import KEY_ENV, KEY_URL, ConfigError
 from aihawk.database import DatabaseError
 from aihawk.library import LibraryError, Stopped
@@ -187,6 +187,9 @@ class AIHawk(App[None]):
         self.query_one(DataTable).focus()
         self.show_heading()
         self.session.telemetry.started()
+        if words := no_browser_here():
+            # Said before the person spends an evening choosing jobs they cannot apply to from here.
+            self.say(words)
         self.start()
 
     def on_resize(self, event: events.Resize) -> None:
@@ -948,6 +951,9 @@ class AIHawk(App[None]):
             self.say("No resume given." if self.session.needs_resume() else "Your resume was not changed.")
 
     def action_apply(self) -> None:
+        if words := no_browser_here():
+            self.say(words)
+            return
         if self.busy():
             return
         self.apply_selected()

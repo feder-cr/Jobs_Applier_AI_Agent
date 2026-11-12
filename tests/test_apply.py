@@ -836,6 +836,20 @@ def test_on_linux_without_the_gtk_library_the_person_is_told_the_packages_for_de
     assert apply_module.missing_for_the_browser() is None
 
 
+def test_on_a_mac_or_a_linux_of_another_kind_the_browser_has_no_version_and_the_person_is_told(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(apply_module, "PLATFORM", "darwin")
+    reason, words = apply_module.missing_for_the_browser() or ("", "")
+    assert reason == "no_browser_here" and words.startswith("On a Mac AIHawk finds and scores jobs, but cannot send applications yet")
+    assert apply_module.why_not_sent("no_browser_here") == "the browser has no version for this computer"
+    monkeypatch.setattr(apply_module, "PLATFORM", "linux")
+    monkeypatch.setattr(apply_module, "MACHINE", "aarch64")
+    assert (apply_module.missing_for_the_browser() or ("", ""))[0] == "no_browser_here"
+    monkeypatch.setattr(apply_module, "MACHINE", "x86_64")
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setattr(apply_module.ctypes.util, "find_library", lambda name: "libgtk-3.so.0")
+    assert apply_module.missing_for_the_browser() is None
+
+
 def test_on_windows_nothing_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(apply_module, "PLATFORM", "win32")
     monkeypatch.delenv("DISPLAY", raising=False)
