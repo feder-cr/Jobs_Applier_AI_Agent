@@ -152,6 +152,8 @@ class AIHawk(App[None]):
         # What the log says about scoring that did not go through, which the count of the download must not cover.
         self.stuck = ""
         self.signing_in = False
+        # Whether the person left the mail for later in this run: a site's code is asked about once, not at every application.
+        self.mail_left = False
         # Why the key is being asked for again, for the question to say; and whether the start stopped for want of one.
         self.key_problem = ""
         self.sending = ""
@@ -313,9 +315,6 @@ class AIHawk(App[None]):
                 return
             if (self.resume or session.needs_resume()) and not await self.read_resume():
                 return
-            if not session.mail()[1]:
-                session.telemetry.step("mail_asked")
-                session.telemetry.step("mail_ready" if await self.set_up_mail() else "mail_later")
             # The jobs scored before, by an earlier search: the first pages, sorted as they are. While the jobs still come
             # there is the one page, the best so far, which each round of scoring makes again.
             scored = [item.job.id for item in session.store.all() if item.score is not None]
@@ -769,7 +768,7 @@ class AIHawk(App[None]):
             if choice == "folder":
                 webbrowser.open(self.session.config.workspace.as_uri())
             elif choice == "mail":
-                await self.set_up_mail()
+                self.mail_left = not await self.set_up_mail()
             elif choice == "answers":
                 await self.change_answers()
             elif choice == "key":
@@ -998,11 +997,19 @@ class AIHawk(App[None]):
             self.refresh_jobs()
 
     async def mail_then_retry(self, items: list[Stored]) -> list[tuple[Stored, Outcome]]:
-        """A site sent a code to the mail and the mailbox was not signed in: the sign-in now, then those applications again."""
+        """A site sent a code to the mail and the mailbox was not signed in: the question about it now, the sign-in, then those
+        applications again. This is the first place the mail is asked about, since only a code needs it. One left for later is not
+        asked again until AIHawk is opened again: the next ones say it and go on."""
         self.say("A site sent you a code by email, and AIHawk cannot read your mailbox yet.")
-        if await self.set_up_mail(MAIL_CODE_QUESTION):
-            return await self.send(items)
-        return []
+        if self.mail_left:
+            self.say(MAIL_LATER)
+            return []
+        telemetry = self.session.telemetry
+        telemetry.step("mail_asked")
+        ready = await self.set_up_mail(MAIL_CODE_QUESTION)
+        telemetry.step("mail_ready" if ready else "mail_later")
+        self.mail_left = not ready
+        return await self.send(items) if ready else []
 
     def can_send(self, item: Stored) -> bool:
         """Whether the job goes in the batch: all of them, but one already sent."""
