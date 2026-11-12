@@ -63,7 +63,7 @@ AIHawk tells us how it is used, so we know what to fix. It sends these events to
 | Event | When | What it carries |
 |---|---|---|
 | `app_started` | AIHawk opens | AIHawk's version, the operating system |
-| `start_step` | each step of a start | the step (key asked or saved, whether the OrcaRouter account has no credit and what the person did about it, resume read or not, mail, jobs downloading, the first job on the screen, jobs ready), the seconds since AIHawk opened, and where it applies the kind of file the resume is (pdf, docx…), how many parts of the jobs had come, or the kind of error that stopped the start: its name, with the status and the code OrcaRouter gave when it gave them, such as `APIStatusError 402 insufficient_user_quota` |
+| `start_step` | each step of a start | the step (key asked or saved, whether the OrcaRouter account has no credit and what the person did about it, resume read or not, the mail when a form needs a site's code, jobs downloading, the first job on the screen, jobs ready), the seconds since AIHawk opened, and where it applies the kind of file the resume is (pdf, docx…), how many parts of the jobs had come, or the kind of error that stopped the start: its name, with the status and the code OrcaRouter gave when it gave them, such as `APIStatusError 402 insufficient_user_quota` |
 | `search` | a search ends | how many jobs it found, and how many of them were new |
 | `jobs_scored` | Jev reads a round | how many postings, how many it answered for, how long it took, the model |
 | `app_closed` | AIHawk closes | the last step it reached, whether it searched, how long it was open |

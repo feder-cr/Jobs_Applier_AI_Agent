@@ -5,7 +5,8 @@ nothing about the person: no name, email, CV, answer, job, company or link. What
 
 - `app_started`: AIHawk's version and the operating system.
 - `start_step`: each step of a start, not only the first one (the key, whether its account has no credit and what the person
-  did about it, the resume, the mail, the jobs' download, the first job on the screen), and the seconds since AIHawk opened;
+  did about it, the resume, the jobs' download, the first job on the screen, and the mail, asked about when a form needs a site's code),
+  and the seconds since AIHawk opened;
   an `error` is the error's name with the status and the service's code when it has them, so that a 402 and a 403 are told
   apart. `app_closed`: the last step reached, whether a search ran, how long AIHawk was open.
 - `search`: how many jobs the search found, and how many of them were new to this computer.

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The mail is no longer asked before the first job shows: the question comes with the first application that needs a code from a site, then the mailbox opens for the sign-in and that application is sent again. Left for later, it is not asked again until AIHawk is opened again, and Settings, Your mail, still sets it.
+- A form the page's own validation refuses (a required box left empty) is no longer "not confirmed": it says which field, and the AI gets one more turn to fix it. A Lever form that sends the browser to the company's own website, with the application's id in the address, is read as received.
 - On a Mac, or a Linux that is not x86-64, the browser AIHawk applies with has no version: AIHawk says so when it opens and when `a` is pressed, instead of opening a browser that cannot start. Finding and scoring jobs works there.
 - A new OrcaRouter account has no credit, and the first thing AIHawk asks of it, reading the resume, was refused with "Something failed: Error code: 402". The key is now checked for credit when it is entered, and AIHawk says so before the resume, with a key that opens the site and one that checks again. When a request is refused for the account or the key, the screen says which it is (no credit, the key's own limit, its spending limit, a model it may not use) and what to press; the resume is remembered, and a key is never forgotten for it.
 - The jobs show up as they come: the first chunk is searched and read as soon as it is here, and the list grows after each chunk, with the rows you are reading held in place and the jobs you selected kept. The wait line counts megabytes and says about how long is left.

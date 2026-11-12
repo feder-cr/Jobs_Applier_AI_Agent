@@ -137,3 +137,7 @@ def test_the_rules_come_first_and_win_over_a_plugin() -> None:
     assert instructions("") == SYSTEM
 
 
+def test_a_lever_send_that_leaves_for_the_companys_own_site_is_a_received_application() -> None:
+    # Some boards send the browser to the company's website after the send, with the application's id in the address.
+    lever = plugin_for("https://jobs.lever.co/acme/1", load_plugins())
+    assert lever is not None and "LeverAppId=" in lever.instructions and "received application" in lever.instructions

@@ -288,6 +288,9 @@ class Outcome:
     reason: str = ""
     # How many turns the model took on the form.
     steps: int = 0
+    # The fields the page's own validation refused, each with its message, when the form stayed as it was after the click for
+    # that reason: the form goes back to the model once with them.
+    invalid: str = ""
 
     @property
     def needs_mail(self) -> bool:
@@ -343,6 +346,36 @@ def _keep_latest_picture(messages: list[Any]) -> None:
     for message in messages:
         if message.get("role") == "user" and isinstance(message.get("content"), list):
             message["content"] = "A picture of the page was taken here; the latest one is below."
+
+
+# What the page-reading tools answer (a snapshot, the page's text or HTML, a script's result) can run to tens of thousands of
+# characters, and every later request carries every earlier one again: most of a long form's tokens. A reading over
+# LARGE_READING characters is kept whole while it is one of the latest READINGS_WHOLE; the older ones are cut to their start.
+# The cut is made in batches, only once READINGS_BATCH more than that are whole, because the AI service reuses the part of a request
+# that is the same as the one before and an old message changed makes it work again from there on: one cut per few steps, not per step.
+# What a small answer holds, the first request and the system message are never touched. Off, the history grows as it always did.
+# On real forms the readings that matter are 3,000 to 25,000 characters and the answers to a click or a typed field under 500, so
+# 2000 separates them; a form has four to seven of the large ones, and with a batch of one the cut falls on the fourth.
+# Off: measured on 2026-11-12 on three vendors' test postings, the forms were filled as well with it, and a request carried
+# about a fifth less, but the service's charge for a form did not fall (95% of a request is reused from the one before, and
+# each cut ends that), and steps and seconds moved within what two runs of the same form differ by.
+TRIM_READINGS = False
+LARGE_READING = 2000
+READINGS_WHOLE = 2
+READINGS_BATCH = 1
+READING_HEAD = 400
+EARLIER_READING = "\n[An earlier reading, cut to its start to keep this conversation short. Read the page again if you need it.]"
+
+
+def _trim_readings(messages: list[Any]) -> None:
+    """The older large page readings cut to their start, once enough of them are whole; the latest ones and every small answer stay."""
+    if not TRIM_READINGS:
+        return
+    whole = [message for message in messages if message.get("role") == "tool" and len(message.get("content") or "") > LARGE_READING]
+    if len(whole) <= READINGS_WHOLE + READINGS_BATCH:
+        return
+    for message in whole[:-READINGS_WHOLE]:
+        message["content"] = message["content"][:READING_HEAD] + EARLIER_READING
 
 
 def _blocked(summary: str, reason: str, steps: int) -> Report:
@@ -482,6 +515,7 @@ async def fill_form(session: Browser, tools: list[dict[str, Any]], client: Async
             seen += pictures
             messages.append({"role": "tool", "tool_call_id": call.id, "content": tool_text(result) or "Done: what it shows comes next."})
             watch.saw(name, arguments, tool_text(result), "".join(part["image_url"]["url"] for part in pictures))
+        _trim_readings(messages)
         why, warning = await watch.after(client, model)
         if why:
             return _blocked(why, STUCK, watch.turns)
@@ -530,6 +564,27 @@ async def _read_result(session: Browser, client: AsyncOpenAI, model: str, guidan
     return text, await patiently(lambda: structured(client, model, verify_system(guidance), f"The page's address: {address}\n\n{text}", "submit_outcome", VERIFY_SCHEMA))
 
 
+# The fields a browser's own validation holds back, with the label a person reads and the message it gives. A form that failed to
+# send for this stays as it was and says nothing in its text, which the page's text alone cannot tell from a send in progress.
+INVALID_FIELDS = """(() => Array.from(document.querySelectorAll(':invalid'))
+  .filter(el => !['FORM', 'FIELDSET'].includes(el.tagName))
+  .slice(0, 6)
+  .map(el => {
+    const label = (el.labels && el.labels[0] && el.labels[0].innerText) || el.getAttribute('aria-label') || el.placeholder || el.name || el.id;
+    const name = String(label).replace(/\\u2731/g, '').replace(/\\s+/g, ' ').trim().slice(0, 60);
+    return name + ' (' + String(el.validationMessage).replace(/\\s+/g, ' ').trim().slice(0, 80) + ')';
+  }))()"""
+
+
+async def _invalid_fields(session: Browser) -> str:
+    """The fields the page's own validation refuses, as "Name (Please fill out this field); ..."; empty when there are none or the page cannot say."""
+    try:
+        fields = json.loads(tool_text(await session.call_tool("browser_evaluate", {"expression": INVALID_FIELDS})))
+    except Exception:  # noqa: BLE001  A page that cannot be asked leaves the verdict as it was.
+        return ""
+    return "; ".join(field for field in fields if isinstance(field, str)) if isinstance(fields, list) else ""
+
+
 async def submit_and_verify(session: Browser, client: AsyncOpenAI, model: str, selector: str, summary: str, guidance: str, shot: Path) -> Outcome:
     at = datetime.now(UTC).isoformat(timespec="seconds")
     before = None
@@ -547,6 +602,7 @@ async def submit_and_verify(session: Browser, client: AsyncOpenAI, model: str, s
             never_clicked = NOT_CLICKED in tool_text(click)
     except Exception as error:  # noqa: BLE001
         summary = f"{summary}\nThe click answered: {error}"
+    clicked_on = before
     text, verdict, address = "", {}, ""
     for _ in range(SEND_READS):
         page = await _settled(session, before)
@@ -573,6 +629,9 @@ async def submit_and_verify(session: Browser, client: AsyncOpenAI, model: str, s
     if never_clicked:
         # On Breezy a hidden button was the one the selector found: the form was filled and nothing left it.
         return Outcome("blocked", f"{summary}\nThe send control was never clicked, so nothing was sent.", proof, reason=NEVER_CLICKED)
+    # The page stayed as it was through the whole wait, so it was not sending: if its own validation holds fields back, that is why.
+    if verdict["outcome"] == "unknown" and page == clicked_on and (invalid := await _invalid_fields(session)):
+        return Outcome("refused", f"the form refused it: {invalid}", proof, reason=REFUSED_BY_FORM, invalid=invalid)
     # It was clicked and may have gone: this must never be retried as if it had not.
     return Outcome("unconfirmed", f"{summary}\nClicked, not confirmed by the page: {verdict['evidence']}", proof=proof)
 
@@ -644,7 +703,22 @@ async def run_on_page(
         summary = f"Dry run ({DRY_RUN_ENV} is set): filled, send control {report.submit_selector} found, nothing sent.\n{report.summary}"
         return Outcome("blocked", summary, proof, made_account=report.made_account, reason=DRY_RUN, steps=report.steps)
     sent = await submit_and_verify(session, client, model, report.submit_selector, report.summary, guidance, shot)
-    return replace(sent, made_account=report.made_account, steps=report.steps)
+    if sent.invalid:
+        # Nothing was sent, and the page says which fields it wants: the model gets one more turn on the form, then one more try.
+        refusal = (
+            f"{brief}\n\nYou filled this form and clicked send, but the page's own validation refused it: {sent.invalid}. Fix those "
+            "fields, then call finish_form again. A field that would need a fact about the candidate that the CV and the answers do "
+            "not give ends the form as blocked, with that field named."
+        )
+        again = await fill_form(session, tools, client, model, refusal, guidance, page_rules)
+        report = replace(again, steps=report.steps + again.steps, made_account=report.made_account or again.made_account)
+        if tracing:
+            traced.note(f"== finish_form again: {json.dumps(asdict(report), ensure_ascii=False)[:500]}")
+        if report.status != "ready" or not report.submit_selector:
+            reason = "other" if report.blocked_by in ("", "none") else report.blocked_by
+            return replace(sent, status="blocked", summary=report.summary, reason=reason, made_account=report.made_account, steps=report.steps, invalid="")
+        sent = await submit_and_verify(session, client, model, report.submit_selector, report.summary, guidance, shot)
+    return replace(sent, made_account=report.made_account, steps=report.steps, invalid="")
 
 
 def getting_the_browser(answer: str) -> str:
