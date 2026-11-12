@@ -22,7 +22,7 @@ from aihawk.apply import MAILBOXES, Outcome, mail_provider, why_not_sent
 from aihawk.config import KEY_ENV, KEY_URL, ConfigError
 from aihawk.database import DatabaseError
 from aihawk.library import LibraryError, Stopped
-from aihawk.llm import account_problem, explain, refused
+from aihawk.llm import account_problem, error_name, explain, not_answering, refused
 from aihawk.scoring import NotAnswering
 from aihawk.screens import WIDE_ENOUGH, Confirm, JobDetails, Rows, Said, SendBatch, SentList, Settings, SignIn, StopSending, TextPrompt, clipped
 from aihawk.session import Session
@@ -59,6 +59,14 @@ KEY_HINT = (
     "Enter saves · Esc later"
 )
 KEY_REFUSED = "OrcaRouter did not accept that key. Check it and paste it again."
+NO_CREDIT_QUESTION = (
+    "This key works, but its OrcaRouter account has no credit yet. AIHawk needs a few dollars there to read your resume and the jobs: "
+    "add them at orcarouter.ai."
+)
+NO_CREDIT_AGAIN = "Still no credit on that account. AIHawk needs a few dollars there to read your resume and the jobs: add them at orcarouter.ai."
+NO_CREDIT_HINT = "Enter checks again · Ctrl+O opens orcarouter.ai · Esc goes on without"
+# What to press after a failure at the resume, whose file is remembered.
+RESUME_REMEMBERED = "press r: your resume is remembered."
 MAIL_LATER = "Mail left for later: e, then Your mail."
 MAIL_NAMES = {"gmail": "Gmail", "outlook": "Outlook"}
 RESUME_HINT = "PDF, .docx or text · Enter reads it · Esc later"
@@ -131,6 +139,8 @@ class AIHawk(App[None]):
         self.resume = resume
         # The error of a resume that failed to be read, which the start has told already.
         self.reported: Exception | None = None
+        # The file of a resume that failed for the account or the service, not for the file: r asks for it again with its path in.
+        self.remembered: Path | None = None
         self.selected: set[str] = set()
         # The pages made so far, each its jobs' ids in the order shown; the page shown; and one asked for before it was ready.
         self.pages: list[list[str]] = []
@@ -224,11 +234,11 @@ class AIHawk(App[None]):
         is one line, not a list. With `replace`, it ends such a state: it takes its place and stays."""
         self.query_one(Said).say(line, again, replace)
 
-    def failed(self, error: Exception, then: str = "") -> None:
-        """Says what went wrong, in plain words, and `then`, the next step. A key the AI service refused is forgotten when it
-        came from the file, and asked for again."""
+    def failed(self, error: Exception, then: str = "", step: str = "press → to go on.") -> None:
+        """Says what went wrong, in plain words, and `then`, the next step; for an account that must be mended first, `step` is
+        what to press after. A key the AI service refused is forgotten when it came from the file, and asked for again."""
         if not refused(error):
-            self.say(f"{errors.explained(error)}{then}")
+            self.say(f"{errors.explained(error, step)}{then}")
             return
         line = self.session.refuse_key()
         self.say(line)
@@ -342,18 +352,24 @@ class AIHawk(App[None]):
             self.say(f"{error}{self.resume_next()}")
         except Exception as error:  # noqa: BLE001  The screen stays up and says what went wrong, instead of a traceback over it.
             self.start_failed(error)
-            self.failed(error, self.resume_next())
+            if self.remembered and account_problem(error):
+                self.failed(error, step=RESUME_REMEMBERED)
+            else:
+                self.failed(error, self.resume_next())
         finally:
             self.show_heading()
 
     def resume_next(self) -> str:
-        """What to press when a start stopped for want of a resume: the file is given again with r."""
+        """What to press when a start stopped for want of a resume: the file is given again with r, and when it is remembered
+        the question has it already."""
+        if self.remembered:
+            return f" {RESUME_REMEMBERED.capitalize()}"
         return " Press r and give the file again." if self.session.needs_resume() else ""
 
     def start_failed(self, error: Exception) -> None:
         """A start that ended in an error, told once: a resume that could not be read said so already, with its kind."""
         if error is not self.reported:
-            self.session.telemetry.step("start_error", error=type(error).__name__)
+            self.session.telemetry.step("start_error", error=error_name(error))
 
     async def ask_key(self) -> bool:
         """The key asked for and kept; False when the person has none for now."""
@@ -367,7 +383,26 @@ class AIHawk(App[None]):
             return False
         self.session.save_key(key)
         telemetry.step("key_saved")
+        await self.check_credit(key)
         return True
+
+    async def check_credit(self, key: str) -> None:
+        """A new OrcaRouter account has a key that works and no credit, and the first call, reading the resume, would be refused.
+        Said before it: Enter looks again, Esc goes on without. Nothing is said when the service does not say."""
+        telemetry = self.session.telemetry
+        if not await self.session.has_no_credit(key):
+            return
+        telemetry.step("no_credit_asked")
+        question = NO_CREDIT_QUESTION
+        while await self.push_screen_wait(Confirm(question, NO_CREDIT_HINT, link=KEY_URL)):
+            self.say("Looking for the credit…", again=True)
+            if not await self.session.has_no_credit(key):
+                telemetry.step("credit_added")
+                self.say("The credit is there.", again=True)
+                return
+            telemetry.step("no_credit_checked")
+            question = NO_CREDIT_AGAIN
+        telemetry.step("no_credit_skipped")
 
     async def take_key(self) -> str | None:
         """A key the person pasted and the service accepts, or None when they leave the question. A key it refuses is asked for
@@ -402,9 +437,12 @@ class AIHawk(App[None]):
         try:
             await self.session.load_resume(path)
         except Exception as error:
-            telemetry.step("resume_failed", error=type(error).__name__, kind=path.suffix.lower())
+            telemetry.step("resume_failed", error=error_name(error), kind=path.suffix.lower())
             self.reported = error
+            # A file that is fine, and a key, an account or a service that was not: the same file is tried again with one key press.
+            self.remembered = path if account_problem(error) or not_answering(error) or refused(error) else None
             raise
+        self.remembered = None
         telemetry.step("resume_read", kind=path.suffix.lower())
         # A new resume is a new search: the jobs of the old one that nobody applied to give way to the new one's.
         self.forget_untried()
@@ -429,7 +467,9 @@ class AIHawk(App[None]):
                 return "No file at that path."
             return None
 
-        answer = await self.push_screen_wait(TextPrompt(RESUME_QUESTION, placeholder=RESUME_PLACEHOLDER, hint=RESUME_HINT, check=missing))
+        answer = await self.push_screen_wait(
+            TextPrompt(RESUME_QUESTION, placeholder=RESUME_PLACEHOLDER, hint=RESUME_HINT, check=missing, value=str(self.remembered) if self.remembered else None)
+        )
         return self.as_path(answer) if answer else None
 
     @staticmethod
@@ -874,6 +914,7 @@ class AIHawk(App[None]):
         key = await self.take_key()
         if key:
             self.session.save_key(key)
+            await self.check_credit(key)
             if self.waiting_for_key:
                 # The start stopped for want of a key: with one, it goes on with the resume and the rest.
                 self.waiting_for_key = False

@@ -75,6 +75,12 @@ WHY_NOT_SENT = {
     DRY_RUN: "it was a trial, nothing is sent",
     "other": "the form could not be filled",
     "no_credit": "your OrcaRouter credit is finished: add credit at orcarouter.ai",
+    "free_calls_used": "the free calls for today are used up: add credit at orcarouter.ai",
+    "key_limit": "this key's own limit is used up: raise it at orcarouter.ai",
+    "spend_limit": "this key reached its spending limit for now",
+    "budget": "your OrcaRouter budget for this month is used up",
+    "model_not_allowed": "this key is not allowed to use the models AIHawk needs",
+    "refused_other": "OrcaRouter refused this key for the request",
     "no_display": "the browser needs a desktop",
     "browser_libraries": "the browser needs a few system packages",
 }

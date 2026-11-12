@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from openai import (
@@ -159,8 +160,77 @@ def account_problem(error: BaseException) -> bool:
 
 
 def no_credit(error: BaseException) -> bool:
-    """Whether the account's credit is finished: the service answers 402."""
+    """Whether the account has no credit: the service answers 402."""
     return isinstance(error, APIStatusError) and error.status_code == 402
+
+
+# The end of an OrcaRouter message, which names the request for its support and tells a person nothing.
+REQUEST_ID = re.compile(r"\s*\(request id: [^)]*\)\s*$")
+# A key can be in a message the service sends back; it never reaches the screen.
+KEY_SHAPE = re.compile(r"sk-[A-Za-z0-9_\-]{6,}")
+# How much of an unexplained refusal a person is shown.
+REFUSAL_WORDS = 120
+# A code the service sends is sent on to the makers only when it looks like one.
+CODE_SHAPE = re.compile(r"[A-Za-z0-9_.\-]{1,60}")
+
+
+def reply(error: BaseException) -> tuple[str, str]:
+    """The code and the message the service gave with a refusal, read from the error's body with care: the body may be the error
+    itself or wrapped in an "error" key, or missing, and the message then is the error's own text."""
+    body = getattr(error, "body", None)
+    if isinstance(body, dict) and isinstance(body.get("error"), dict):
+        body = body["error"]
+    given = body if isinstance(body, dict) else {}
+    code = given.get("code")
+    message = given.get("message")
+    own = str(getattr(error, "message", "") or "")
+    return (str(code) if code is not None else ""), (message if isinstance(message, str) else own)
+
+
+# What `cause` names: every reason that is about the account or the key, so the same for the next request too.
+ACCOUNT_CAUSES = frozenset({"no_credit", "free_calls_used", "key_limit", "spend_limit", "budget", "model_not_allowed", "refused_other"})
+
+
+def cause(error: BaseException) -> str:
+    """Why the service refused for the account, as a short name; empty when the error is not about the account. 402 is no
+    credit, or the free calls of the model used up; 403 has several causes that topping up does not mend, each told apart by
+    the code OrcaRouter gives or, for some, only by its message."""
+    if not isinstance(error, APIStatusError):
+        return ""
+    code, message = reply(error)
+    if error.status_code == 402:
+        return "free_calls_used" if code == "free_quota_exhausted" else "no_credit"
+    if error.status_code != 403:
+        return ""
+    if code == "pre_consume_token_quota_failed" or "token quota is not enough" in message:
+        return "key_limit"
+    if "token cycle spend limit reached" in message:
+        return "spend_limit"
+    if code == "budget_exceeded":
+        return "budget"
+    if "has no access to model" in message:
+        return "model_not_allowed"
+    return "refused_other"
+
+
+def error_name(error: BaseException) -> str:
+    """An error as the makers are told of it: its class, then the status and the service's code when it has them, such as
+    "APIStatusError 402 insufficient_user_quota". The class alone does not say which 4xx it was."""
+    name = type(error).__name__
+    if not isinstance(error, APIStatusError):
+        return name
+    code, _ = reply(error)
+    return " ".join([name, str(error.status_code), *([code] if CODE_SHAPE.fullmatch(code) else [])])
+
+
+def refusal_in_words(error: BaseException) -> str:
+    """OrcaRouter's own message for a refusal nothing above explains, without its request id, cut to a few words."""
+    _, message = reply(error)
+    message = KEY_SHAPE.sub("sk-…", REQUEST_ID.sub("", message)).strip()
+    if message.startswith("Error code:"):
+        # The error's own text, not the service's: it says nothing a person can use.
+        return ""
+    return message if len(message) <= REFUSAL_WORDS else message[: REFUSAL_WORDS - 1].rstrip() + "…"
 
 
 def known(error: BaseException) -> bool:
@@ -168,13 +238,28 @@ def known(error: BaseException) -> bool:
     return isinstance(error, APIConnectionError | RateLimitError | InternalServerError | BadRequestError) or account_problem(error)
 
 
-def explain(error: Exception) -> str:
-    """What a failed model call says in plain words and what to do about it. The error's own text stays out: it is for the
-    makers, and the key can be in it."""
-    if no_credit(error):
-        return "Your OrcaRouter credit is finished. Add credit at orcarouter.ai, then press → to go on."
+def explain(error: Exception, step: str = "press → to go on.") -> str:
+    """What a failed model call says in plain words and what to do about it; `step` is what to press once the account is mended,
+    for the place the call failed in. The error's own text stays out, but for a refusal nothing explains: the key can be in it."""
+    why = cause(error)
+    if why == "no_credit":
+        return f"Your OrcaRouter account has no credit yet. Add a few dollars at orcarouter.ai, then {step}"
+    if why == "free_calls_used":
+        return f"The free calls for today are used up. Add credit at orcarouter.ai, then {step}"
+    after = f" Then {step}"
+    if why == "key_limit":
+        return f"This key's own limit is used up. Raise it, or make a new key, at orcarouter.ai.{after}"
+    if why == "spend_limit":
+        return f"This key reached its spending limit for now. Raise it at orcarouter.ai, or wait until it resets.{after}"
+    if why == "budget":
+        return f"Your OrcaRouter budget for this month is used up.{after}"
+    if why == "model_not_allowed":
+        return f"This key is not allowed to use the models AIHawk needs. Make a key with no model restriction at orcarouter.ai.{after}"
+    if why == "refused_other":
+        said = refusal_in_words(error)
+        return f"OrcaRouter refused this key for the request{': ' + said.rstrip('.') if said else ''}.{after}"
     if account_problem(error):
-        return "The AI service refused the request. Check your OrcaRouter account at orcarouter.ai, then press → to go on."
+        return f"The AI service refused the request. Check your OrcaRouter account at orcarouter.ai, then {step}"
     if isinstance(error, APITimeoutError):
         return "The AI service did not answer in time. Try again in a moment."
     if isinstance(error, APIConnectionError):
