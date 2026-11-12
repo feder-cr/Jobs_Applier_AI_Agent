@@ -53,10 +53,10 @@ def record(error: BaseException) -> None:
         return
 
 
-def explained(error: Exception) -> str:
-    """What a failed call says in plain words. An error that is not one of the known kinds is written to the log, and the line
-    says where."""
-    text = explain(error)
+def explained(error: Exception, step: str = "press → to go on.") -> str:
+    """What a failed call says in plain words, and `step`, what to press once the account is mended. An error that is not one
+    of the known kinds is written to the log, and the line says where."""
+    text = explain(error, step)
     if known(error):
         return text
     record(error)

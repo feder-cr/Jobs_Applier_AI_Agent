@@ -15,7 +15,7 @@ import duckdb
 import httpx
 import pytest
 from click.testing import CliRunner
-from openai import APIConnectionError, APIStatusError, APITimeoutError, AuthenticationError, InternalServerError, RateLimitError
+from openai import APIConnectionError, APIStatusError, APITimeoutError, AuthenticationError, InternalServerError, PermissionDeniedError, RateLimitError
 from pypdf import PdfWriter
 from textual.widgets import DataTable, Input, RichLog, Static
 
@@ -28,7 +28,7 @@ from aihawk.cli import main as cli_main
 from aihawk.config import Config, ConfigError, load_config
 from aihawk.database import Job
 from aihawk.library import Library
-from aihawk.llm import explain
+from aihawk.llm import cause, error_name, explain, refused
 from aihawk.profile import import_answers_file, install_resume, read_resume
 from aihawk.screens import Confirm, JobDetails, Said, SendBatch, SentDetails, SentList, Settings, SignIn, StopSending, TextPrompt
 from aihawk.session import Session
@@ -675,8 +675,8 @@ async def wait_for_sign_in_to_close(pilot: Any, app: AIHawk) -> None:
 REQUEST = httpx.Request("POST", "https://api.orcarouter.ai/v1/chat/completions")
 
 
-def status_error(kind: type, code: int) -> Exception:
-    return kind(f"Error code: {code}", response=httpx.Response(code, request=REQUEST), body=None)
+def status_error(kind: type, code: int, body: Any = None) -> Exception:
+    return kind(f"Error code: {code}", response=httpx.Response(code, request=REQUEST), body=body)
 
 
 class RefusingModel:
@@ -2168,7 +2168,7 @@ def test_with_no_credit_the_jobs_stay_new_scoring_stops_and_says_what_to_do_and_
         async with app.run_test(size=(80, 24)) as pilot:
             await settle(pilot, app)
             assert model.attempts == 1, "not retried in a loop"
-            assert last_line(app) == "Your OrcaRouter credit is finished. Add credit at orcarouter.ai, then press → to go on."
+            assert last_line(app) == "Your OrcaRouter account has no credit yet. Add a few dollars at orcarouter.ai, then press → to go on."
             assert len(app.session.store.with_status("new")) == 3 and not app.session.store.with_status("passed_over")
             # The line is not covered by the count of the jobs coming, and nothing says there are no more.
             assert "No more jobs" not in logged(app) and "No jobs found" not in logged(app)
@@ -2203,7 +2203,7 @@ def test_an_application_that_fails_for_want_of_credit_says_so_and_the_batch_stop
             assert calls == ["Bestco"], "the second one was not tried"
             (item,) = app.session.store.sent()
             assert item.status == "failed" and item.reason == "no_credit"
-            assert item.note == "Your OrcaRouter credit is finished. Add credit at orcarouter.ai, then press → to go on."
+            assert item.note == "Your OrcaRouter account has no credit yet. Add a few dollars at orcarouter.ai, then press → to go on."
 
     asyncio.run(run())
 
@@ -2379,3 +2379,430 @@ def test_while_the_resume_is_read_the_screen_says_how_long_it_takes(home: Path, 
         assert said == ["Reading your resume: about half a minute…"]
 
     asyncio.run(run())
+
+
+# What OrcaRouter says to a refusal (https://docs.orcarouter.ai/operations/errors.md), as the SDK hands it over: the body
+# without its "error" wrapper. Every message ends with the request's id.
+def refusal(code: int, message: str, service_code: str = "", kind: type = APIStatusError) -> Exception:
+    body = {"message": f"{message} (request id: 20261112abc)", "type": "orcarouter_api_error", "code": service_code}
+    return status_error(kind, code, body)
+
+
+NO_CREDIT_WORDS = "Your OrcaRouter account has no credit yet. Add a few dollars at orcarouter.ai, then {}"
+GO_ON = "press → to go on."
+REFUSALS = [
+    (refusal(402, "insufficient quota", "insufficient_user_quota"), "no_credit", NO_CREDIT_WORDS.format(GO_ON)),
+    (status_error(APIStatusError, 402), "no_credit", NO_CREDIT_WORDS.format(GO_ON)),
+    (
+        refusal(402, "free calls used up", "free_quota_exhausted"), "free_calls_used",
+        f"The free calls for today are used up. Add credit at orcarouter.ai, then {GO_ON}",
+    ),
+    (
+        refusal(403, "token quota is not enough", "pre_consume_token_quota_failed", PermissionDeniedError), "key_limit",
+        f"This key's own limit is used up. Raise it, or make a new key, at orcarouter.ai. Then {GO_ON}",
+    ),
+    (
+        refusal(403, "token cycle spend limit reached, resets at 2026-11-13", "access_denied", PermissionDeniedError), "spend_limit",
+        f"This key reached its spending limit for now. Raise it at orcarouter.ai, or wait until it resets. Then {GO_ON}",
+    ),
+    (
+        refusal(403, "monthly budget gone", "budget_exceeded", PermissionDeniedError), "budget",
+        f"Your OrcaRouter budget for this month is used up. Then {GO_ON}",
+    ),
+    (
+        refusal(403, "This token has no access to model deepseek-v4", "", PermissionDeniedError), "model_not_allowed",
+        f"This key is not allowed to use the models AIHawk needs. Make a key with no model restriction at orcarouter.ai. Then {GO_ON}",
+    ),
+    (
+        refusal(403, "IP 1.2.3.4 is not allowed", "access_denied", PermissionDeniedError), "refused_other",
+        f"OrcaRouter refused this key for the request: IP 1.2.3.4 is not allowed. Then {GO_ON}",
+    ),
+    (status_error(PermissionDeniedError, 403), "refused_other", f"OrcaRouter refused this key for the request. Then {GO_ON}"),
+]
+
+
+@pytest.mark.parametrize(("error", "name", "words"), REFUSALS)
+def test_each_refusal_of_the_account_has_its_cause_and_its_own_words(error: Exception, name: str, words: str) -> None:
+    assert cause(error) == name
+    assert explain(error) == words
+    assert "request id" not in explain(error)
+
+
+def test_the_cause_is_read_from_a_body_with_or_without_its_wrapper_or_none_at_all() -> None:
+    inner = {"message": "token quota is not enough (request id: x)", "code": "pre_consume_token_quota_failed"}
+    assert cause(status_error(PermissionDeniedError, 403, inner)) == "key_limit"
+    assert cause(status_error(PermissionDeniedError, 403, {"error": inner})) == "key_limit"
+    # No body: the error's own text is what there is to read.
+    plain = PermissionDeniedError("Error code: 403 - token cycle spend limit reached", response=httpx.Response(403, request=REQUEST), body=None)
+    assert cause(plain) == "spend_limit"
+    assert cause(status_error(PermissionDeniedError, 403, "not json")) == "refused_other"
+    assert cause(status_error(PermissionDeniedError, 403, {"error": "text", "code": 5})) == "refused_other"
+    # Not about the account.
+    assert cause(status_error(RateLimitError, 429)) == "" and cause(status_error(AuthenticationError, 401)) == "" and cause(ValueError("x")) == ""
+
+
+def test_an_unexplained_refusal_shows_the_services_words_cut_and_without_a_key_or_a_request_id() -> None:
+    long = "not allowed from here " * 20
+    said = explain(refusal(403, long, "access_denied", PermissionDeniedError))
+    shown = said.removeprefix("OrcaRouter refused this key for the request: ").removesuffix(f" Then {GO_ON}")
+    assert len(shown) <= 121 and shown.endswith("….") and "request id" not in said
+    assert "sk-orca" not in explain(refusal(403, "bad key sk-orca-secret123456", "x", PermissionDeniedError))
+
+
+def test_a_step_names_what_to_press_in_the_place_it_failed() -> None:
+    step = "press r: your resume is remembered."
+    assert explain(refusal(402, "x", "insufficient_user_quota"), step).endswith(f"then {step}")
+    assert explain(refusal(403, "x", "budget_exceeded", PermissionDeniedError), step).endswith(f"Then {step}")
+
+
+def test_only_a_401_is_a_refused_key_a_403_never_makes_the_key_forgotten() -> None:
+    assert refused(status_error(AuthenticationError, 401))
+    for error, _, _ in REFUSALS:
+        assert not refused(error)
+
+
+@pytest.mark.parametrize(
+    ("error", "name"),
+    [
+        (refusal(402, "x", "insufficient_user_quota"), "APIStatusError 402 insufficient_user_quota"),
+        (refusal(403, "x", "pre_consume_token_quota_failed", PermissionDeniedError), "PermissionDeniedError 403 pre_consume_token_quota_failed"),
+        (status_error(PermissionDeniedError, 403), "PermissionDeniedError 403"),
+        (status_error(AuthenticationError, 401), "AuthenticationError 401"),
+        (refusal(403, "x", "a code with spaces and <markup>", PermissionDeniedError), "PermissionDeniedError 403"),
+        (APIConnectionError(request=REQUEST), "APIConnectionError"),
+        (ValueError("x"), "ValueError"),
+    ],
+)
+def test_an_error_is_told_to_the_makers_with_its_status_and_the_services_code(error: Exception, name: str) -> None:
+    assert error_name(error) == name
+
+
+class ResumeRefused(ScriptedModelForApp):
+    """The account refuses what reading the resume asks, until `error` is None."""
+
+    def __init__(self, error: Exception | None) -> None:
+        super().__init__()
+        self.error = error
+
+    async def _create(self, **request: Any) -> Any:
+        if self.error is not None:
+            raise self.error
+        return await super()._create(**request)
+
+
+def test_no_credit_at_the_resume_says_so_and_r_asks_for_the_same_file_again(home: Path, resume: Path, tracked: list[dict[str, Any]]) -> None:
+    async def run() -> None:
+        app = AIHawk(home, resume)
+        model = ResumeRefused(refusal(402, "no quota", "insufficient_user_quota"))
+        app.session._client = model  # type: ignore[assignment]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            await pilot.pause(0.2)
+            assert last_line(app) == NO_CREDIT_WORDS.format("press r: your resume is remembered.")
+            assert "Press r and give the file again" not in logged(app)
+            model.error = None
+            await pilot.press("r")
+            await wait_for_screen(pilot, TextPrompt)
+            assert app.screen.query_one(Input).value == str(resume)
+            await pilot.press("enter")
+            await settle(pilot, app)
+            assert companies(app) == ["Bestco", "Lowly", "Noplugin"]
+            # Read: nothing is remembered any more, and r asks an empty question.
+            await pilot.press("r")
+            await wait_for_screen(pilot, TextPrompt)
+            assert app.screen.query_one(Input).value == ""
+            await pilot.press("escape")
+
+    asyncio.run(run())
+    failed = [event["properties"] for event in tracked if event["event"] == "start_step" and event["properties"]["step"] == "resume_failed"]
+    assert [(step["error"], step["kind"]) for step in failed] == [("APIStatusError 402 insufficient_user_quota", ".txt")]
+    assert "resume_read" in steps_of(tracked)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        refusal(403, "x", "budget_exceeded", PermissionDeniedError), status_error(RateLimitError, 429), status_error(InternalServerError, 503),
+        APIConnectionError(request=REQUEST), status_error(AuthenticationError, 401),
+    ],
+)
+def test_the_resume_is_remembered_across_every_failure_of_the_account_or_the_service(home: Path, resume: Path, error: Exception, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ORCAROUTER_API_KEY")
+    (home / "key").write_text("sk-orca-kept", encoding="utf-8")
+
+    async def run() -> None:
+        app = AIHawk(home, resume)
+        app.session._client = ResumeRefused(error)  # type: ignore[assignment]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            await pilot.pause(0.2)
+            assert app.remembered == resume
+            if isinstance(error, AuthenticationError):
+                # The key is asked for again, and the resume after it, with the file in.
+                assert isinstance(app.screen, TextPrompt) and app.screen.question == "Paste your OrcaRouter key"
+                await pilot.press("escape")
+                return
+            assert "press r: your resume is remembered" in last_line(app).lower()
+            await pilot.press("r")
+            await wait_for_screen(pilot, TextPrompt)
+            assert app.screen.query_one(Input).value == str(resume)
+            await pilot.press("escape")
+
+    asyncio.run(run())
+
+
+def test_a_403_keeps_the_key_and_a_401_forgets_it(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ORCAROUTER_API_KEY")
+    (home / "key").write_text("sk-orca-mine", encoding="utf-8")
+
+    async def run(error: Exception) -> None:
+        app = AIHawk(home, resume)
+        app.session._client = ResumeRefused(error)  # type: ignore[assignment]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            await pilot.pause(0.2)
+            await pilot.press("escape")
+
+    asyncio.run(run(refusal(403, "This token has no access to model x", "", PermissionDeniedError)))
+    assert (home / "key").read_text(encoding="utf-8") == "sk-orca-mine"
+    asyncio.run(run(status_error(AuthenticationError, 401)))
+    assert not (home / "key").exists()
+
+
+@pytest.mark.parametrize(("error", "name", "words"), REFUSALS[2:])
+def test_a_refusal_at_the_resume_says_its_cause_and_the_resume_step(home: Path, resume: Path, error: Exception, name: str, words: str) -> None:
+    async def run() -> None:
+        app = AIHawk(home, resume)
+        app.session._client = ResumeRefused(error)  # type: ignore[assignment]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            await pilot.pause(0.2)
+            assert last_line(app) == words.replace(GO_ON, "press r: your resume is remembered.")
+
+    asyncio.run(run())
+
+
+def test_a_file_that_is_not_a_document_or_not_a_file_is_not_remembered(home: Path, tmp_path: Path) -> None:
+    empty = tmp_path / "empty.txt"
+    empty.write_text("too short", encoding="utf-8")
+
+    async def run() -> None:
+        app = scripted_app(home, empty)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            await pilot.pause(0.2)
+            assert app.remembered is None
+            await pilot.press("r")
+            await wait_for_screen(pilot, TextPrompt)
+            assert app.screen.query_one(Input).value == ""
+            # A path that is no file stays in the question's own check and is remembered nowhere.
+            app.screen.query_one(Input).value = str(tmp_path / "nothing.pdf")
+            await pilot.press("enter")
+            await pilot.pause(0.2)
+            assert "No file at that path." in str(app.screen.query_one("#problem", Static).content) and app.remembered is None
+            await pilot.press("escape")
+
+    asyncio.run(run())
+
+
+def test_an_application_refused_for_a_key_limit_says_the_cause_and_keeps_its_name(home: Path, resume: Path, restored_apply: Any) -> None:
+    async def run() -> None:
+        app = scripted_app(home, resume)
+
+        async def limited(client: Any, model: str, job: Any, *rest: Any, **keywords: Any) -> Outcome:
+            raise refusal(403, "token cycle spend limit reached, resets at 2026-11-13", "access_denied", PermissionDeniedError)
+
+        session_module.apply_to_job = limited  # type: ignore[assignment]
+        async with app.run_test(size=(120, 40)) as pilot:
+            await send_batch(app, pilot, ["space", "space"])
+            await pilot.press("enter")
+            await wait_for_apply(pilot, app)
+            await pilot.pause(0.2)
+            assert "Bestco: not sent, this key reached its spending limit for now." in app.query_one(Said).said
+            item = next(item for item in app.session.store.sent() if item.job.company == "Bestco")
+            assert item.status == "failed" and item.reason == "spend_limit"
+            assert item.note.startswith("This key reached its spending limit for now. Raise it at orcarouter.ai")
+
+    asyncio.run(run())
+
+
+def test_scoring_stopped_by_a_key_limit_says_the_cause(home: Path, resume: Path) -> None:
+    class Limited(NoCredit):
+        async def post(self, path: str, *, body: dict[str, Any], cast_to: type) -> dict[str, Any]:
+            self.attempts += 1
+            raise refusal(403, "token quota is not enough", "pre_consume_token_quota_failed", PermissionDeniedError)
+
+    async def run() -> None:
+        app = AIHawk(home, resume)
+        model = Limited()
+        app.session._client = model  # type: ignore[assignment]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            assert last_line(app) == f"This key's own limit is used up. Raise it, or make a new key, at orcarouter.ai. Then {GO_ON}"
+            assert model.attempts == 1
+
+    asyncio.run(run())
+
+
+class Billing:
+    """What the billing page of OrcaRouter says to each ask, in turn (the last one stays): a number of dollars, an error to
+    raise, or any other answer as it is."""
+
+    def __init__(self, *answers: Any) -> None:
+        self.answers = list(answers)
+        self.asked = 0
+
+    async def get(self, path: str, cast_to: type) -> Any:
+        assert path == "/dashboard/billing/subscription"
+        self.asked += 1
+        answer = self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]
+        if isinstance(answer, Exception):
+            raise answer
+        if isinstance(answer, float | int) and not isinstance(answer, bool):
+            return {"object": "billing_subscription", "has_payment_method": False, "soft_limit_usd": answer, "hard_limit_usd": answer, "system_hard_limit_usd": 100.0, "access_until": 0}
+        return answer
+
+
+def with_billing(app: AIHawk, billing: Billing) -> None:
+    """A key typed in is accepted and kept, and its account answers as `billing` says."""
+    app.session.key_accepted = accepting(True, True, True)  # type: ignore[method-assign]
+    app.session.save_key = lambda key: (type(app.session.config).save_key(app.session.config, key), setattr(app.session, "_client", ScriptedModelForApp()))  # type: ignore[method-assign]
+    app.session.key_client = lambda key: SimpleNamespace(get=billing.get)  # type: ignore[method-assign,assignment]
+
+
+def steps_of(tracked: list[dict[str, Any]]) -> list[str]:
+    return [event["properties"]["step"] for event in tracked if event["event"] == "start_step"]
+
+
+def test_a_key_with_no_credit_says_so_before_the_resume_and_enter_checks_again_until_there_is(
+    home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch, tracked: list[dict[str, Any]]
+) -> None:
+    monkeypatch.delenv("ORCAROUTER_API_KEY")
+    billing = Billing(0, 0.0, 3.5)
+    opened: list[str] = []
+    import aihawk.screens as screens_module
+
+    monkeypatch.setattr(screens_module.webbrowser, "open", lambda url: opened.append(url) or True)
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        with_billing(app, billing)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            app.screen.query_one(Input).value = "sk-orca-new"
+            await pilot.press("enter")
+            await wait_for_screen(pilot, Confirm)
+            assert app.screen.question.startswith("This key works, but its OrcaRouter account has no credit yet.")
+            assert "add them at orcarouter.ai" in app.screen.question
+            assert app.screen.hint == "Enter checks again · Ctrl+O opens orcarouter.ai · Esc goes on without"
+            assert companies(app) == []
+            await pilot.press("ctrl+o")
+            await pilot.press("enter")
+            await pilot.pause(0.3)
+            # Still none: the same question, said once more.
+            assert isinstance(app.screen, Confirm) and app.screen.question.startswith("Still no credit")
+            await pilot.press("enter")
+            await settle(pilot, app)
+            assert companies(app) == ["Bestco", "Lowly", "Noplugin"]
+
+    asyncio.run(run())
+    assert opened == ["https://www.orcarouter.ai/ref/ref_accd17afb78fc95ac4d7"]
+    steps = steps_of(tracked)
+    assert steps[:5] == ["key_asked", "key_saved", "no_credit_asked", "no_credit_checked", "credit_added"] and steps[5] == "resume_read"
+    assert billing.asked == 3
+
+
+def test_escape_on_the_credit_question_goes_on_with_the_resume_without_credit(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch, tracked: list[dict[str, Any]]) -> None:
+    monkeypatch.delenv("ORCAROUTER_API_KEY")
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        with_billing(app, Billing(0))
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            app.screen.query_one(Input).value = "sk-orca-new"
+            await pilot.press("enter")
+            await wait_for_screen(pilot, Confirm)
+            await pilot.press("escape")
+            await settle(pilot, app)
+            assert companies(app) == ["Bestco", "Lowly", "Noplugin"]
+
+    asyncio.run(run())
+    assert steps_of(tracked)[:5] == ["key_asked", "key_saved", "no_credit_asked", "no_credit_skipped", "resume_read"]
+    assert (home / "key").read_text(encoding="utf-8") == "sk-orca-new"
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        2.5, 1e-9, APIConnectionError(request=REQUEST), status_error(InternalServerError, 503), status_error(AuthenticationError, 401),
+        {}, {"hard_limit_usd": None}, {"hard_limit_usd": "0"}, {"hard_limit_usd": True}, {"hard_limit_usd": False}, ["x"], "text",
+    ],
+)
+def test_the_credit_question_is_never_asked_when_the_service_says_there_is_some_or_says_nothing_usable(
+    home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch, tracked: list[dict[str, Any]], answer: Any
+) -> None:
+    monkeypatch.delenv("ORCAROUTER_API_KEY")
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        with_billing(app, Billing(answer))
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            app.screen.query_one(Input).value = "sk-orca-new"
+            await pilot.press("enter")
+            await settle(pilot, app)
+            assert not isinstance(app.screen, Confirm)
+            assert companies(app) == ["Bestco", "Lowly", "Noplugin"]
+
+    asyncio.run(run())
+    assert not any(step.startswith("no_credit") or step == "credit_added" for step in steps_of(tracked))
+
+
+def test_a_key_changed_in_the_settings_is_asked_about_its_credit_too(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch, tracked: list[dict[str, Any]]) -> None:
+    monkeypatch.delenv("ORCAROUTER_API_KEY")
+    (home / "key").write_text("sk-orca-old", encoding="utf-8")
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        with_billing(app, Billing(0))
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            await pilot.press("e")
+            await wait_for_screen(pilot, Settings)
+            app.screen.query_one(DataTable).move_cursor(row=[key.value for key in app.screen.query_one(DataTable).rows].index("key"))
+            await pilot.press("enter")
+            await wait_for_screen(pilot, TextPrompt)
+            app.screen.query_one(Input).value = "sk-orca-new"
+            await pilot.press("enter")
+            await wait_for_screen(pilot, Confirm)
+            await pilot.press("escape")
+            await wait_for_screen(pilot, Settings)
+            await pilot.press("escape")
+
+    asyncio.run(run())
+    assert (home / "key").read_text(encoding="utf-8") == "sk-orca-new"
+    assert steps_of(tracked)[-2:] == ["no_credit_asked", "no_credit_skipped"]
+
+
+def test_the_billing_page_is_asked_through_the_key_client_and_only_a_number_up_to_zero_says_no_credit(home: Path) -> None:
+    session = Session(home)
+    paths: list[str] = []
+
+    async def get(path: str, cast_to: type) -> Any:
+        paths.append(path)
+        return {"hard_limit_usd": 0}
+
+    session.key_client = lambda key: SimpleNamespace(get=get)  # type: ignore[method-assign,assignment]
+    assert asyncio.run(session.has_no_credit("sk-orca-x")) is True
+    assert paths == ["/dashboard/billing/subscription"]
+    session.close()
+
+
+def test_every_cause_about_the_account_has_its_words_in_the_list_of_applications() -> None:
+    from aihawk import llm
+    from aihawk.apply import WHY_NOT_SENT
+
+    # A batch stops at the first of these: the next application would fail the same way.
+    assert llm.ACCOUNT_CAUSES <= set(WHY_NOT_SENT)
+    assert {"no_credit", "key_limit", "spend_limit", "model_not_allowed"} <= llm.ACCOUNT_CAUSES
