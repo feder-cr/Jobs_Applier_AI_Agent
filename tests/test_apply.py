@@ -800,6 +800,33 @@ def test_the_screen_is_told_while_the_browser_comes_and_when_it_is_open(monkeypa
     assert told[0].startswith("Getting the browser, only the first time: ") and told[-1] == ""
 
 
+def test_a_browser_that_does_not_open_is_named_and_keeps_the_servers_words_for_the_log(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Server:
+        async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
+            return SimpleNamespace(isError=True, content=[SimpleNamespace(text="the browser did NOT start: C:/Users/someone/engine is gone")])
+
+    with pytest.raises(apply_module.BrowserDidNotOpen) as raised:
+        asyncio.run(apply_module._open_browser(Server(), Path("profile")))  # type: ignore[arg-type]
+    assert isinstance(raised.value, RuntimeError)
+    assert raised.value.reason == "browser_did_not_open"
+    assert "C:/Users/someone/engine is gone" in str(raised.value)
+    assert apply_module.why_not_sent(raised.value.reason) == "the browser did not open"
+
+
+def test_a_browser_that_is_never_ready_is_named_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(apply_module, "OPEN_DEADLINE_S", -1)
+    monkeypatch.setattr(apply_module, "OPEN_RETRY_S", 0)
+
+    class Server:
+        async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
+            return SimpleNamespace(isError=name == "browser_navigate", content=[SimpleNamespace(text="the engine is not on this machine yet")])
+
+    with pytest.raises(apply_module.BrowserDidNotOpen) as raised:
+        asyncio.run(apply_module._open_browser(Server(), Path("profile")))  # type: ignore[arg-type]
+    assert raised.value.reason == "browser_not_ready"
+    assert apply_module.why_not_sent("browser_not_ready") == "the browser took too long to start"
+
+
 def test_on_linux_with_no_desktop_the_browser_is_not_tried_and_the_person_is_told(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(apply_module, "PLATFORM", "linux")
     monkeypatch.delenv("DISPLAY", raising=False)

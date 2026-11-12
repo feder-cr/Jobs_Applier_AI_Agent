@@ -14,7 +14,9 @@ same list:
   apart. `app_closed`: the last step reached, whether a search ran, how long AIHawk was open.
 - `search`: how many jobs the search found, and how many of them were new to this computer.
 - `jobs_scored`: how many postings Jev read in a round, how many it answered for, how long the round took.
-- `application`: how it ended (submitted, unconfirmed, refused, blocked, failed), why in one word, the kind of site (the
+- `application`: how it ended (submitted, unconfirmed, refused, blocked, failed), why in one word (a name from apply.py's
+  WHY_NOT_SENT, or the name of the error's class: `browser_did_not_open` and `browser_not_ready` when the browser could not be
+  opened, never the browser server's own words), the kind of site (the
   plugin's name, or the vendor's name when the form's host is a known application site, else "other": never the host),
   the models, the gateway, the steps, the seconds, and the tokens each model took in and gave out. No price and no
   currency: the owner turns tokens into money himself.

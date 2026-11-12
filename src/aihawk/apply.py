@@ -59,6 +59,8 @@ REFUSED_BY_FORM = "refused_by_form"
 NEVER_CLICKED = "never_clicked"
 DRY_RUN = "dry_run"
 FORM_NOT_LOADED = "form_not_loaded"
+BROWSER_DID_NOT_OPEN = "browser_did_not_open"
+BROWSER_NOT_READY = "browser_not_ready"
 # Why a job was not sent, in a person's words: for the line after each application and for the list of what was sent. One place,
 # so the two never say it differently. A reason that is not here is an error's name (the AI service's), or a stop the model chose.
 WHY_NOT_SENT = {
@@ -72,6 +74,8 @@ WHY_NOT_SENT = {
     MAILBOX_SIGNED_OUT: "your mailbox is not signed in",
     NEVER_CLICKED: "the send button did not respond",
     FORM_NOT_LOADED: "the form did not load",
+    BROWSER_DID_NOT_OPEN: "the browser did not open",
+    BROWSER_NOT_READY: "the browser took too long to start",
     REFUSED_BY_FORM: "the form refused it",
     DRY_RUN: "it was a trial, nothing is sent",
     "other": "the form could not be filled",
@@ -766,6 +770,16 @@ async def patiently(call: Callable[[], Awaitable[Any]]) -> Any:
                 note("")
 
 
+class BrowserDidNotOpen(RuntimeError):
+    """The browser could not be opened. `reason` is the short name telemetry counts and the list of applications turns into
+    words (BROWSER_DID_NOT_OPEN, BROWSER_NOT_READY); the message keeps the server's own text, which goes to errors.log and
+    nowhere else: it can hold paths on the person's computer."""
+
+    def __init__(self, reason: str, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
 async def _open_browser(session: Browser, profile: Path) -> None:
     # While the engine downloads, the server answers with its progress instead of a browser. Its words are its own to
     # change: the browser is ready when it can go to a page, and an action on one that is not open is an error.
@@ -774,14 +788,14 @@ async def _open_browser(session: Browser, profile: Path) -> None:
     while True:
         result = await session.call_tool("browser_open", {"profile": str(profile)})
         if result.isError:
-            raise RuntimeError(f"the browser did not open: {tool_text(result)}")
+            raise BrowserDidNotOpen(BROWSER_DID_NOT_OPEN, f"the browser did not open: {tool_text(result)}")
         ready = await session.call_tool("browser_navigate", {"url": "about:blank"})
         if not ready.isError:
             if told := NOTE.get():
                 told("")
             return
         if time.monotonic() > deadline:
-            raise RuntimeError(f"the browser was not ready in time: {tool_text(result)}")
+            raise BrowserDidNotOpen(BROWSER_NOT_READY, f"the browser was not ready in time: {tool_text(result)}")
         if (note := NOTE.get()) and (words := getting_the_browser(tool_text(result))):
             note(words)
         await asyncio.sleep(OPEN_RETRY_S)
