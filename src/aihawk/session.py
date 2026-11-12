@@ -35,6 +35,9 @@ WIDE = 200
 Log = Callable[[str], None]
 
 
+# OrcaRouter's balance page, under the API's address: {"success": true, "data": {"wallet_usd": …, "spendable_usd": …}}.
+BALANCE_PATH = "/tools/balance"
+
 class Session:
     def __init__(self, workspace: Path) -> None:
         self.workspace = workspace
@@ -134,13 +137,16 @@ class Session:
         return True
 
     async def credit_left(self, key: str) -> float | None:
-        """The dollars this key can still spend at OrcaRouter, as the billing page of its API says; None when that cannot be told:
-        no connection, an answer of another shape, a refusal. Only a number says anything, and the check never blocks."""
+        """The dollars this key can still spend at OrcaRouter, as its balance page says (`spendable_usd`: the account's credit,
+        or the key's own limit when that is lower); None when that cannot be told: no connection, an answer of another shape, a
+        refusal. Only a number says anything, and the check never blocks. Not the OpenAI-shaped billing page: for a key with no
+        limit of its own, which is how OrcaRouter makes them, it says 100000000 dollars whatever the account holds."""
         try:
-            answer = await self.key_client(key).get("/dashboard/billing/subscription", cast_to=dict)
+            answer = await self.key_client(key).get(BALANCE_PATH, cast_to=dict)
         except Exception:  # noqa: BLE001  Not knowing is not a reason to stop anyone; the first call tells.
             return None
-        left = answer.get("hard_limit_usd") if isinstance(answer, dict) else None
+        data = answer.get("data") if isinstance(answer, dict) else None
+        left = data.get("spendable_usd") if isinstance(data, dict) else None
         return float(left) if isinstance(left, int | float) and not isinstance(left, bool) else None
 
     async def has_no_credit(self, key: str) -> bool:
