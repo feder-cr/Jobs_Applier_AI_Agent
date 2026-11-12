@@ -5,6 +5,8 @@ from __future__ import annotations
 import ast
 import asyncio
 import json
+import re
+import sys
 import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
@@ -45,7 +47,91 @@ def test_every_event_has_the_one_id_the_version_and_no_person_profile(tmp_path: 
     for event in tracked:
         assert event["api_key"] == telemetry.PROJECT_KEY
         assert event["properties"]["$process_person_profile"] is False
+        # PostHog must not look up where the sender's address is: that would give the city.
+        assert event["properties"]["$geoip_disable"] is True
         assert event["properties"]["version"] and event["properties"]["os"]
+
+
+def test_every_kind_of_event_asks_posthog_not_to_look_up_the_address(tmp_path: Path, tracked: list[dict[str, Any]]) -> None:
+    run = Telemetry(tmp_path)
+    run.started()
+    run.step("key_asked")
+    run.search(found=1, new=1)
+    run.scored(postings=1, answered=1, seconds=0.5, scoring_model="m")
+    run.application("submitted", "sent", 3, 1.0, None, "jobs.lever.co", "f", "s", {})
+    run.closed()
+    assert {event["event"] for event in tracked} == set(EVENTS)
+    assert all(event["properties"]["$geoip_disable"] is True for event in tracked)
+
+
+def test_the_start_carries_the_country_the_computer_is_set_to_and_no_other_place(
+    tmp_path: Path, tracked: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(telemetry, "computer_country", lambda: "GB")
+    Telemetry(tmp_path).started()
+    assert tracked[0]["properties"]["country"] == "GB"
+    assert not {"city", "$geoip_city_name", "$ip"} & set(tracked[0]["properties"])
+
+
+@pytest.mark.parametrize(
+    ("name", "region"),
+    [("en_GB.UTF-8", "GB"), ("it_IT", "IT"), ("C", ""), ("POSIX", ""), ("", ""), ("en", ""), ("pt-BR", "BR"), ("de_DE@euro", "DE"),
+     ("zh-Hans-CN", "CN"), ("zh-Hans", ""), ("es-419", ""), ("en_gb", "GB"), ("C.UTF-8", "")],
+)  # fmt: skip
+def test_the_country_is_the_region_of_a_locale_name_when_it_has_one(name: str, region: str) -> None:
+    assert telemetry.region_of(name) == region
+
+
+def test_the_country_of_a_mac_or_linux_comes_from_the_first_locale_variable_that_is_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(telemetry.sys, "platform", "linux")
+    for variable in ("LC_ALL", "LC_CTYPE", "LANG"):
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setattr(telemetry.locale, "getlocale", lambda *_: (None, None))
+    assert telemetry.computer_country() == ""
+    monkeypatch.setenv("LANG", "it_IT.UTF-8")
+    assert telemetry.computer_country() == "IT"
+    monkeypatch.setenv("LC_CTYPE", "en_GB.UTF-8")
+    assert telemetry.computer_country() == "GB"
+    monkeypatch.setenv("LC_ALL", "pt_BR.UTF-8")
+    assert telemetry.computer_country() == "BR"
+    # "C" says no country, and the program's own locale is asked next.
+    monkeypatch.setenv("LC_ALL", "C")
+    monkeypatch.setattr(telemetry.locale, "getlocale", lambda *_: ("fr_FR", "UTF-8"))
+    assert telemetry.computer_country() == "FR"
+    monkeypatch.setattr(telemetry.locale, "getlocale", lambda *_: (None, None))
+    assert telemetry.computer_country() == ""
+
+
+def test_the_country_is_empty_and_never_an_error_when_the_computer_cannot_tell(monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken(*_: Any) -> Any:
+        raise ValueError("unknown locale")
+
+    monkeypatch.setattr(telemetry.sys, "platform", "darwin")
+    monkeypatch.delenv("LC_ALL", raising=False)
+    monkeypatch.delenv("LC_CTYPE", raising=False)
+    monkeypatch.delenv("LANG", raising=False)
+    monkeypatch.setattr(telemetry.locale, "getlocale", broken)
+    assert telemetry.computer_country() == ""
+    monkeypatch.setattr(telemetry.sys, "platform", "win32")
+    monkeypatch.setattr(telemetry, "windows_country", broken)
+    assert telemetry.computer_country() == ""
+
+
+def test_windows_is_asked_for_its_country_only_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    asked: list[str] = []
+    monkeypatch.setattr(telemetry, "windows_country", lambda: asked.append("windows") or "IE")
+    # A Mac runner sets LC_ALL or LC_CTYPE, which come before LANG.
+    monkeypatch.delenv("LC_ALL", raising=False)
+    monkeypatch.delenv("LC_CTYPE", raising=False)
+    monkeypatch.setenv("LANG", "it_IT.UTF-8")
+    monkeypatch.setattr(telemetry.sys, "platform", "linux")
+    assert telemetry.computer_country() == "IT" and asked == []
+    monkeypatch.setattr(telemetry.sys, "platform", "win32")
+    assert telemetry.computer_country() == "IE" and asked == ["windows"]
+
+
+def test_whatever_the_computer_is_the_country_is_two_capital_letters_or_nothing() -> None:
+    assert re.fullmatch(r"[A-Z]{2}|", telemetry.computer_country())
 
 
 def test_a_dry_run_sends_nothing_and_leaves_no_id(tmp_path: Path, tracked: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -148,3 +234,8 @@ def test_each_application_reports_only_the_tokens_it_used_and_the_models_that_to
     assert first["tokens_by_model"] == {"forms": {"input": 150, "output": 15}, "check": {"input": 5, "output": 1}}
     assert (second["models"], second["input_tokens"], second["output_tokens"]) == (["forms"], 7, 3)
     assert second["tokens_by_model"] == {"forms": {"input": 7, "output": 3}}
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows' own settings")
+def test_windows_tells_a_country_of_two_capital_letters() -> None:
+    assert re.fullmatch(r"[A-Z]{2}", telemetry.windows_country())

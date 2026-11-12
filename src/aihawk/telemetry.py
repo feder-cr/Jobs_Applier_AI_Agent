@@ -1,17 +1,22 @@
 """What AIHawk tells its makers about how it is used, for all its users together: to PostHog, anonymously.
 
 Each event carries an id made at random the first time AIHawk runs on a computer, so a person's events count once, and
-nothing about the person: no name, email, CV, answer, job, company or link. What goes, and EVENTS below is the same list:
+nothing about the person: no name, email, CV, answer, job, company, link, city or address. What goes, and EVENTS below is the
+same list:
 
-- `app_started`: AIHawk's version and the operating system.
-- `start_step`: each step of a start, not only the first one (the key, whether its account has no credit and what the person
+- `app_started`: AIHawk's version, the operating system, and the country the computer is set to (two letters, read from its own
+  settings with no network; empty when they say none). Every event asks PostHog not to look up where its IP address is, which it
+  would do on arrival, down to the city: the country is the only place that is known.
+- `start_step`: each step of a start, not only the first one (the key, whether its account has no credit or the free plan is too little, and what the person
   did about it, the resume, the jobs' download, the first job on the screen, and the mail, asked about when a form needs a site's code),
   and the seconds since AIHawk opened;
   an `error` is the error's name with the status and the service's code when it has them, so that a 402 and a 403 are told
   apart. `app_closed`: the last step reached, whether a search ran, how long AIHawk was open.
 - `search`: how many jobs the search found, and how many of them were new to this computer.
 - `jobs_scored`: how many postings Jev read in a round, how many it answered for, how long the round took.
-- `application`: how it ended (submitted, unconfirmed, refused, blocked, failed), why in one word, the kind of site (the
+- `application`: how it ended (submitted, unconfirmed, refused, blocked, failed), why in one word (a name from apply.py's
+  WHY_NOT_SENT, or the name of the error's class: `browser_did_not_open` and `browser_not_ready` when the browser could not be
+  opened, never the browser server's own words), the kind of site (the
   plugin's name, or the vendor's name when the form's host is a known application site, else "other": never the host),
   the models, the gateway, the steps, the seconds, and the tokens each model took in and gave out. No price and no
   currency: the owner turns tokens into money himself.
@@ -24,7 +29,11 @@ key is PostHog's write-only key, made to be public: it can send events and read 
 from __future__ import annotations
 
 import json
+import locale
+import os
 import platform
+import re
+import sys
 import threading
 import time
 import urllib.request
@@ -44,7 +53,7 @@ GATEWAY = urlsplit(DEFAULT_BASE_URL).hostname
 # Every event and the properties it carries, besides the version and the operating system that all of them carry. The
 # dashboard and the counters read only these, and a test holds every call in the code to them.
 EVENTS: dict[str, tuple[str, ...]] = {
-    "app_started": (),
+    "app_started": ("country",),
     "start_step": ("step", "seconds", "error", "kind", "chunks"),
     "app_closed": ("last_step", "searched", "seconds"),
     "search": ("found", "new"),
@@ -84,6 +93,41 @@ def vendor_of(host: str) -> str:
     """The application-site vendor a form's host names, or "other": a company's own host is not sent."""
     host = host.lower()
     return next((vendor for fragment, vendor in KNOWN_SITES if fragment in host), "other")
+
+
+def region_of(name: str) -> str:
+    """The two-letter country a locale's name ends with ("en_GB.UTF-8" and "pt-BR" give GB and BR), or "" when it names none:
+    "C", "POSIX", "en" and a script or a number ("zh-Hans", "es-419") are no country."""
+    parts = re.split(r"[_-]", name.split(".")[0].split("@")[0])
+    region = parts[-1].upper() if len(parts) > 1 else ""
+    return region if re.fullmatch(r"[A-Z]{2}", region) else ""
+
+
+def windows_country() -> str:
+    """The "Country or region" the person set in Windows, as its ISO code; the region of the language's name when that is not
+    set. The system's own answer, with no network."""
+    import ctypes
+
+    kernel = ctypes.windll.kernel32  # type: ignore[attr-defined]
+    buffer = ctypes.create_unicode_buffer(16)
+    if (nation := kernel.GetUserGeoID(16)) > 0 and kernel.GetGeoInfoW(nation, 4, buffer, len(buffer), 0) and re.fullmatch(r"[A-Z]{2}", buffer.value):
+        return buffer.value
+    buffer = ctypes.create_unicode_buffer(85)
+    return region_of(buffer.value) if kernel.GetUserDefaultLocaleName(buffer, len(buffer)) else ""
+
+
+def computer_country() -> str:
+    """The two-letter country the computer is set to, uppercase, or "" when it cannot be told. It reads the computer's own
+    settings and never the network, never raises and is fast: it is the only place AIHawk reports."""
+    try:
+        if sys.platform == "win32":
+            return windows_country()
+        # The first of these that is set is the one the system uses, as the C library reads them.
+        if name := next((value for variable in ("LC_ALL", "LC_CTYPE", "LANG") if (value := os.environ.get(variable))), ""):
+            return region_of(name) or region_of(locale.getlocale()[0] or "")
+        return region_of(locale.getlocale()[0] or "")
+    except Exception:  # noqa: BLE001  A place that cannot be told is no place; it never stops AIHawk.
+        return ""
 
 
 def install_id(data_dir: Path) -> str:
@@ -127,13 +171,15 @@ class Telemetry:
                 "os": platform.system(),
                 # No person profile: the id only counts people, and an event with no profile costs PostHog less.
                 "$process_person_profile": False,
+                # PostHog's switch for the lookup of the sender's IP address, which would give the city: only `country` is sent.
+                "$geoip_disable": True,
                 "$lib": "aihawk",
             },
         }
         threading.Thread(target=send, args=(body,), name="telemetry").start()
 
     def started(self) -> None:
-        self.track("app_started")
+        self.track("app_started", country=computer_country())
 
     def step(self, name: str, **properties: Any) -> None:
         """How far a start has come."""

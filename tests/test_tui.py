@@ -1463,7 +1463,7 @@ def test_the_answers_the_person_sees_and_counts_leave_out_aihawks_own(home: Path
 def test_every_reason_a_form_stops_for_has_plain_words_and_an_unknown_one_does_not_blame_the_service() -> None:
     from aihawk.apply import BLOCKED_BY, WHY_NOT_SENT, why_not_sent
 
-    for reason in (*BLOCKED_BY, "stuck", "no_code", "mailbox_signed_out", "never_clicked", "form_not_loaded", "refused_by_form"):
+    for reason in (*BLOCKED_BY, "stuck", "no_code", "mailbox_signed_out", "never_clicked", "form_not_loaded", "refused_by_form", "browser_did_not_open", "browser_not_ready"):
         assert reason in WHY_NOT_SENT, reason
     assert why_not_sent("captcha") == "a captcha stopped it"
     assert why_not_sent("missing_info") == "a required answer is missing: press e, Your answers"
@@ -2340,6 +2340,104 @@ def test_the_engine_is_brought_in_the_background_once_and_only_when_it_is_not_he
     assert process.ended  # type: ignore[attr-defined]
 
 
+def test_the_engine_is_not_brought_while_a_browser_is_open_or_opening(monkeypatch: pytest.MonkeyPatch, home: Path, resume: Path) -> None:
+    """The jobs can finish in the middle of the first application, whose server is downloading the engine itself: a second
+    download of it clears the folder the first is starting the browser from (2026-11-12, an application that failed after 98 s)."""
+    import subprocess
+
+    started: list[list[str]] = []
+
+    class Process:
+        def __init__(self, command: list[str], **keywords: Any) -> None:
+            started.append(command)
+
+        def poll(self) -> int | None:
+            return None
+
+        def terminate(self) -> None:
+            pass
+
+    monkeypatch.setattr(subprocess, "Popen", Process)
+    monkeypatch.setattr(Session, "engine_here", staticmethod(lambda: False))
+    session = Session(home)
+    session._client = ScriptedModelForApp()  # type: ignore[assignment]
+    asyncio.run(session.load_resume(resume))
+    session.store.add(Job("one", "Firm", "Python Engineer", "Milan", "https://jobs.lever.co/a/1", "https://jobs.lever.co/a/1", "A posting.", 1.0))
+    during: list[int] = []
+
+    async def fill(*_arguments: Any, **_options: Any) -> Outcome:
+        session.bring_engine()
+        during.append(len(started))
+        return Outcome("blocked", "a puzzle")
+
+    monkeypatch.setattr(session_module, "apply_to_job", fill)
+    asyncio.run(session.apply(session.store.get("one"), lambda _: None))  # type: ignore[arg-type]
+    assert during == [0] and session.engine is None and session.browsers == 0
+    session.bring_engine()
+    assert len(started) == 1, "with no browser open it is brought, as before"
+    session.close()
+
+
+def test_the_engine_is_not_brought_while_the_mailbox_browser_opens_and_it_waits_for_one_already_coming(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
+    import subprocess
+
+    started: list[list[str]] = []
+    monkeypatch.setattr(subprocess, "Popen", lambda command, **keywords: started.append(command))
+    monkeypatch.setattr(Session, "engine_here", staticmethod(lambda: False))
+    session = Session(home)
+    seen: list[tuple[int, int]] = []
+
+    async def sign_in(profile: Path, folder: Path, wait: Any, url: str) -> str:
+        session.bring_engine()
+        seen.append((len(started), session.browsers))
+        return "https://mail.google.com/mail/u/0/"
+
+    monkeypatch.setattr(session_module, "sign_in_browser", sign_in)
+    assert asyncio.run(session.sign_in_mail("gmail", lambda: asyncio.sleep(0))) is True
+    assert seen == [(0, 1)] and session.browsers == 0
+
+    class Coming:
+        polls = 0
+
+        def poll(self) -> int | None:
+            self.polls += 1
+            return None if self.polls < 3 else 0
+
+    async def real_sleep(seconds: float) -> None:
+        pass
+
+    monkeypatch.setattr(asyncio, "sleep", real_sleep)
+    session.engine = Coming()  # type: ignore[assignment]
+    seen.clear()
+    asyncio.run(session.sign_in_mail("gmail", lambda: asyncio.sleep(0)))
+    assert session.engine.polls >= 3, "the mailbox browser opened only once the engine had come"  # type: ignore[attr-defined]
+    session.engine = None
+    session.close()
+
+
+def test_a_browser_that_did_not_open_ends_the_application_with_its_name_and_not_the_servers_words(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    session = Session(home)
+    session._client = ScriptedModelForApp()  # type: ignore[assignment]
+    asyncio.run(session.load_resume(resume))
+    session.store.add(Job("one", "Firm", "Python Engineer", "Milan", "https://jobs.lever.co/a/1", "https://jobs.lever.co/a/1", "A posting.", 1.0))
+    failures: list[Exception] = [
+        apply_module.BrowserDidNotOpen("browser_did_not_open", "the browser did not open: C:/Users/someone/engine is gone"),
+        apply_module.BrowserDidNotOpen("browser_not_ready", "the browser was not ready in time: starting"),
+        RuntimeError("something else"),
+    ]
+
+    async def fail(*_arguments: Any, **_options: Any) -> Outcome:
+        raise failures.pop(0)
+
+    monkeypatch.setattr(session_module, "apply_to_job", fail)
+    outcomes = [asyncio.run(session.apply(session.store.get("one"), lambda _: None)) for _ in range(3)]  # type: ignore[arg-type]
+    assert [outcome.reason for outcome in outcomes] == ["browser_did_not_open", "browser_not_ready", "RuntimeError"]
+    assert all(outcome.status == "failed" and "someone" not in outcome.summary for outcome in outcomes)
+    assert "C:/Users/someone/engine is gone" in (session.config.data_dir / "errors.log").read_text(encoding="utf-8")
+    assert session.browsers == 0
+    session.close()
+
+
 def test_an_engine_that_cannot_be_started_is_no_ones_concern(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
     import subprocess
 
@@ -2598,6 +2696,10 @@ def test_the_resume_is_remembered_across_every_failure_of_the_account_or_the_ser
         app = AIHawk(home, resume)
         app.session._client = ResumeRefused(error)  # type: ignore[assignment]
         async with app.run_test(size=(80, 24)) as pilot:
+            if isinstance(error, RateLimitError):
+                # Told in a question of its own, whose Esc leaves the line checked below.
+                await wait_for_screen(pilot, Confirm)
+                await pilot.press("escape")
             await settle(pilot, app)
             await pilot.pause(0.2)
             assert app.remembered == resume
@@ -2873,3 +2975,117 @@ def test_every_cause_about_the_account_has_its_words_in_the_list_of_applications
     # A batch stops at the first of these: the next application would fail the same way.
     assert llm.ACCOUNT_CAUSES <= set(WHY_NOT_SENT)
     assert {"no_credit", "key_limit", "spend_limit", "model_not_allowed"} <= llm.ACCOUNT_CAUSES
+
+
+FREE_PLAN_WORDS = "OrcaRouter is limiting this account: its free plan is not enough for AIHawk. Add a few dollars at orcarouter.ai, then try again."
+
+
+def test_a_resume_refused_as_too_many_requests_says_the_free_plan_is_not_enough_and_enter_reads_it_again(
+    home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch, tracked: list[dict[str, Any]]
+) -> None:
+    opened: list[str] = []
+    import aihawk.screens as screens_module
+
+    monkeypatch.setattr(screens_module.webbrowser, "open", lambda url: opened.append(url) or True)
+
+    async def run() -> None:
+        app = AIHawk(home, resume)
+        model = ResumeRefused(status_error(RateLimitError, 429))
+        app.session._client = model  # type: ignore[assignment]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await wait_for_screen(pilot, Confirm)
+            assert app.screen.question == FREE_PLAN_WORDS
+            assert app.screen.hint == "Enter tries again · Ctrl+O opens orcarouter.ai · Esc later"
+            assert companies(app) == []
+            await pilot.press("ctrl+o")
+            # The credit is added: the resume is read again from the remembered file, and the jobs come.
+            model.error = None
+            await pilot.press("enter")
+            await settle(pilot, app)
+            assert not isinstance(app.screen, Confirm)
+            assert companies(app) == ["Bestco", "Lowly", "Noplugin"]
+            assert app.remembered is None
+
+    asyncio.run(run())
+    assert opened == ["https://www.orcarouter.ai/ref/ref_accd17afb78fc95ac4d7"]
+    steps = steps_of(tracked)
+    assert steps[steps.index("free_plan_told") :][:3] == ["free_plan_told", "free_plan_retry", "resume_read"]
+    assert "free_plan_later" not in steps
+
+
+def test_a_resume_still_refused_as_too_many_requests_is_told_again_on_each_try(home: Path, resume: Path, tracked: list[dict[str, Any]]) -> None:
+    async def run() -> None:
+        app = AIHawk(home, resume)
+        app.session._client = ResumeRefused(status_error(RateLimitError, 429))  # type: ignore[assignment]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await wait_for_screen(pilot, Confirm)
+            await pilot.press("enter")
+            await pilot.pause(0.3)
+            await wait_for_screen(pilot, Confirm)
+            assert app.screen.question == FREE_PLAN_WORDS
+            await pilot.press("escape")
+            await settle(pilot, app)
+
+    asyncio.run(run())
+    assert [step for step in steps_of(tracked) if step.startswith("free_plan")] == ["free_plan_told", "free_plan_retry", "free_plan_told", "free_plan_later"]
+
+
+def test_escape_on_the_free_plan_question_leaves_the_line_that_says_r_reads_the_resume_again(
+    home: Path, resume: Path, tracked: list[dict[str, Any]]
+) -> None:
+    async def run() -> None:
+        app = AIHawk(home, resume)
+        model = ResumeRefused(status_error(RateLimitError, 429))
+        app.session._client = model  # type: ignore[assignment]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await wait_for_screen(pilot, Confirm)
+            await pilot.press("escape")
+            await settle(pilot, app)
+            assert not isinstance(app.screen, Confirm)
+            assert last_line(app) == "The AI service is busy. Wait a minute. Press r: your resume is remembered."
+            assert companies(app) == [] and app.remembered == resume
+            model.error = None
+            await pilot.press("r")
+            await wait_for_screen(pilot, TextPrompt)
+            assert app.screen.query_one(Input).value == str(resume)
+            await pilot.press("escape")
+
+    asyncio.run(run())
+    steps = steps_of(tracked)
+    assert "free_plan_told" in steps and "free_plan_later" in steps and "free_plan_retry" not in steps
+
+
+def test_too_many_requests_while_scoring_does_not_say_the_free_plan_is_not_enough(
+    home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch, tracked: list[dict[str, Any]]
+) -> None:
+    monkeypatch.setattr(tui_module, "RETRY_PAUSES", (0.01, 0.01, 0.01, 0.01))
+
+    class Busy(ScriptedModelForApp):
+        async def post(self, path: str, *, body: dict[str, Any], cast_to: type) -> dict[str, Any]:
+            raise status_error(RateLimitError, 429)
+
+    async def run() -> None:
+        app = AIHawk(home, resume)
+        app.session._client = Busy()  # type: ignore[assignment]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            await pilot.pause(0.2)
+            assert not isinstance(app.screen, Confirm)
+
+    asyncio.run(run())
+    assert not any(step.startswith("free_plan") for step in steps_of(tracked))
+    assert "resume_read" in steps_of(tracked)
+
+
+def test_no_credit_at_the_resume_is_not_the_free_plan_question(home: Path, resume: Path, tracked: list[dict[str, Any]]) -> None:
+    async def run() -> None:
+        app = AIHawk(home, resume)
+        app.session._client = ResumeRefused(refusal(402, "no quota", "insufficient_user_quota"))  # type: ignore[assignment]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            await pilot.pause(0.2)
+            assert not isinstance(app.screen, Confirm)
+            assert last_line(app) == NO_CREDIT_WORDS.format("press r: your resume is remembered.")
+
+    asyncio.run(run())
+    assert not any(step.startswith("free_plan") for step in steps_of(tracked))
