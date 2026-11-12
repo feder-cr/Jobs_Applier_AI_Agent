@@ -9,8 +9,6 @@
 </picture>
 <h3 align="center">An AI job application bot: automated job search, then it auto-applies to the jobs that match your resume, while you sleep.</h3>
 
-<img alt="Applications sent with AIHawk, by all its users" src="https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/badges/docs/badges/applications.svg">
-
 <sub>FEATURED IN</sub><br>
 <a href="https://www.businessinsider.com/aihawk-applies-jobs-for-you-linkedin-risks-inaccuracies-mistakes-2024-11"><b>Business Insider</b></a> ·
 <a href="https://techcrunch.com/2024/10/10/a-reporter-used-ai-to-apply-to-2843-jobs/"><b>TechCrunch</b></a> ·
