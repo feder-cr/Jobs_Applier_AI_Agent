@@ -1463,7 +1463,7 @@ def test_the_answers_the_person_sees_and_counts_leave_out_aihawks_own(home: Path
 def test_every_reason_a_form_stops_for_has_plain_words_and_an_unknown_one_does_not_blame_the_service() -> None:
     from aihawk.apply import BLOCKED_BY, WHY_NOT_SENT, why_not_sent
 
-    for reason in (*BLOCKED_BY, "stuck", "no_code", "mailbox_signed_out", "never_clicked", "form_not_loaded", "refused_by_form"):
+    for reason in (*BLOCKED_BY, "stuck", "no_code", "mailbox_signed_out", "never_clicked", "form_not_loaded", "refused_by_form", "browser_did_not_open", "browser_not_ready"):
         assert reason in WHY_NOT_SENT, reason
     assert why_not_sent("captcha") == "a captcha stopped it"
     assert why_not_sent("missing_info") == "a required answer is missing: press e, Your answers"
@@ -2338,6 +2338,104 @@ def test_the_engine_is_brought_in_the_background_once_and_only_when_it_is_not_he
     assert process is not None and not process.ended  # type: ignore[attr-defined]
     session.close()
     assert process.ended  # type: ignore[attr-defined]
+
+
+def test_the_engine_is_not_brought_while_a_browser_is_open_or_opening(monkeypatch: pytest.MonkeyPatch, home: Path, resume: Path) -> None:
+    """The jobs can finish in the middle of the first application, whose server is downloading the engine itself: a second
+    download of it clears the folder the first is starting the browser from (2026-11-12, an application that failed after 98 s)."""
+    import subprocess
+
+    started: list[list[str]] = []
+
+    class Process:
+        def __init__(self, command: list[str], **keywords: Any) -> None:
+            started.append(command)
+
+        def poll(self) -> int | None:
+            return None
+
+        def terminate(self) -> None:
+            pass
+
+    monkeypatch.setattr(subprocess, "Popen", Process)
+    monkeypatch.setattr(Session, "engine_here", staticmethod(lambda: False))
+    session = Session(home)
+    session._client = ScriptedModelForApp()  # type: ignore[assignment]
+    asyncio.run(session.load_resume(resume))
+    session.store.add(Job("one", "Firm", "Python Engineer", "Milan", "https://jobs.lever.co/a/1", "https://jobs.lever.co/a/1", "A posting.", 1.0))
+    during: list[int] = []
+
+    async def fill(*_arguments: Any, **_options: Any) -> Outcome:
+        session.bring_engine()
+        during.append(len(started))
+        return Outcome("blocked", "a puzzle")
+
+    monkeypatch.setattr(session_module, "apply_to_job", fill)
+    asyncio.run(session.apply(session.store.get("one"), lambda _: None))  # type: ignore[arg-type]
+    assert during == [0] and session.engine is None and session.browsers == 0
+    session.bring_engine()
+    assert len(started) == 1, "with no browser open it is brought, as before"
+    session.close()
+
+
+def test_the_engine_is_not_brought_while_the_mailbox_browser_opens_and_it_waits_for_one_already_coming(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
+    import subprocess
+
+    started: list[list[str]] = []
+    monkeypatch.setattr(subprocess, "Popen", lambda command, **keywords: started.append(command))
+    monkeypatch.setattr(Session, "engine_here", staticmethod(lambda: False))
+    session = Session(home)
+    seen: list[tuple[int, int]] = []
+
+    async def sign_in(profile: Path, folder: Path, wait: Any, url: str) -> str:
+        session.bring_engine()
+        seen.append((len(started), session.browsers))
+        return "https://mail.google.com/mail/u/0/"
+
+    monkeypatch.setattr(session_module, "sign_in_browser", sign_in)
+    assert asyncio.run(session.sign_in_mail("gmail", lambda: asyncio.sleep(0))) is True
+    assert seen == [(0, 1)] and session.browsers == 0
+
+    class Coming:
+        polls = 0
+
+        def poll(self) -> int | None:
+            self.polls += 1
+            return None if self.polls < 3 else 0
+
+    async def real_sleep(seconds: float) -> None:
+        pass
+
+    monkeypatch.setattr(asyncio, "sleep", real_sleep)
+    session.engine = Coming()  # type: ignore[assignment]
+    seen.clear()
+    asyncio.run(session.sign_in_mail("gmail", lambda: asyncio.sleep(0)))
+    assert session.engine.polls >= 3, "the mailbox browser opened only once the engine had come"  # type: ignore[attr-defined]
+    session.engine = None
+    session.close()
+
+
+def test_a_browser_that_did_not_open_ends_the_application_with_its_name_and_not_the_servers_words(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    session = Session(home)
+    session._client = ScriptedModelForApp()  # type: ignore[assignment]
+    asyncio.run(session.load_resume(resume))
+    session.store.add(Job("one", "Firm", "Python Engineer", "Milan", "https://jobs.lever.co/a/1", "https://jobs.lever.co/a/1", "A posting.", 1.0))
+    failures: list[Exception] = [
+        apply_module.BrowserDidNotOpen("browser_did_not_open", "the browser did not open: C:/Users/someone/engine is gone"),
+        apply_module.BrowserDidNotOpen("browser_not_ready", "the browser was not ready in time: starting"),
+        RuntimeError("something else"),
+    ]
+
+    async def fail(*_arguments: Any, **_options: Any) -> Outcome:
+        raise failures.pop(0)
+
+    monkeypatch.setattr(session_module, "apply_to_job", fail)
+    outcomes = [asyncio.run(session.apply(session.store.get("one"), lambda _: None)) for _ in range(3)]  # type: ignore[arg-type]
+    assert [outcome.reason for outcome in outcomes] == ["browser_did_not_open", "browser_not_ready", "RuntimeError"]
+    assert all(outcome.status == "failed" and "someone" not in outcome.summary for outcome in outcomes)
+    assert "C:/Users/someone/engine is gone" in (session.config.data_dir / "errors.log").read_text(encoding="utf-8")
+    assert session.browsers == 0
+    session.close()
 
 
 def test_an_engine_that_cannot_be_started_is_no_ones_concern(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:

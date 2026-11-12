@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- An application whose browser could not open or start no longer ends as "RuntimeError": the list says "the browser did not open" or "the browser took too long to start", and the server's own words stay in `errors.log`.
+- The browser's download in the background no longer starts while a browser is open or opening: the jobs finishing in the middle of the first application started a second download of the same browser, which cleared the folder the first one was starting from. A mailbox sign-in now waits for a download already under way, as an application does.
 - The check for a key's credit asked a page that tells 100000000 dollars for every key with no limit of its own, which is how OrcaRouter makes them, so an account with nothing on it was never told before the resume. It reads OrcaRouter's balance page now, which says what the key can really spend.
 - The mail is no longer asked before the first job shows: the question comes with the first application that needs a code from a site, then the mailbox opens for the sign-in and that application is sent again. Left for later, it is not asked again until AIHawk is opened again, and Settings, Your mail, still sets it.
 - A form the page's own validation refuses (a required box left empty) is no longer "not confirmed": it says which field, and the AI gets one more turn to fix it. A Lever form that sends the browser to the company's own website, with the application's id in the address, is read as received.

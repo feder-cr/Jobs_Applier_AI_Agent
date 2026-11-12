@@ -14,7 +14,7 @@ from pathlib import Path
 from openai import AsyncOpenAI
 
 from aihawk import errors
-from aihawk.apply import MAILBOXES, NOTE, Outcome, apply_to_job, no_browser_here, signed_in, site_of
+from aihawk.apply import MAILBOXES, NOTE, BrowserDidNotOpen, Outcome, apply_to_job, no_browser_here, signed_in, site_of
 from aihawk.apply import sign_in as sign_in_browser
 from aihawk.config import DEFAULT_BASE_URL, KEY_ENV, Config, ConfigError, load_config
 from aihawk.database import load_manifest, search
@@ -56,6 +56,9 @@ class Session:
         self.database_jobs = 0
         # The browser's engine coming down in the background, while the person looks at the jobs.
         self.engine: subprocess.Popen[bytes] | None = None
+        # How many browsers of this session are open or being opened (applications, a mailbox sign-in): while there is one, the
+        # engine is not brought in the background. See bring_engine.
+        self.browsers = 0
 
     def close(self) -> None:
         # The downloads are AIHawk's: they do not go on when AIHawk is closed.
@@ -77,8 +80,13 @@ class Session:
     def bring_engine(self) -> None:
         """Starts bringing the browser's engine here, about 270 MB, silently and once, so that the first application does not wait
         for it. It is the engine's own `fetch`, in a process of its own that ends with AIHawk; a failure is no one's concern:
-        the application that needs the engine asks for it again."""
-        if self.engine is not None or no_browser_here() or self.engine_here():
+        the application that needs the engine asks for it again.
+
+        Never while a browser is open or being opened: its server downloads the engine itself when it is not here, and a second
+        download of the same engine ends by clearing the folder the first one is starting the browser from (the core removes the
+        engine's folder and moves its own copy in, and on Windows it deletes what is not in use). The jobs finishing in the middle
+        of the first application is how that happened on 2026-11-12. The application downloads it, so nothing is lost."""
+        if self.engine is not None or self.browsers or no_browser_here() or self.engine_here():
             return
         flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         try:
@@ -178,7 +186,12 @@ class Session:
     async def sign_in_mail(self, provider: str, wait: Callable[[], Awaitable[None]]) -> bool:
         """The mailbox open in the browser for the person to sign in, until `wait` returns; whether the inbox was reached."""
         url, _ = MAILBOXES[provider]
-        where = await sign_in_browser(self.config.browser_profile, self.config.data_dir / "browser", wait, url)
+        self.browsers += 1
+        try:
+            await self.engine_coming(NOTE.get())
+            where = await sign_in_browser(self.config.browser_profile, self.config.data_dir / "browser", wait, url)
+        finally:
+            self.browsers -= 1
         return signed_in(provider, where)
 
     async def sync(self, progress: Callable[[int, int], None], arrived: Callable[[], None], on_bytes: Callable[[int, int], None] = lambda done, total: None) -> None:
@@ -292,6 +305,8 @@ class Session:
         mark = SPEND.mark()
         started = time.monotonic()
         told = NOTE.set(note)
+        # Counted before the wait for the engine, so that the engine is either already coming (waited for) or not started.
+        self.browsers += 1
         try:
             await self.engine_coming(note)
             cv_file = self._own_cv()
@@ -301,8 +316,9 @@ class Session:
             # One job's failure is reported and recorded; the next job still runs.
             if refused(error):
                 raise
-            outcome = Outcome("failed", errors.explained(error), reason="no_credit" if no_credit(error) else cause(error) or type(error).__name__)
+            outcome = Outcome("failed", errors.explained(error), reason=_why_failed(error))
         finally:
+            self.browsers -= 1
             NOTE.reset(told)
         used = await self._record(item, host, outcome, mark)
         # How it went, for AIHawk's makers, with nothing about the person or the job: see telemetry.py. The tokens each
@@ -329,6 +345,18 @@ class Session:
         cost, used = SPEND.since(mark)
         self.store.set_cost(item.job.id, cost)
         return used
+
+
+def _why_failed(error: Exception) -> str:
+    """Why an application ended in an error, in one word for the list and for telemetry: the account's cause when the AI service
+    refused for it, the name the browser's failure carries, else the error's class. Never the error's text."""
+    if no_credit(error):
+        return "no_credit"
+    if why := cause(error):
+        return why
+    if isinstance(error, BrowserDidNotOpen):
+        return error.reason
+    return type(error).__name__
 
 
 def _guidance(plugin: Plugin | None, everywhere: tuple[Plugin, ...]) -> str:
