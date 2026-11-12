@@ -16,7 +16,8 @@ nothing about the person: no name, email, CV, answer, job, company or link. What
   the models, the gateway, the steps, the seconds, and the tokens each model took in and gave out. No price and no
   currency: the owner turns tokens into money himself.
 
-The owner's decision of 2026-11-11: it cannot be turned off, and the README says so. A dry run is not counted. The project
+The owner's decisions: it cannot be turned off (2026-11-11), and this list is kept here, not in the README (2026-11-12).
+A dry run is not counted. The project
 key is PostHog's write-only key, made to be public: it can send events and read nothing.
 """
 
