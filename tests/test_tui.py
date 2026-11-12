@@ -2709,7 +2709,7 @@ def test_scoring_stopped_by_a_key_limit_says_the_cause(home: Path, resume: Path)
 
 
 class Billing:
-    """What the billing page of OrcaRouter says to each ask, in turn (the last one stays): a number of dollars, an error to
+    """What the balance page of OrcaRouter says to each ask, in turn (the last one stays): a number of dollars, an error to
     raise, or any other answer as it is."""
 
     def __init__(self, *answers: Any) -> None:
@@ -2717,13 +2717,13 @@ class Billing:
         self.asked = 0
 
     async def get(self, path: str, cast_to: type) -> Any:
-        assert path == "/dashboard/billing/subscription"
+        assert path == "/tools/balance"
         self.asked += 1
         answer = self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]
         if isinstance(answer, Exception):
             raise answer
         if isinstance(answer, float | int) and not isinstance(answer, bool):
-            return {"object": "billing_subscription", "has_payment_method": False, "soft_limit_usd": answer, "hard_limit_usd": answer, "system_hard_limit_usd": 100.0, "access_until": 0}
+            return {"success": True, "data": {"wallet_usd": answer, "spendable_usd": answer}}
         return answer
 
 
@@ -2800,7 +2800,10 @@ def test_escape_on_the_credit_question_goes_on_with_the_resume_without_credit(ho
     "answer",
     [
         2.5, 1e-9, APIConnectionError(request=REQUEST), status_error(InternalServerError, 503), status_error(AuthenticationError, 401),
-        {}, {"hard_limit_usd": None}, {"hard_limit_usd": "0"}, {"hard_limit_usd": True}, {"hard_limit_usd": False}, ["x"], "text",
+        {}, {"data": None}, {"data": {}}, {"data": {"spendable_usd": None}}, {"data": {"spendable_usd": "0"}},
+        {"data": {"spendable_usd": True}}, {"data": {"spendable_usd": False}}, {"spendable_usd": 0}, ["x"], "text",
+        # What the OpenAI-shaped billing page said for a new account with no credit: it is not the balance page's answer.
+        {"object": "billing_subscription", "hard_limit_usd": 0},
     ],
 )
 def test_the_credit_question_is_never_asked_when_the_service_says_there_is_some_or_says_nothing_usable(
@@ -2849,17 +2852,17 @@ def test_a_key_changed_in_the_settings_is_asked_about_its_credit_too(home: Path,
     assert steps_of(tracked)[-2:] == ["no_credit_asked", "no_credit_skipped"]
 
 
-def test_the_billing_page_is_asked_through_the_key_client_and_only_a_number_up_to_zero_says_no_credit(home: Path) -> None:
+def test_the_balance_page_is_asked_through_the_key_client_and_only_a_number_up_to_zero_says_no_credit(home: Path) -> None:
     session = Session(home)
     paths: list[str] = []
 
     async def get(path: str, cast_to: type) -> Any:
         paths.append(path)
-        return {"hard_limit_usd": 0}
+        return {"success": True, "data": {"wallet_usd": 0, "spendable_usd": 0}}
 
     session.key_client = lambda key: SimpleNamespace(get=get)  # type: ignore[method-assign,assignment]
     assert asyncio.run(session.has_no_credit("sk-orca-x")) is True
-    assert paths == ["/dashboard/billing/subscription"]
+    assert paths == ["/tools/balance"]
     session.close()
 
 
