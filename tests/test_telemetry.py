@@ -120,6 +120,9 @@ def test_the_country_is_empty_and_never_an_error_when_the_computer_cannot_tell(m
 def test_windows_is_asked_for_its_country_only_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     asked: list[str] = []
     monkeypatch.setattr(telemetry, "windows_country", lambda: asked.append("windows") or "IE")
+    # A Mac runner sets LC_ALL or LC_CTYPE, which come before LANG.
+    monkeypatch.delenv("LC_ALL", raising=False)
+    monkeypatch.delenv("LC_CTYPE", raising=False)
     monkeypatch.setenv("LANG", "it_IT.UTF-8")
     monkeypatch.setattr(telemetry.sys, "platform", "linux")
     assert telemetry.computer_country() == "IT" and asked == []
