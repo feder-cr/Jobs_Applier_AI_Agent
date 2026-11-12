@@ -19,7 +19,7 @@ from aihawk.apply import sign_in as sign_in_browser
 from aihawk.config import DEFAULT_BASE_URL, KEY_ENV, Config, ConfigError, load_config
 from aihawk.database import load_manifest, search
 from aihawk.library import Library
-from aihawk.llm import SPEND, Mark, make_client, no_credit, not_answering, refused
+from aihawk.llm import ACCOUNT_CAUSES, SPEND, Mark, cause, make_client, no_credit, not_answering, refused
 from aihawk.plugins import Plugin, always_plugins, load_plugins, plugin_for
 from aihawk.profile import CV_NAME_FILE, ensure_account_password, import_answers_file, install_resume, save_setting
 from aihawk.scoring import NOT_JUDGED, NotAnswering, fits, question, score
@@ -132,6 +132,21 @@ class Session:
         except Exception as error:  # noqa: BLE001  Only a refusal is an answer; anything else leaves the key to be tried for real.
             return not refused(error)
         return True
+
+    async def credit_left(self, key: str) -> float | None:
+        """The dollars this key can still spend at OrcaRouter, as the billing page of its API says; None when that cannot be told:
+        no connection, an answer of another shape, a refusal. Only a number says anything, and the check never blocks."""
+        try:
+            answer = await self.key_client(key).get("/dashboard/billing/subscription", cast_to=dict)
+        except Exception:  # noqa: BLE001  Not knowing is not a reason to stop anyone; the first call tells.
+            return None
+        left = answer.get("hard_limit_usd") if isinstance(answer, dict) else None
+        return float(left) if isinstance(left, int | float) and not isinstance(left, bool) else None
+
+    async def has_no_credit(self, key: str) -> bool:
+        """Whether the service says this key's account has none left."""
+        left = await self.credit_left(key)
+        return left is not None and left <= 0
 
     def needs_resume(self) -> bool:
         return not self.config.cv.is_file() or not self.config.filters.include
@@ -248,8 +263,9 @@ class Session:
             outcome = await self.apply(item, log, note)
             results.append((item, outcome))
             done(item, outcome)
-            if outcome.reason == "no_credit":
-                # Every application after this one would fail the same way, after the browser opened for nothing.
+            if outcome.reason in ACCOUNT_CAUSES:
+                # The account or the key stopped it: every application after this one would fail the same way, after the
+                # browser opened for nothing.
                 break
         return results
 
@@ -279,7 +295,7 @@ class Session:
             # One job's failure is reported and recorded; the next job still runs.
             if refused(error):
                 raise
-            outcome = Outcome("failed", errors.explained(error), reason="no_credit" if no_credit(error) else type(error).__name__)
+            outcome = Outcome("failed", errors.explained(error), reason="no_credit" if no_credit(error) else cause(error) or type(error).__name__)
         finally:
             NOTE.reset(told)
         used = await self._record(item, host, outcome, mark)

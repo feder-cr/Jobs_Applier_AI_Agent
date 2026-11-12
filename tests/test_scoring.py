@@ -202,11 +202,11 @@ def test_what_is_about_the_account_and_not_about_a_posting_is_raised_and_no_post
     assert raised.value.status_code == status
 
 
-def test_a_credit_that_is_finished_is_told_in_plain_words_and_what_to_do() -> None:
+def test_an_account_with_no_credit_is_told_in_plain_words_and_what_to_do() -> None:
     import httpx as http
     from openai import APIStatusError
 
     from aihawk.llm import explain
 
     error = APIStatusError("Error code: 402", response=http.Response(402, request=http.Request("POST", "https://x.example")), body=None)
-    assert explain(error) == "Your OrcaRouter credit is finished. Add credit at orcarouter.ai, then press → to go on."
+    assert explain(error) == "Your OrcaRouter account has no credit yet. Add a few dollars at orcarouter.ai, then press → to go on."

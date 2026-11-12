@@ -368,14 +368,16 @@ class SignIn(ModalScreen[bool]):
 
 
 class Confirm(ModalScreen[bool]):
-    """A question with no answer to type: Enter says yes, Escape says no."""
+    """A question with no answer to type: Enter says yes, Escape says no. With a link, Ctrl+O opens it."""
 
-    BINDINGS: ClassVar = [Binding("enter", "answer(True)", "Yes"), Binding("escape", "answer(False)", "No")]
+    BINDINGS: ClassVar = [Binding("enter", "answer(True)", "Yes"), Binding("escape", "answer(False)", "No"), Binding("ctrl+o", "open_link", show=False)]
 
-    def __init__(self, question: str, hint: str) -> None:
+    def __init__(self, question: str, hint: str, link: str = "") -> None:
         super().__init__()
         self.question = question
         self.hint = hint
+        # An address Ctrl+O opens in the person's browser, for a question whose answer is got there.
+        self.link = link
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
@@ -384,6 +386,10 @@ class Confirm(ModalScreen[bool]):
 
     def action_answer(self, yes: bool) -> None:
         self.dismiss(yes)
+
+    def action_open_link(self) -> None:
+        if self.link:
+            webbrowser.open(self.link)
 
 
 class StopSending(Confirm):
