@@ -344,6 +344,29 @@ def test_escape_on_the_batch_sends_none_and_the_selection_stays(home: Path, resu
     assert calls == []
 
 
+def test_on_a_mac_the_start_says_applying_does_not_work_and_a_sends_nothing(
+    home: Path, resume: Path, restored_apply: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import aihawk.apply as apply_module
+
+    monkeypatch.setattr(apply_module, "PLATFORM", "darwin")
+    calls: list[Any] = []
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        fake_apply(app, [Outcome("submitted", "sent")], calls)
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
+            assert "On a Mac AIHawk finds and scores jobs" in " ".join(app.query_one(Said).said)
+            assert companies(app)[0] == "Bestco", "the jobs are found and scored all the same"
+            await pilot.press("a")
+            await pilot.pause(0.2)
+            assert not isinstance(app.screen, SendBatch)
+
+    asyncio.run(run())
+    assert calls == []
+
+
 def test_a_with_nothing_selected_asks_about_the_current_row_alone(home: Path, resume: Path, restored_apply: Any) -> None:
     calls: list[Any] = []
 
@@ -1753,7 +1776,11 @@ def test_a_job_with_no_description_says_it_can_still_be_applied_to_and_the_detai
         job = Job("x", "Co", "Engineer", "Milan", "https://a.example/", "https://a.example/", "")
         async with app.run_test(size=(80, 24)) as pilot:
             await app.push_screen(JobDetails(Stored(job, "scored", 4.0, None)))
-            await pilot.pause(0.2)
+            # The footer is drawn a moment after the screen opens, later on a slow machine: waited for, not timed.
+            for _ in range(60):
+                await pilot.pause(0.05)
+                if "o Open the posting" in footer_text(app):
+                    break
             assert str(app.screen.query_one("#text Static").render()) == "This posting has no description. You can still apply: the form is filled from your resume."
             assert "o Open the posting" in footer_text(app)
 

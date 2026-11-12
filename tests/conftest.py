@@ -36,6 +36,8 @@ def a_computer_the_browser_can_open_on(monkeypatch: pytest.MonkeyPatch) -> None:
     from aihawk import apply
 
     monkeypatch.setattr(apply, "PLATFORM", "a test")
+    # The processor too: a test that names Linux means the kind the browser is built for, whatever machine runs it.
+    monkeypatch.setattr(apply, "MACHINE", "x86_64")
 
 
 @pytest.fixture(autouse=True)

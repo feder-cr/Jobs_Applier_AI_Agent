@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- On a Mac, or a Linux that is not x86-64, the browser AIHawk applies with has no version: AIHawk says so when it opens and when `a` is pressed, instead of opening a browser that cannot start. Finding and scoring jobs works there.
 - A new OrcaRouter account has no credit, and the first thing AIHawk asks of it, reading the resume, was refused with "Something failed: Error code: 402". The key is now checked for credit when it is entered, and AIHawk says so before the resume, with a key that opens the site and one that checks again. When a request is refused for the account or the key, the screen says which it is (no credit, the key's own limit, its spending limit, a model it may not use) and what to press; the resume is remembered, and a key is never forgotten for it.
 - The jobs show up as they come: the first chunk is searched and read as soon as it is here, and the list grows after each chunk, with the rows you are reading held in place and the jobs you selected kept. The wait line counts megabytes and says about how long is left.
 - The key is tried when you paste it, and a key OrcaRouter does not accept is asked for again; Ctrl+C copies selected text instead of leaving, and Ctrl+O at the key question opens the address. Finished credit stops the scoring and the sending with a plain line, and no job is set aside for it.
