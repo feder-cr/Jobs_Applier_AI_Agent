@@ -2598,6 +2598,10 @@ def test_the_resume_is_remembered_across_every_failure_of_the_account_or_the_ser
         app = AIHawk(home, resume)
         app.session._client = ResumeRefused(error)  # type: ignore[assignment]
         async with app.run_test(size=(80, 24)) as pilot:
+            if isinstance(error, RateLimitError):
+                # Told in a question of its own, whose Esc leaves the line checked below.
+                await wait_for_screen(pilot, Confirm)
+                await pilot.press("escape")
             await settle(pilot, app)
             await pilot.pause(0.2)
             assert app.remembered == resume
@@ -2873,3 +2877,117 @@ def test_every_cause_about_the_account_has_its_words_in_the_list_of_applications
     # A batch stops at the first of these: the next application would fail the same way.
     assert llm.ACCOUNT_CAUSES <= set(WHY_NOT_SENT)
     assert {"no_credit", "key_limit", "spend_limit", "model_not_allowed"} <= llm.ACCOUNT_CAUSES
+
+
+FREE_PLAN_WORDS = "OrcaRouter is limiting this account: its free plan is not enough for AIHawk. Add a few dollars at orcarouter.ai, then try again."
+
+
+def test_a_resume_refused_as_too_many_requests_says_the_free_plan_is_not_enough_and_enter_reads_it_again(
+    home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch, tracked: list[dict[str, Any]]
+) -> None:
+    opened: list[str] = []
+    import aihawk.screens as screens_module
+
+    monkeypatch.setattr(screens_module.webbrowser, "open", lambda url: opened.append(url) or True)
+
+    async def run() -> None:
+        app = AIHawk(home, resume)
+        model = ResumeRefused(status_error(RateLimitError, 429))
+        app.session._client = model  # type: ignore[assignment]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await wait_for_screen(pilot, Confirm)
+            assert app.screen.question == FREE_PLAN_WORDS
+            assert app.screen.hint == "Enter tries again · Ctrl+O opens orcarouter.ai · Esc later"
+            assert companies(app) == []
+            await pilot.press("ctrl+o")
+            # The credit is added: the resume is read again from the remembered file, and the jobs come.
+            model.error = None
+            await pilot.press("enter")
+            await settle(pilot, app)
+            assert not isinstance(app.screen, Confirm)
+            assert companies(app) == ["Bestco", "Lowly", "Noplugin"]
+            assert app.remembered is None
+
+    asyncio.run(run())
+    assert opened == ["https://www.orcarouter.ai/ref/ref_accd17afb78fc95ac4d7"]
+    steps = steps_of(tracked)
+    assert steps[steps.index("free_plan_told") :][:3] == ["free_plan_told", "free_plan_retry", "resume_read"]
+    assert "free_plan_later" not in steps
+
+
+def test_a_resume_still_refused_as_too_many_requests_is_told_again_on_each_try(home: Path, resume: Path, tracked: list[dict[str, Any]]) -> None:
+    async def run() -> None:
+        app = AIHawk(home, resume)
+        app.session._client = ResumeRefused(status_error(RateLimitError, 429))  # type: ignore[assignment]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await wait_for_screen(pilot, Confirm)
+            await pilot.press("enter")
+            await pilot.pause(0.3)
+            await wait_for_screen(pilot, Confirm)
+            assert app.screen.question == FREE_PLAN_WORDS
+            await pilot.press("escape")
+            await settle(pilot, app)
+
+    asyncio.run(run())
+    assert [step for step in steps_of(tracked) if step.startswith("free_plan")] == ["free_plan_told", "free_plan_retry", "free_plan_told", "free_plan_later"]
+
+
+def test_escape_on_the_free_plan_question_leaves_the_line_that_says_r_reads_the_resume_again(
+    home: Path, resume: Path, tracked: list[dict[str, Any]]
+) -> None:
+    async def run() -> None:
+        app = AIHawk(home, resume)
+        model = ResumeRefused(status_error(RateLimitError, 429))
+        app.session._client = model  # type: ignore[assignment]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await wait_for_screen(pilot, Confirm)
+            await pilot.press("escape")
+            await settle(pilot, app)
+            assert not isinstance(app.screen, Confirm)
+            assert last_line(app) == "The AI service is busy. Wait a minute. Press r: your resume is remembered."
+            assert companies(app) == [] and app.remembered == resume
+            model.error = None
+            await pilot.press("r")
+            await wait_for_screen(pilot, TextPrompt)
+            assert app.screen.query_one(Input).value == str(resume)
+            await pilot.press("escape")
+
+    asyncio.run(run())
+    steps = steps_of(tracked)
+    assert "free_plan_told" in steps and "free_plan_later" in steps and "free_plan_retry" not in steps
+
+
+def test_too_many_requests_while_scoring_does_not_say_the_free_plan_is_not_enough(
+    home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch, tracked: list[dict[str, Any]]
+) -> None:
+    monkeypatch.setattr(tui_module, "RETRY_PAUSES", (0.01, 0.01, 0.01, 0.01))
+
+    class Busy(ScriptedModelForApp):
+        async def post(self, path: str, *, body: dict[str, Any], cast_to: type) -> dict[str, Any]:
+            raise status_error(RateLimitError, 429)
+
+    async def run() -> None:
+        app = AIHawk(home, resume)
+        app.session._client = Busy()  # type: ignore[assignment]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            await pilot.pause(0.2)
+            assert not isinstance(app.screen, Confirm)
+
+    asyncio.run(run())
+    assert not any(step.startswith("free_plan") for step in steps_of(tracked))
+    assert "resume_read" in steps_of(tracked)
+
+
+def test_no_credit_at_the_resume_is_not_the_free_plan_question(home: Path, resume: Path, tracked: list[dict[str, Any]]) -> None:
+    async def run() -> None:
+        app = AIHawk(home, resume)
+        app.session._client = ResumeRefused(refusal(402, "no quota", "insufficient_user_quota"))  # type: ignore[assignment]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            await pilot.pause(0.2)
+            assert not isinstance(app.screen, Confirm)
+            assert last_line(app) == NO_CREDIT_WORDS.format("press r: your resume is remembered.")
+
+    asyncio.run(run())
+    assert not any(step.startswith("free_plan") for step in steps_of(tracked))

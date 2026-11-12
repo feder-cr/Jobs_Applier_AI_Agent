@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reading the resume refused by OrcaRouter as too many requests now says, in a question with the link to add credit, that its free plan is not enough for AIHawk: Enter reads the resume again, Esc leaves the line that says r does it.
+- AIHawk tells its makers the country the computer is set to, two letters read from its own settings, and no longer lets the service work out a city from the address.
 - The check for a key's credit asked a page that tells 100000000 dollars for every key with no limit of its own, which is how OrcaRouter makes them, so an account with nothing on it was never told before the resume. It reads OrcaRouter's balance page now, which says what the key can really spend.
 - The mail is no longer asked before the first job shows: the question comes with the first application that needs a code from a site, then the mailbox opens for the sign-in and that application is sent again. Left for later, it is not asked again until AIHawk is opened again, and Settings, Your mail, still sets it.
 - A form the page's own validation refuses (a required box left empty) is no longer "not confirmed": it says which field, and the AI gets one more turn to fix it. A Lever form that sends the browser to the company's own website, with the application's id in the address, is read as received.

@@ -10,6 +10,7 @@ from collections import deque
 from pathlib import Path
 from typing import ClassVar
 
+from openai import RateLimitError
 from rich.text import Text
 from textual import events, on, work
 from textual.app import App, ComposeResult
@@ -65,6 +66,13 @@ NO_CREDIT_QUESTION = (
 )
 NO_CREDIT_AGAIN = "Still no credit on that account. AIHawk needs a few dollars there to read your resume and the jobs: add them at orcarouter.ai."
 NO_CREDIT_HINT = "Enter checks again · Ctrl+O opens orcarouter.ai · Esc goes on without"
+# Reading the resume refused as too many requests is told as OrcaRouter's free plan being too little, the owner's decision of
+# 2026-11-12: the person is told what to do about it, and the resume is read again on Enter. It can also come to an account
+# with credit when the service is busy; the question then still says where credit is added.
+FREE_PLAN_QUESTION = (
+    "OrcaRouter is limiting this account: its free plan is not enough for AIHawk. Add a few dollars at orcarouter.ai, then try again."
+)
+FREE_PLAN_HINT = "Enter tries again · Ctrl+O opens orcarouter.ai · Esc later"
 # What to press after a failure at the resume, whose file is remembered.
 RESUME_REMEMBERED = "press r: your resume is remembered."
 MAIL_LATER = "Mail left for later: e, then Your mail."
@@ -321,6 +329,8 @@ class AIHawk(App[None]):
     async def start(self) -> None:
         # A new search is a new list: its pages are made again.
         self.pages, self.page, self.wanted, self.stuck = [], 0, None, ""
+        # An error told by an earlier start is not this one's.
+        self.reported = None
         self.refresh_jobs()
         session = self.session
         try:
@@ -355,12 +365,26 @@ class AIHawk(App[None]):
             self.say(f"{error}{self.resume_next()}")
         except Exception as error:  # noqa: BLE001  The screen stays up and says what went wrong, instead of a traceback over it.
             self.start_failed(error)
-            if self.remembered and account_problem(error):
+            if isinstance(error, RateLimitError) and error is self.reported and self.remembered and await self.free_plan_told():
+                # The same file, read again as r would after the person gave it: the start is made anew.
+                self.resume = self.remembered
+                self.start()
+            elif self.remembered and account_problem(error):
                 self.failed(error, step=RESUME_REMEMBERED)
             else:
                 self.failed(error, self.resume_next())
         finally:
             self.show_heading()
+
+    async def free_plan_told(self) -> bool:
+        """Said when reading the resume was refused as too many requests, which the retries of the request did not clear: that is
+        what an account on OrcaRouter's free plan gets. It stops, as before, and is not tried again by itself; Enter reads the
+        resume again once the person has added credit, Esc leaves the line that says r does it."""
+        telemetry = self.session.telemetry
+        telemetry.step("free_plan_told")
+        again = await self.push_screen_wait(Confirm(FREE_PLAN_QUESTION, FREE_PLAN_HINT, link=KEY_URL))
+        telemetry.step("free_plan_retry" if again else "free_plan_later")
+        return again
 
     def resume_next(self) -> str:
         """What to press when a start stopped for want of a resume: the file is given again with r, and when it is remembered
