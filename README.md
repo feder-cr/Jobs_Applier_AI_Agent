@@ -46,7 +46,7 @@ Windows, in PowerShell:
 irm https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/run.ps1 | iex
 ```
 
-Linux:
+Linux, and macOS (on a Mac AIHawk finds and scores the jobs, but cannot send applications yet: its browser has no Mac version):
 
 ```bash
 curl -LsSf https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/run.sh | sh

@@ -14,7 +14,7 @@ from pathlib import Path
 from openai import AsyncOpenAI
 
 from aihawk import errors
-from aihawk.apply import MAILBOXES, NOTE, Outcome, apply_to_job, signed_in, site_of
+from aihawk.apply import MAILBOXES, NOTE, Outcome, apply_to_job, no_browser_here, signed_in, site_of
 from aihawk.apply import sign_in as sign_in_browser
 from aihawk.config import DEFAULT_BASE_URL, KEY_ENV, Config, ConfigError, load_config
 from aihawk.database import load_manifest, search
@@ -75,7 +75,7 @@ class Session:
         """Starts bringing the browser's engine here, about 270 MB, silently and once, so that the first application does not wait
         for it. It is the engine's own `fetch`, in a process of its own that ends with AIHawk; a failure is no one's concern:
         the application that needs the engine asks for it again."""
-        if self.engine is not None or self.engine_here():
+        if self.engine is not None or no_browser_here() or self.engine_here():
             return
         flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         try:

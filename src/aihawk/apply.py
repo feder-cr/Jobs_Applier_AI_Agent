@@ -12,6 +12,7 @@ import ctypes.util
 import hashlib
 import json
 import os
+import platform
 import re
 import sys
 import time
@@ -81,11 +82,13 @@ WHY_NOT_SENT = {
     "budget": "your OrcaRouter budget for this month is used up",
     "model_not_allowed": "this key is not allowed to use the models AIHawk needs",
     "refused_other": "OrcaRouter refused this key for the request",
+    "no_browser_here": "the browser has no version for this computer",
     "no_display": "the browser needs a desktop",
     "browser_libraries": "the browser needs a few system packages",
 }
 
 PLATFORM = sys.platform
+MACHINE = platform.machine()
 # What the browser needs on Linux, which the person is told when it is missing: the first line is for Ubuntu 24.04, whose
 # libraries have a t64 in their names, and the second for Debian and the Ubuntus before it. Both checked with apt on 2026-11-12.
 APT_LINE = (
@@ -94,9 +97,23 @@ APT_LINE = (
 )
 
 
+def no_browser_here() -> str:
+    """What to tell a person whose computer the browser has no version for; empty when it has one. The engine is built for
+    Windows and for Linux on x86-64: on a Mac, or a Linux of another kind, AIHawk finds and scores the jobs and cannot
+    send an application."""
+    if PLATFORM == "darwin":
+        return "On a Mac AIHawk finds and scores jobs, but cannot send applications yet: its browser has no Mac version."
+    if PLATFORM.startswith("linux") and MACHINE.lower() not in ("x86_64", "amd64"):
+        return "On this computer AIHawk finds and scores jobs, but cannot send applications yet: its browser has no version for it."
+    return ""
+
+
 def missing_for_the_browser() -> tuple[str, str] | None:
-    """On Linux the browser opens a window: with no desktop, or without the libraries a window needs, it cannot, and trying
-    would only wait for a download and then fail. The reason, and what to tell the person; None when it can open."""
+    """Why the browser cannot open here, and what to tell the person; None when it can. It has no version for some
+    computers. On Linux it opens a window: with no desktop, or without the libraries a window needs, it cannot, and trying
+    would only wait for a download and then fail."""
+    if words := no_browser_here():
+        return "no_browser_here", words
     if not PLATFORM.startswith("linux"):
         return None
     if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
