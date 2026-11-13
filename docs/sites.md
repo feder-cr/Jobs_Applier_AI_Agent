@@ -1,6 +1,6 @@
 # Sites: what to expect
 
-What AIHawk can do on each site, from the real forms it has been run on. Postings are counted by host in the job library: all the postings of the last 60 days in the build `jobs-20261111-155706` of 2026-11-11, 6,207,205 of them, each counted for the vendor its address names, and rounded to the nearest thousand.
+What AIHawk can do on each site, from the real forms it has been run on. Postings are counted by host in the job library: all the postings of the last 60 days, as the library held them then, in the build `jobs-20261111-155706` of 2026-11-11, 6,207,205 of them, each counted for the vendor its address names, and rounded to the nearest thousand.
 
 | Site | Postings in the library | Status | What stops it |
 |---|---|---|---|

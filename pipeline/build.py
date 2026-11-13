@@ -55,9 +55,11 @@ CHUNK_LEVEL = 12
 CHUNK_THREADS = 4
 # The part number of the first `titles_N` chunk: the `jobs_N` ones count from 0.
 TITLES_PART = 1_000_000
-# A posting older than this is not published: a search is for the last 60 days by default, and the owner chose on
-# 2026-11-09 to keep no more. Measured then: 763,000 postings with a description, about 0.42 GB of the database's 2.62.
-MAX_AGE_DAYS = 60
+# A posting older than this is not published. The owner chose 60 days on 2026-11-09 and 30 on 2026-11-13, when a measure of
+# 360 postings found no more of them closed at 30 to 60 days than at 3 to 15, so age is no reason to keep them: they are
+# only size. By the chunk list of the build of 2026-11-09, postings older than 30 days were 4.36 million of its 8.6 million
+# rows and 1.06 of its 2.62 GB (the 36 chunks that name no dates not counted).
+MAX_AGE_DAYS = 30
 # A posting its source does not date is dated by the database: the day a build first saw it, kept from build to build,
 # so that it ages and goes like any other. The owner's decision of 2026-11-09: 1.48 million postings with a description,
 # half the database, had no date, and a search kept them whatever its days. The first build to date them had no day
@@ -65,7 +67,7 @@ MAX_AGE_DAYS = 60
 # one: a site's postings, alike in their texts, stay together in a chunk and compress together. Dated one by one, they
 # took the chunks with text from 1.91 GB to 2.46 GB (measured on 2026-11-09). A second run of that build gives the
 # same dates.
-BACKDATED = (15, 60)
+BACKDATED = (15, 30)
 # The manifest's mark that its builds date every posting, by the rule above: a manifest without it, or with another,
 # has its undated postings backdated again.
 FIRST_SEEN = 2
@@ -834,7 +836,7 @@ def write_chunk(folder: Path, out: Path) -> None:
     table = pq.read_table([path.as_posix() for path in sorted(folder.glob("*.parquet"))], columns=list(CHUNK_COLUMNS))
     # By address within the chunk: a site's postings side by side compress together, 4 to 8% smaller than by date.
     table = table.sort_by([("url", "ascending")])
-    # Statistics on the date alone: a search for the last 60 days skips the groups of older postings. Those of the other
+    # Statistics on the date alone: a search for the last days skips the groups of older postings. Those of the other
     # columns made the footer ten times larger.
     pq.write_table(table, out / name, row_group_size=CHUNK_GROUP, compression="zstd", compression_level=CHUNK_LEVEL, write_statistics=["posted_at"])
     shutil.rmtree(folder)

@@ -272,7 +272,7 @@ def test_a_chunk_holds_what_aihawk_reads_and_a_short_text_goes_to_the_chunks_wit
 def test_chunks_go_newest_first_and_a_posting_too_old_is_not_published(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(build, "CHUNK_ROWS", 3)
     monkeypatch.setattr(build, "CHUNK_GROUP", 2)
-    rows = [(f"https://a.example/{age}", f"Job {age}", text("Work"), days_ago(age)) for age in (1, 2, 5, 9, 40, 55)]
+    rows = [(f"https://a.example/{age}", f"Job {age}", text("Work"), days_ago(age)) for age in (1, 2, 5, 9, 20, 25)]
     future = ("https://a.example/future", "Future", text("Work"), days_ago(-30))
     write_dated(tmp_path, "s", [*rows, future, ("https://a.example/old", "Old", text("Work"), days_ago(build.MAX_AGE_DAYS + 5))])
     counts, _ = merged(tmp_path)
@@ -284,7 +284,7 @@ def test_chunks_go_newest_first_and_a_posting_too_old_is_not_published(tmp_path:
     assert [path.name for path in chunks] == ["jobs_0.parquet", "jobs_1.parquet", "jobs_2.parquet"]
     titles = [[row[0] for row in connection.execute("SELECT title FROM read_parquet(?)", [path.as_posix()]).fetchall()] for path in chunks]
     # The chunks go by date; within one, by address.
-    assert [set(chunk) for chunk in titles] == [{"Future", "Job 1", "Job 2"}, {"Job 5", "Job 9", "Job 40"}, {"Job 55"}]
+    assert [set(chunk) for chunk in titles] == [{"Future", "Job 1", "Job 2"}, {"Job 5", "Job 9", "Job 20"}, {"Job 25"}]
     first = build.chunk_entry(connection, chunks[0])
     assert first["rows"] == 3 and not first["titles_only"] and first["newest"] > first["oldest"]
     groups = connection.execute("SELECT max(row_group_num_rows) FROM parquet_metadata(?)", [chunks[0].as_posix()]).fetchone()[0]
