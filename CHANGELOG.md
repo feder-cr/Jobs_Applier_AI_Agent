@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The job library keeps the last 30 days instead of 60: nothing older is published, so the first download is about half the size (the build of 2026-11-09 held 4.36 million postings older than 30 days, of 8.6 million). A search that asks for more than 30 days finds the same as one for 30. Closed postings do not depend on age (measured on 360), so age is no reason to keep them.
 - Reading the resume refused by OrcaRouter as too many requests now says, in a question with the link to add credit, that its free plan is not enough for AIHawk: Enter reads the resume again, Esc leaves the line that says r does it.
 - AIHawk tells its makers the country the computer is set to, two letters read from its own settings, and no longer lets the service work out a city from the address.
 - An application whose browser could not open or start no longer ends as "RuntimeError": the list says "the browser did not open" or "the browser took too long to start", and the server's own words stay in `errors.log`.
