@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- An application to a posting that is clearly closed ends in seconds, without the browser: AIHawk asks the posting's own site first, with one plain request, for Lever, Ashby, Greenhouse, Workable, BambooHR, Paylocity and Workday, and the list says "the posting is closed". The other sites, and any check that does not answer clearly, are tried as before.
 - The job library keeps the last 30 days instead of 60: nothing older is published, so the first download is about half the size (the build of 2026-11-09 held 4.36 million postings older than 30 days, of 8.6 million). A search that asks for more than 30 days finds the same as one for 30. Closed postings do not depend on age (measured on 360), so age is no reason to keep them.
 - Reading the resume refused by OrcaRouter as too many requests now says, in a question with the link to add credit, that its free plan is not enough for AIHawk: Enter reads the resume again, Esc leaves the line that says r does it.
 - AIHawk tells its makers the country the computer is set to, two letters read from its own settings, and no longer lets the service work out a city from the address.
