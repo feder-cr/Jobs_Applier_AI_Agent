@@ -19,12 +19,13 @@ from aihawk.apply import sign_in as sign_in_browser
 from aihawk.config import DEFAULT_BASE_URL, KEY_ENV, Config, ConfigError, load_config
 from aihawk.database import load_manifest, search
 from aihawk.library import Library
+from aihawk.liveness import posting_is_closed
 from aihawk.llm import ACCOUNT_CAUSES, SPEND, Mark, cause, make_client, no_credit, not_answering, refused
 from aihawk.plugins import Plugin, always_plugins, load_plugins, plugin_for
 from aihawk.profile import CV_NAME_FILE, ensure_account_password, import_answers_file, install_resume, save_setting
 from aihawk.scoring import NOT_JUDGED, NotAnswering, fits, question, score
 from aihawk.store import SUBMITTED, Store, Stored, write_applied
-from aihawk.telemetry import Telemetry
+from aihawk.telemetry import Telemetry, vendor_of
 
 # Jev reads the next WIDE postings the search ranked best and scores each of them: about what one of its requests holds,
 # 215 to 230 postings with their descriptions on 2026-11-08. What a round waits on is not Jev, three seconds for 512, but
@@ -34,6 +35,10 @@ WIDE = 200
 
 Log = Callable[[str], None]
 
+
+# What a posting that is clearly closed ends with, said before any browser is opened for it. Its reason is the one a browser that
+# finds the page closed gives, so a closed posting has one name however it was found out.
+CLOSED_WORDS = "This posting is closed: it was not opened."
 
 # OrcaRouter's balance page, under the API's address: {"success": true, "data": {"wallet_usd": …, "spendable_usd": …}}.
 BALANCE_PATH = "/tools/balance"
@@ -300,10 +305,16 @@ class Session:
         host = site_of(job.apply_url)
         account = self.store.account(host)
         guidance = _guidance(plugin, always_plugins(self.plugins))
+        started = time.monotonic()
+        # One plain request first: a posting that has closed ends here in a second, with no browser and no AI call.
+        if await self._is_closed(item):
+            outcome = Outcome("blocked", CLOSED_WORDS, reason="closed")
+            self._keep(item, host, outcome)
+            self.store.set_cost(item.job.id, 0.0)
+            return self._ended(item, host, outcome, {}, started, plugin, log)
         # The gateway's price list, read once, so each call's cost can be counted.
         await SPEND.load_prices(self.client)
         mark = SPEND.mark()
-        started = time.monotonic()
         told = NOTE.set(note)
         # Counted before the wait for the engine, so that the engine is either already coming (waited for) or not started.
         self.browsers += 1
@@ -321,6 +332,24 @@ class Session:
             self.browsers -= 1
             NOTE.reset(told)
         used = await self._record(item, host, outcome, mark)
+        return self._ended(item, host, outcome, used, started, plugin, log)
+
+    async def _is_closed(self, item: Stored) -> bool:
+        """Whether the posting is clearly closed, by the address it was listed at and by the form's when that is on another
+        vendor's site. False for anything else: the check never stops an application."""
+        urls = [item.job.url]
+        if vendor_of(site_of(item.job.apply_url)) != vendor_of(site_of(item.job.url)):
+            urls.append(item.job.apply_url)
+        for url in urls:
+            if await posting_is_closed(url):
+                return True
+        return False
+
+    def _ended(
+        self, item: Stored, host: str, outcome: Outcome, used: dict[str, tuple[int, int]], started: float, plugin: Plugin | None, log: Log
+    ) -> Outcome:
+        """What every application ends with, whether a browser was opened or not: how it went for AIHawk's makers, and the file for
+        the person."""
         # How it went, for AIHawk's makers, with nothing about the person or the job: see telemetry.py. The tokens each
         # model took in and gave out on this application, as the gateway counted them: no price, no currency.
         self.telemetry.application(
@@ -336,15 +365,19 @@ class Session:
 
     async def _record(self, item: Stored, host: str, outcome: Outcome, mark: Mark) -> dict[str, tuple[int, int]]:
         """What came of the application, kept with the job: its account, status, proof and cost. The tokens each model used."""
+        self._keep(item, host, outcome)
+        await SPEND.settle(self.client)
+        cost, used = SPEND.since(mark)
+        self.store.set_cost(item.job.id, cost)
+        return used
+
+    def _keep(self, item: Stored, host: str, outcome: Outcome) -> None:
+        """What came of the application, kept with the job: its account, status and proof."""
         if outcome.made_account and (email := self.store.answers().get("email")):
             # Written whatever the form did: the account exists on that site either way, and the next form there signs in.
             self.store.set_account(host, email)
         self.store.set_status(item.job.id, outcome.status, outcome.summary, outcome.reason)
         self.store.set_proof(item.job.id, outcome.proof)
-        await SPEND.settle(self.client)
-        cost, used = SPEND.since(mark)
-        self.store.set_cost(item.job.id, cost)
-        return used
 
 
 def _why_failed(error: Exception) -> str:

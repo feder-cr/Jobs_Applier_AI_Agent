@@ -41,6 +41,18 @@ def a_computer_the_browser_can_open_on(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def no_posting_check_over_the_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An application first asks the posting's own site whether it has closed: in a test no site is asked, and every posting is
+    open, unless a test says one is closed. liveness's own tests make their requests through a scripted transport."""
+    from aihawk import session
+
+    async def open_posting(url: str, client: Any = None) -> bool:
+        return False
+
+    monkeypatch.setattr(session, "posting_is_closed", open_posting)
+
+
+@pytest.fixture(autouse=True)
 def no_key_check_over_the_network(monkeypatch: pytest.MonkeyPatch) -> None:
     """A key typed in is tried against the service: in a test the service cannot be reached, which never blocks a key; its
     account's credit is read from the balance page, which a test answers with some."""

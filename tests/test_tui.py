@@ -990,6 +990,76 @@ def test_a_site_with_no_plugin_is_tried_like_any_other(home: Path, resume: Path,
     session.close()
 
 
+def closed_posting_session(home: Path, resume: Path, url: str, monkeypatch: pytest.MonkeyPatch, closed: bool) -> tuple[Session, ScriptedModelForApp, list[str], list[str]]:
+    """A session with one posting at `url`, whose check says closed or open; the addresses asked and the forms sent are kept."""
+    session = Session(home)
+    model = ScriptedModelForApp()
+    session._client = model  # type: ignore[assignment]
+    asyncio.run(session.load_resume(resume))
+    session.store.add(Job("one", "Firm", "Python Engineer", "Milan", url, url, "A posting.", 1.0))
+    model.requests.clear()
+    model.posts.clear()
+    asked: list[str] = []
+    opened: list[str] = []
+
+    async def check(address: str, client: Any = None) -> bool:
+        asked.append(address)
+        return closed
+
+    async def fill(_client: Any, _model: str, job: Any, *_rest: Any, **_options: Any) -> Outcome:
+        opened.append(job.apply_url)
+        return Outcome("blocked", "a sign-in")
+
+    monkeypatch.setattr(session_module, "posting_is_closed", check)
+    monkeypatch.setattr(session_module, "apply_to_job", fill)
+    return session, model, asked, opened
+
+
+def test_a_closed_posting_ends_at_once_with_no_browser_and_no_ai_call(
+    home: Path, resume: Path, tracked: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session, model, asked, opened = closed_posting_session(home, resume, "https://jobs.lever.co/acme/1", monkeypatch, closed=True)
+    outcome = asyncio.run(session.apply(session.store.get("one"), lambda _: None))  # type: ignore[arg-type]
+    assert (outcome.status, outcome.reason) == ("blocked", "closed")
+    assert outcome.summary == "This posting is closed: it was not opened."
+    assert asked == ["https://jobs.lever.co/acme/1"]
+    # No browser was opened or counted, and the AI service was not asked for anything, not even its price list.
+    assert opened == [] and session.browsers == 0
+    assert model.requests == [] and model.posts == []
+    # It is kept like any other application: its status, its reason, a cost of nothing, and the file for the person.
+    (sent,) = session.store.sent()
+    assert (sent.status, sent.reason, sent.note, sent.cost) == ("blocked", "closed", outcome.summary, 0.0)
+    assert "https://jobs.lever.co/acme/1" in (home / "applied.csv").read_text(encoding="utf-8-sig")
+    # And told to AIHawk's makers under the name a browser that finds the page closed gives too.
+    (event,) = [event["properties"] for event in tracked if event["event"] == "application"]
+    assert (event["outcome"], event["reason"], event["steps"], event["site"]) == ("blocked", "closed", 0, "lever")
+    assert (event["input_tokens"], event["output_tokens"], event["models"]) == (0, 0, [])
+    session.close()
+
+
+def test_an_open_posting_is_applied_to_as_before(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    session, _model, asked, opened = closed_posting_session(home, resume, "https://jobs.lever.co/acme/1", monkeypatch, closed=False)
+    outcome = asyncio.run(session.apply(session.store.get("one"), lambda _: None))  # type: ignore[arg-type]
+    # The Lever plugin sends the browser to the posting's own form, which is not the address that was checked.
+    assert asked == ["https://jobs.lever.co/acme/1"] and opened == ["https://jobs.lever.co/acme/1/apply"]
+    assert (outcome.status, outcome.reason) == ("blocked", "")
+    session.close()
+
+
+def test_the_form_on_another_vendors_site_is_checked_too(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    session, _model, asked, opened = closed_posting_session(home, resume, "https://board.example/jobs/1", monkeypatch, closed=False)
+    session.store.add(Job("two", "Firm", "Python Engineer", "Milan", "https://board.example/jobs/2", "https://jobs.lever.co/acme/2", "A posting.", 1.0))
+    asyncio.run(session.apply(session.store.get("two"), lambda _: None))  # type: ignore[arg-type]
+    assert asked == ["https://board.example/jobs/2", "https://jobs.lever.co/acme/2"]
+    # The same vendor under two addresses is one posting, asked once.
+    asked.clear()
+    session.store.add(Job("three", "Firm", "Python Engineer", "Milan", "https://jobs.lever.co/acme/3", "https://jobs.lever.co/acme/3/apply", "A posting.", 1.0))
+    asyncio.run(session.apply(session.store.get("three"), lambda _: None))  # type: ignore[arg-type]
+    assert asked == ["https://jobs.lever.co/acme/3"]
+    assert len(opened) == 2
+    session.close()
+
+
 NO_MAIL = Outcome("blocked", "the mailbox is not signed in", reason="mailbox_signed_out")
 
 

@@ -31,7 +31,7 @@ Give it your resume. The job search finds the postings that fit, you pick, and i
 | **2. Searches** | Millions of postings of the last 30 days from 37 public sources, rebuilt every five hours, searched on your computer. |
 | **3. Scores** | Asks of every posting, against your resume, one question: is it in line with you? How sure the answer is makes the score, from 1 to 5. 50 jobs to a page, the next one ready while you read this one. |
 | **4. You pick** | Select the jobs you want and say yes once. |
-| **5. Applies** | A real Firefox opens the company's form, fills every required field, attaches your CV and sends. |
+| **5. Applies** | First a quick check that the posting is still open, on the sites where that can be told without a browser. Then a real Firefox opens the company's form, fills every required field, attaches your CV and sends. |
 | **6. Keeps the answer** | What each page said, with a screenshot, for every application. |
 
 ---
