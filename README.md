@@ -58,12 +58,15 @@ The first start downloads about 250 MB and takes a minute or two; after that it 
 
 Written by the AIHawk team:
 
-- [How to keep track of job applications](https://trackyourjobsearch.com/how-to-track-job-applications/): what to log for each application, so you know what was sent and when to follow up.
+- [How to auto-apply to jobs](https://autoapplytools.com/how-to-auto-apply-to-jobs/): what auto-apply tools do, and what to check before you let one send applications.
+- [How to apply for jobs, step by step](https://jobhuntlab.com/how-to-apply-for-jobs/): from reading a posting to following up.
 - [ATS-friendly resume template](https://atsresumeguide.com/ats-resume-template/): a plain resume layout that application systems read cleanly.
+- [How to write a cover letter](https://coverletterdesk.com/how-to-write-a-cover-letter/): structure, length and what to include.
+- [How to keep track of job applications](https://trackyourjobsearch.com/how-to-track-job-applications/): what to log for each application, so you know what was sent and when to follow up.
 
 ---
 
-[Sites](docs/sites.md) · [Configuration](docs/configuration.md) · [Writing a plugin](docs/plugins.md) · [Wiki](https://github.com/feder-cr/Jobs_Applier_AI_Agent/wiki) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
+[Sites](docs/sites.md) · [Configuration](docs/configuration.md) · [Writing a plugin](docs/plugins.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=feder-cr/Jobs_Applier_AI_Agent&type=Date&theme=dark">
