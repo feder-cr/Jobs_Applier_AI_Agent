@@ -54,6 +54,13 @@ You need a key: [get one from OrcaRouter](https://www.orcarouter.ai/ref/ref_accd
 
 The first start downloads about 250 MB and takes a minute or two; after that it opens in seconds, also without a connection. Nothing else needs installing first (on Linux, `curl`). The first application brings the browser, about 430 MB more, and opens it in a window: on Linux that needs a desktop.
 
+## Guides
+
+Written by the AIHawk team:
+
+- [How to keep track of job applications](https://trackyourjobsearch.com/how-to-track-job-applications/): what to log for each application, so you know what was sent and when to follow up.
+- [ATS-friendly resume template](https://atsresumeguide.com/ats-resume-template/): a plain resume layout that application systems read cleanly.
+
 ---
 
 [Sites](docs/sites.md) · [Configuration](docs/configuration.md) · [Writing a plugin](docs/plugins.md) · [Wiki](https://github.com/feder-cr/Jobs_Applier_AI_Agent/wiki) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
