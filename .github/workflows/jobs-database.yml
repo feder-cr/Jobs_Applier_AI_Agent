@@ -8,6 +8,11 @@ on:
   schedule:
     - cron: "23 */5 * * *"
   workflow_dispatch:
+    inputs:
+      allow_shrink:
+        description: "Publish even if the database is much smaller than the previous build's, on purpose (a shorter window of days)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -33,6 +38,6 @@ jobs:
       - run: python pipeline/build.py --out work
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}  # the private cache of the sources not changed since the last build
-      - run: python pipeline/publish.py --out work/out
+      - run: python pipeline/publish.py --out work/out ${{ inputs.allow_shrink && '--allow-shrink' || '' }}
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
