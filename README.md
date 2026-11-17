@@ -12,7 +12,6 @@
 <a href="https://decodo.com/deals/free-plan-web-data-api?utm_medium=affiliate&utm_source=Federico+Elia&promoter_id=15854270&fpr=7859773"><img alt="Decodo Web Data API, free plan: 10K requests every month (sponsored)" src="https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/assets/decodo-web-data-api-free.png" width="560"></a><br>
 <sub>Sponsored</sub>
 
-
 <sub>FEATURED IN</sub><br>
 <a href="https://www.businessinsider.com/aihawk-applies-jobs-for-you-linkedin-risks-inaccuracies-mistakes-2024-11"><b>Business Insider</b></a> ·
 <a href="https://techcrunch.com/2024/10/10/a-reporter-used-ai-to-apply-to-2843-jobs/"><b>TechCrunch</b></a> ·
