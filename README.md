@@ -9,7 +9,7 @@
 </picture>
 <h3 align="center">An AI job application bot: automated job search, then it auto-applies to the jobs that match your resume, while you sleep.</h3>
 
-<a href="https://decodo.com/deals/free-plan-web-data-api?utm_medium=affiliate&utm_source=Federico+Elia&promoter_id=15854270&fpr=7859773"><img alt="Decodo Web Data API, free plan: 10K requests every month (sponsored)" src="https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/assets/decodo-web-data-api-free.png" width="560"></a><br>
+<a href="https://decodo.com/deals/residential-offer?utm_medium=affiliate&utm_source=Federico+Elia&promoter_id=15854270&fpr=7859773"><img alt="Decodo residential proxies, free trial (sponsored)" src="https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/assets/decodo-residential-proxies-trial.png" width="560"></a><br>
 <sub>Sponsored</sub>
 
 <sub>FEATURED IN</sub><br>
