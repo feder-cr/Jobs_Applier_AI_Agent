@@ -30,6 +30,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from openai import AsyncOpenAI
 
+from aihawk.chatgpt_provider import ChatGPTProvider
 from aihawk.config import DRY_RUN_ENV, KEY_ENV, dry_run
 from aihawk.database import Job
 from aihawk.llm import SPEND, chat, not_answering, structured
@@ -475,14 +476,15 @@ async def _not_one(session: Browser, selector: str) -> str:
     return f"{selector} matches {count} elements on this page, and a click sends only the first. Name the one control that sends the form, then call finish_form again."
 
 
-async def fill_form(session: Browser, tools: list[dict[str, Any]], client: AsyncOpenAI, model: str, brief: str, guidance: str = "", page_rules: str = "") -> Report:
+async def fill_form(session: Browser, tools: list[dict[str, Any]], client: AsyncOpenAI | ChatGPTProvider, model: str, brief: str, guidance: str = "", page_rules: str = "") -> Report:
     """The model works on the open page until it calls finish_form; returns how it ended. There is no limit on steps:
     a form takes the steps it needs, and the watch ends a run that goes nowhere."""
     messages: list[Any] = [{"role": "system", "content": instructions(guidance, page_rules)}, {"role": "user", "content": brief}]
     watch = _Watch()
     while True:
         response, request_id = await patiently(lambda: chat(client, model=model, messages=messages, tools=[*tools, FINISH_TOOL]))
-        SPEND.note(model, getattr(response, "usage", None), request_id)
+        if not isinstance(client, ChatGPTProvider):
+            SPEND.note(model, getattr(response, "usage", None), request_id)
         message = response.choices[0].message
         messages.append(message.model_dump(exclude_none=True))
         if not message.tool_calls:

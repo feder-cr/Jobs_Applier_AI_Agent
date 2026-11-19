@@ -13,6 +13,7 @@ import httpx
 import pytest
 from openai import AsyncOpenAI
 
+from aihawk.chatgpt_provider import ChatGPTAPIError, ChatGPTProvider
 from aihawk.config import DEFAULT_BASE_URL, load_config
 from aihawk.database import Job
 from aihawk.scoring import DESCRIPTION_CHARS, MAX_CHARS, MAX_POSTINGS, NOT_JUDGED, fits, question, score
@@ -38,6 +39,10 @@ def answering(certainty: float, seen: list[httpx.Request]) -> Any:
 
 def run(client: AsyncOpenAI, jobs: list[Job], cv: str = "cv", why: Callable[[str], None] = lambda reason: None) -> list[float | None]:
     return asyncio.run(fits(client, "typesafe/jev-1.14", cv, jobs, ASKED, why))
+
+
+def run_chatgpt(client: ChatGPTProvider, jobs: list[Job], why: Callable[[str], None] = lambda reason: None) -> list[float | None]:
+    return asyncio.run(fits(client, "gpt-visible", "cv", jobs, ASKED, why))
 
 
 def postings(count: int, description: str = "") -> list[Job]:
@@ -210,3 +215,68 @@ def test_an_account_with_no_credit_is_told_in_plain_words_and_what_to_do() -> No
 
     error = APIStatusError("Error code: 402", response=http.Response(402, request=http.Request("POST", "https://x.example")), body=None)
     assert explain(error) == "Your OrcaRouter account has no credit yet. Add a few dollars at orcarouter.ai, then press → to go on."
+
+
+def test_chatgpt_scoring_uses_structured_responses_and_never_calls_systemone(monkeypatch: pytest.MonkeyPatch) -> None:
+    from aihawk import scoring
+
+    client = ChatGPTProvider(lambda: "oauth-token")
+    seen: list[dict[str, Any]] = []
+
+    async def structured(selected: Any, model: str, system: str, user: str, name: str, schema: dict[str, Any]) -> dict[str, float]:
+        assert selected is client
+        seen.append({"model": model, "system": system, "user": user, "name": name, "schema": schema})
+        return {"p00_fit": 0.8}
+
+    async def no_systemone(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("ChatGPT mode must not call OrcaRouter /systemone")
+
+    monkeypatch.setattr(scoring, "structured", structured)
+    monkeypatch.setattr(client, "post", no_systemone, raising=False)
+    assert run_chatgpt(client, [JOB]) == [0.8]
+    request = seen[0]
+    assert request["model"] == "gpt-visible"
+    assert request["schema"]["properties"]["p00_fit"] == {"type": "number", "minimum": 0, "maximum": 1}
+    assert '"candidate_cv": "cv"' in request["user"]
+    assert '"question":' in request["user"]
+
+
+def test_chatgpt_missing_or_out_of_range_scores_fail_only_that_posting(monkeypatch: pytest.MonkeyPatch) -> None:
+    from aihawk import scoring
+
+    client = ChatGPTProvider(lambda: "oauth-token")
+
+    async def structured(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {"p00_fit": 0.7, "p01_fit": 1.4}
+
+    monkeypatch.setattr(scoring, "structured", structured)
+    assert run_chatgpt(client, postings(3)) == [0.7, None, None]
+
+
+def test_chatgpt_oversized_batches_split_without_reordering(monkeypatch: pytest.MonkeyPatch) -> None:
+    from aihawk import scoring
+
+    client = ChatGPTProvider(lambda: "oauth-token")
+
+    async def structured(selected: Any, model: str, system: str, user: str, name: str, schema: dict[str, Any]) -> dict[str, float]:
+        if len(schema["required"]) > 1:
+            raise ChatGPTAPIError("context_length_exceeded", 400)
+        key = schema["required"][0]
+        number = int(re.search(r"Engineer (\d+)", user).group(1))
+        return {key: number / 10}
+
+    monkeypatch.setattr(scoring, "structured", structured)
+    assert run_chatgpt(client, postings(4)) == [0.0, 0.1, 0.2, 0.3]
+
+
+def test_chatgpt_usage_limit_is_raised_instead_of_marking_jobs_as_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    from aihawk import scoring
+
+    client = ChatGPTProvider(lambda: "oauth-token")
+
+    async def structured(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        raise ChatGPTAPIError("subscription_sharing_usage_limit_exceeded", 429)
+
+    monkeypatch.setattr(scoring, "structured", structured)
+    with pytest.raises(ChatGPTAPIError, match="Manage usage"):
+        run_chatgpt(client, [JOB])

@@ -17,6 +17,7 @@ from openai import (
     RateLimitError,
 )
 
+from aihawk.chatgpt_provider import ChatGPTProvider
 from aihawk.config import DEFAULT_BASE_URL, KEY_ENV, KEY_URL, Config, ConfigError
 
 # The SDK's own default is ten minutes a try, and a model that hangs would hold a request that long.
@@ -119,8 +120,10 @@ class Spend:
             self.total += charged - estimate
 
 
-async def chat(client: AsyncOpenAI, **request: Any) -> tuple[Any, str]:
+async def chat(client: AsyncOpenAI | ChatGPTProvider, **request: Any) -> tuple[Any, str]:
     """One chat completion, and the gateway's id of the request when the client gives the headers; an empty id otherwise."""
+    if isinstance(client, ChatGPTProvider):
+        return await client.chat_completion(**request), ""
     raw = getattr(getattr(getattr(client, "chat", None), "completions", None), "with_raw_response", None)
     if raw is None:
         return await client.chat.completions.create(**request), ""
@@ -273,7 +276,11 @@ def explain(error: Exception, step: str = "press → to go on.") -> str:
     return "Something went wrong. Try again in a moment."
 
 
-def make_client(config: Config) -> AsyncOpenAI:
+def make_client(config: Config) -> AsyncOpenAI | ChatGPTProvider:
+    if config.provider == "chatgpt":
+        from aihawk.chatgpt_auth import ChatGPTAuth
+
+        return ChatGPTProvider(ChatGPTAuth(config.workspace).access_token)
     key = config.api_key()
     if not key:
         raise ConfigError(f"no model key: set {KEY_ENV} (create one at {KEY_URL})")
@@ -281,7 +288,7 @@ def make_client(config: Config) -> AsyncOpenAI:
     return AsyncOpenAI(base_url=DEFAULT_BASE_URL, api_key=key, max_retries=5, timeout=TIMEOUT)
 
 
-async def structured(client: AsyncOpenAI, model: str, system: str, user: str, name: str, schema: dict[str, Any]) -> dict[str, Any]:
+async def structured(client: AsyncOpenAI | ChatGPTProvider, model: str, system: str, user: str, name: str, schema: dict[str, Any]) -> dict[str, Any]:
     """One answer that follows `schema`. A reply that is not that JSON raises: nothing is guessed from it."""
     response, request_id = await chat(
         client,
@@ -289,7 +296,8 @@ async def structured(client: AsyncOpenAI, model: str, system: str, user: str, na
         messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
         response_format={"type": "json_schema", "json_schema": {"name": name, "strict": True, "schema": schema}},
     )
-    SPEND.note(model, getattr(response, "usage", None), request_id)
+    if not isinstance(client, ChatGPTProvider):
+        SPEND.note(model, getattr(response, "usage", None), request_id)
     content = response.choices[0].message.content
     if not content:
         raise ValueError(f"the model gave no {name}")

@@ -16,6 +16,7 @@ from openai import AsyncOpenAI
 from aihawk import errors
 from aihawk.apply import MAILBOXES, NOTE, BrowserDidNotOpen, Outcome, apply_to_job, no_browser_here, signed_in, site_of
 from aihawk.apply import sign_in as sign_in_browser
+from aihawk.chatgpt_provider import ChatGPTProvider, ModelInfo
 from aihawk.config import DEFAULT_BASE_URL, KEY_ENV, Config, ConfigError, load_config
 from aihawk.database import load_manifest, search
 from aihawk.library import Library
@@ -52,7 +53,7 @@ class Session:
         self.telemetry = Telemetry(self.config.data_dir)
         import_answers_file(self.config, self.store)
         ensure_account_password(self.store)
-        self._client: AsyncOpenAI | None = None
+        self._client: AsyncOpenAI | ChatGPTProvider | None = None
         # The job database on this computer, which a search reads and the chunks still coming add to.
         self.library = Library(self.config.data_dir / "library")
         self.library.days = self.config.max_age_days
@@ -115,12 +116,16 @@ class Session:
             note("")
 
     @property
-    def client(self) -> AsyncOpenAI:
+    def client(self) -> AsyncOpenAI | ChatGPTProvider:
         if self._client is None:
             self._client = make_client(self.config)
         return self._client
 
     def needs_key(self) -> bool:
+        if self.config.provider == "chatgpt":
+            from aihawk.chatgpt_auth import ChatGPTAuth
+
+            return not ChatGPTAuth(self.workspace).connected
         return not self.config.api_key()
 
     def save_key(self, key: str) -> None:
@@ -171,12 +176,24 @@ class Session:
         return not self.config.cv.is_file() or not self.config.filters.include
 
     async def load_resume(self, path: Path) -> None:
-        await install_resume(self.client, self.config, path, self.store)
+        await install_resume(self.client, replace(self.config, quick_model=self.config.model_for("quick_model")), path, self.store)
         self.config = load_config(self.workspace)
 
+    async def chatgpt_models(self, refresh: bool = False) -> list[ModelInfo]:
+        """List only models visible to the connected ChatGPT account."""
+        if self.config.provider != "chatgpt":
+            raise ConfigError("Select ChatGPT plan use before choosing a ChatGPT model.")
+        client = self.client
+        if not isinstance(client, ChatGPTProvider):
+            raise ConfigError("ChatGPT is not the selected AI provider.")
+        return await client.model_catalog(refresh=refresh)
+
     def change_setting(self, name: str, value: str) -> None:
+        previous_provider = self.config.provider
         save_setting(self.config, name, value)
         self.config = load_config(self.workspace)
+        if self.config.provider != previous_provider:
+            self._client = None
 
     def mail(self) -> tuple[str, str]:
         """The address the person applies with, and its mailbox: gmail, outlook, later (left for later) or empty (never asked)."""
@@ -241,7 +258,7 @@ class Session:
         asked = question(self.config.goals, _places(self.config))
         reasons: list[str] = []
         try:
-            values = await fits(self.client, self.config.decision_model, cv, jobs, asked, reasons.append)
+            values = await fits(self.client, self.config.model_for("decision_model"), cv, jobs, asked, reasons.append)
         except Exception as error:
             # Only the client can fail here; a batch that fails is a failed verdict inside fits. A key it refuses is for the
             # screen; one it cannot reach is asked about again, not set aside.
@@ -258,7 +275,7 @@ class Session:
             if isinstance(value, float):
                 self.store.set_score(job.id, score(value))
         answered = len(jobs) - len(failed) - sum(unjudged)
-        self.telemetry.scored(postings=len(jobs), answered=answered, seconds=round(time.monotonic() - started, 1), scoring_model=self.config.decision_model)
+        self.telemetry.scored(postings=len(jobs), answered=answered, seconds=round(time.monotonic() - started, 1), scoring_model=self.config.model_for("decision_model"))
         if any(unjudged):
             raise NotAnswering
         return answered
@@ -312,8 +329,9 @@ class Session:
             self._keep(item, host, outcome)
             self.store.set_cost(item.job.id, 0.0)
             return self._ended(item, host, outcome, {}, started, plugin, log)
-        # The gateway's price list, read once, so each call's cost can be counted.
-        await SPEND.load_prices(self.client)
+        # OrcaRouter's price list, read once, so each call's cost can be counted. ChatGPT plan use has no OrcaRouter spend calls.
+        if not isinstance(self.client, ChatGPTProvider):
+            await SPEND.load_prices(self.client)
         mark = SPEND.mark()
         told = NOTE.set(note)
         # Counted before the wait for the engine, so that the engine is either already coming (waited for) or not started.
@@ -322,10 +340,12 @@ class Session:
             await self.engine_coming(note)
             cv_file = self._own_cv()
             outcome = await apply_to_job(
-                self.client, self.config.model, job, cv, answers, cv_file, self.config.data_dir, self.config.browser_profile, guidance, account)
+                self.client, self.config.model_for("model"), job, cv, answers, cv_file, self.config.data_dir, self.config.browser_profile, guidance, account)
         except Exception as error:
             # One job's failure is reported and recorded; the next job still runs.
-            if refused(error):
+            from aihawk.chatgpt_provider import ChatGPTAPIError
+
+            if refused(error) or isinstance(error, ChatGPTAPIError):
                 raise
             outcome = Outcome("failed", errors.explained(error), reason=_why_failed(error))
         finally:
@@ -366,8 +386,11 @@ class Session:
     async def _record(self, item: Stored, host: str, outcome: Outcome, mark: Mark) -> dict[str, tuple[int, int]]:
         """What came of the application, kept with the job: its account, status, proof and cost. The tokens each model used."""
         self._keep(item, host, outcome)
-        await SPEND.settle(self.client)
-        cost, used = SPEND.since(mark)
+        if isinstance(self.client, ChatGPTProvider):
+            cost, used = 0.0, {}
+        else:
+            await SPEND.settle(self.client)
+            cost, used = SPEND.since(mark)
         self.store.set_cost(item.job.id, cost)
         return used
 

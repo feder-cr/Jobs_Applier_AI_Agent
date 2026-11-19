@@ -10,7 +10,7 @@ from collections import deque
 from pathlib import Path
 from typing import ClassVar
 
-from openai import RateLimitError
+from openai import APIConnectionError, RateLimitError
 from rich.text import Text
 from textual import events, on, work
 from textual.app import App, ComposeResult
@@ -20,7 +20,9 @@ from textual.widgets import DataTable, Footer, Input, Static
 
 from aihawk import errors
 from aihawk.apply import MAILBOXES, Outcome, mail_provider, no_browser_here, why_not_sent
+from aihawk.chatgpt_provider import ChatGPTAPIError
 from aihawk.config import KEY_ENV, KEY_URL, ConfigError
+from aihawk.credentials import CredentialStoreUnavailable
 from aihawk.database import DatabaseError
 from aihawk.library import LibraryError, Stopped
 from aihawk.llm import account_problem, error_name, explain, not_answering, refused
@@ -30,6 +32,7 @@ from aihawk.session import Session
 from aihawk.store import OWN_ANSWERS, SENT_MARKS, SENT_WORDS, SUBMITTED, Stored
 
 SEARCH_SETTINGS = {"places", "exclude", "max_age_days"}
+CHATGPT_USAGE_URL = "https://chatgpt.com/settings/usage"
 
 
 def whole_days(answer: str) -> str | None:
@@ -177,6 +180,7 @@ class AIHawk(App[None]):
         self.sending = ""
         self.waiting_for_key = False
         self.restart = False
+        self.chatgpt_search_active = False
         self.columns_for = 0
         self.with_location = True
         # The room each of Company, Role and Location has, for the ellipsis where a word is cut.
@@ -200,7 +204,10 @@ class AIHawk(App[None]):
         if words := no_browser_here():
             # Said before the person spends an evening choosing jobs they cannot apply to from here.
             self.say(words)
-        self.start()
+        if self.session.config.provider == "chatgpt":
+            self.say("ChatGPT plan is selected. Press → to start when your account and model are ready.")
+        else:
+            self.start()
 
     def on_resize(self, event: events.Resize) -> None:
         # The event's size: the app's own still says the old one here, and the columns were cut for the screen before.
@@ -248,6 +255,10 @@ class AIHawk(App[None]):
     def failed(self, error: Exception, then: str = "", step: str = "press → to go on.") -> None:
         """Says what went wrong, in plain words, and `then`, the next step; for an account that must be mended first, `step` is
         what to press after. A key the AI service refused is forgotten when it came from the file, and asked for again."""
+        from aihawk.chatgpt_auth import AuthError
+        if isinstance(error, ChatGPTAPIError | AuthError):
+            self.say(f"{error} Open Settings (e) to reconnect or manage ChatGPT usage.")
+            return
         if not refused(error):
             self.say(f"{errors.explained(error, step)}{then}")
             return
@@ -334,8 +345,13 @@ class AIHawk(App[None]):
         self.refresh_jobs()
         session = self.session
         try:
-            if session.needs_key() and not await self.ask_key():
-                return
+            if session.needs_key():
+                if session.config.provider == "chatgpt":
+                    self.chatgpt_search_active = False
+                    self.say("Connect ChatGPT in Settings (e) before starting. No ChatGPT request was made.")
+                    return
+                if not await self.ask_key():
+                    return
             if (self.resume or session.needs_resume()) and not await self.read_resume():
                 return
             # The jobs scored before, by an earlier search: the first pages, sorted as they are. While the jobs still come
@@ -361,9 +377,13 @@ class AIHawk(App[None]):
             await session.find()
             await self.score()
         except (ConfigError, DatabaseError) as error:
+            if session.config.provider == "chatgpt":
+                self.chatgpt_search_active = False
             self.start_failed(error)
             self.say(f"{error}{self.resume_next()}")
         except Exception as error:  # noqa: BLE001  The screen stays up and says what went wrong, instead of a traceback over it.
+            if session.config.provider == "chatgpt":
+                self.chatgpt_search_active = False
             self.start_failed(error)
             if isinstance(error, RateLimitError) and error is self.reported and self.remembered and await self.free_plan_told():
                 # The same file, read again as r would after the person gave it: the start is made anew.
@@ -709,6 +729,10 @@ class AIHawk(App[None]):
         target = self.page + step
         if target < 0:
             return
+        if self.session.config.provider == "chatgpt" and not self.chatgpt_search_active and not self.pages:
+            self.chatgpt_search_active = True
+            self.start()
+            return
         if not self.pages:
             # No page yet: the arrow asks for the first, which is what the person who sees an empty list is trying.
             target = 0
@@ -800,6 +824,14 @@ class AIHawk(App[None]):
     def setting_rows(self) -> list[tuple[str, str, str]]:
         # What to look for is not here: the titles and their graph come from the resume. A new resume changes them.
         config = self.session.config
+        from aihawk.chatgpt_auth import ChatGPTAuth
+
+        try:
+            auth = ChatGPTAuth(config.workspace)
+            connected = auth.connected
+            account = f"{auth.email or 'Connected'} · plan usage enabled" if connected else "Not connected"
+        except CredentialStoreUnavailable:
+            connected, account = False, "Secure credential store unavailable"
         return [
             ("places", "Where", ", ".join(config.filters.locations)),
             ("exclude", "Leave out", ", ".join(config.filters.exclude)),
@@ -808,7 +840,10 @@ class AIHawk(App[None]):
             ("answers", "Your answers", str(len(self.own_answers()))),
             ("mail", "Your mail", self.mail_words()),
             ("key", "OrcaRouter key", "saved" if config.api_key() else "none yet"),
-            # The models are not here: a person does not choose one, and aihawk.yaml still changes them.
+            ("provider", "Use ChatGPT plan", "On" if config.provider == "chatgpt" else "Off (OrcaRouter)"),
+            ("chatgpt", "ChatGPT account", account),
+            ("chatgpt_model", "ChatGPT model", config.chatgpt_model or "choose after connecting"),
+            ("usage", "Manage ChatGPT usage", "Open ChatGPT Settings"),
             ("folder", "Your files", str(config.workspace)),
         ]
 
@@ -834,6 +869,56 @@ class AIHawk(App[None]):
                 return
             if choice == "folder":
                 webbrowser.open(self.session.config.workspace.as_uri())
+            elif choice == "usage":
+                webbrowser.open(CHATGPT_USAGE_URL)
+            elif choice == "provider":
+                current = self.session.config.provider
+                target = "orcarouter" if current == "chatgpt" else "chatgpt"
+                name = "OrcaRouter" if target == "orcarouter" else "ChatGPT plan"
+                if await self.push_screen_wait(Confirm(f"Switch AIHawk to {name}?", "This change applies to the next AIHawk action · Enter confirms · Esc goes back")):
+                    self.session.change_setting("provider", target)
+                    self.say(f"AI provider set to {name}.")
+            elif choice == "chatgpt":
+                from aihawk.chatgpt_auth import AuthError, ChatGPTAuth
+                from aihawk.config import load_config
+
+                auth = ChatGPTAuth(self.session.workspace)
+                try:
+                    if auth.connected:
+                        if await self.push_screen_wait(Confirm("Disconnect this ChatGPT account?", "AIHawk will remove its saved connection · Enter confirms · Esc goes back")):
+                            await asyncio.to_thread(auth.disconnect)
+                            self.session._client = None
+                            self.say("ChatGPT disconnected.")
+                    else:
+                        self.session.change_setting("provider", "chatgpt")
+                        self.say("Opening ChatGPT sign-in…", again=True)
+                        email = await asyncio.to_thread(auth.connect)
+                        self.session.config = load_config(self.session.workspace)
+                        self.session._client = None
+                        self.say(f"Connected {email}. Choose a visible model in Settings before starting.", replace=True)
+                except (AuthError, CredentialStoreUnavailable, ConfigError, ChatGPTAPIError, APIConnectionError) as error:
+                    self.say(f"{error} You can retry from Settings.")
+            elif choice == "chatgpt_model":
+                if self.session.config.provider != "chatgpt":
+                    self.say("Turn on Use ChatGPT plan first.")
+                    continue
+                try:
+                    from aihawk.chatgpt_auth import AuthError
+
+                    models = await self.session.chatgpt_models(refresh=True)
+                    if not models:
+                        self.say("No models are currently available to this ChatGPT account.")
+                        continue
+                    selected = await self.push_screen_wait(Settings(
+                        [(f"model:{item.slug}", item.display_name, item.slug) for item in models],
+                        title="Choose a ChatGPT model",
+                    ))
+                    if selected and selected.startswith("model:"):
+                        model = selected.removeprefix("model:")
+                        self.session.change_setting("chatgpt_model", model)
+                        self.say(f"ChatGPT model set to {model}.")
+                except (AuthError, ConfigError, ChatGPTAPIError, APIConnectionError) as error:
+                    self.failed(error)
             elif choice == "mail":
                 self.mail_left = not await self.set_up_mail()
             elif choice == "answers":

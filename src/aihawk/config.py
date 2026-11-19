@@ -94,7 +94,21 @@ class Config:
     model: str = DEFAULT_MODEL
     quick_model: str = DEFAULT_QUICK_MODEL
     decision_model: str = DEFAULT_DECISION_MODEL
+    chatgpt_host_id: str = ""
+    chatgpt_email: str = ""
+    provider: str = "orcarouter"
+    chatgpt_model: str = ""
     filters: Filters = field(default_factory=Filters)
+
+    def model_for(self, stage: str) -> str:
+        """Return the model for a pipeline stage under the selected provider."""
+        if stage not in {"model", "quick_model", "decision_model"}:
+            raise ConfigError(f"unknown model stage: {stage}")
+        if self.provider == "chatgpt":
+            if not self.chatgpt_model:
+                raise ConfigError("Choose a ChatGPT model in AIHawk settings before starting.")
+            return self.chatgpt_model
+        return str(getattr(self, stage))
 
     @property
     def cv(self) -> Path:
@@ -246,6 +260,9 @@ def load_config(workspace: Path) -> Config:
     filters = raw.get("filters") or {}
     if not isinstance(filters, dict):
         raise ConfigError("filters must be a mapping with include, exclude, locations, cities, countries and plan")
+    provider = str(raw.get("provider") or "orcarouter")
+    if provider not in {"orcarouter", "chatgpt"}:
+        raise ConfigError("provider must be 'orcarouter' or 'chatgpt'")
     return Config(
         workspace=workspace,
         goals=str(raw.get("goals") or ""),
@@ -254,6 +271,10 @@ def load_config(workspace: Path) -> Config:
         model=str(raw.get("model") or DEFAULT_MODEL),
         quick_model=str(raw.get("quick_model") or DEFAULT_QUICK_MODEL),
         decision_model=str(raw.get("decision_model") or DEFAULT_DECISION_MODEL),
+        chatgpt_host_id=str(raw.get("chatgpt_host_id") or ""),
+        chatgpt_email=str(raw.get("chatgpt_email") or ""),
+        provider=provider,
+        chatgpt_model=str(raw.get("chatgpt_model") or ""),
         filters=Filters(
             _words(filters.get("include"), "filters.include"),
             _words(filters.get("exclude"), "filters.exclude"),

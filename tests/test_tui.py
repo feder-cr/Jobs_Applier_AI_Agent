@@ -1855,6 +1855,24 @@ def test_the_settings_say_the_resumes_name_the_key_as_saved_and_never_an_environ
     asyncio.run(run())
 
 
+def test_chatgpt_settings_are_visible_and_start_waits_for_explicit_connection(home: Path, resume: Path) -> None:
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        app.session.change_setting("provider", "chatgpt")
+        app.session.needs_key = lambda: True  # type: ignore[method-assign]
+        client = app.session._client
+        async with app.run_test(size=(100, 30)) as pilot:
+            await settle(pilot, app)
+            assert app.session._client is client
+            rows = {key: (label, now) for key, label, now in app.setting_rows()}
+            assert rows["provider"][1] == "On"
+            assert rows["chatgpt"][0] == "ChatGPT account"
+            assert rows["chatgpt_model"][1] == "choose after connecting"
+            assert "usage" in rows
+
+    asyncio.run(run())
+
+
 def test_the_heading_says_how_many_are_selected_names_a_place_once_and_a_cut_word_ends_in_an_ellipsis(home: Path, resume: Path) -> None:
     async def run() -> None:
         app = scripted_app(home, resume)
