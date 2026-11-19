@@ -344,12 +344,13 @@ def test_escape_on_the_batch_sends_none_and_the_selection_stays(home: Path, resu
     assert calls == []
 
 
-def test_on_a_mac_the_start_says_applying_does_not_work_and_a_sends_nothing(
+def test_on_a_mac_missing_browser_requirements_block_applying_but_keep_search_available(
     home: Path, resume: Path, restored_apply: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import aihawk.apply as apply_module
 
     monkeypatch.setattr(apply_module, "PLATFORM", "darwin")
+    monkeypatch.setattr(apply_module, "mac_browser_setup_issue", lambda: "Install Node.js 20+ and Google Chrome to apply on macOS.")
     calls: list[Any] = []
 
     async def run() -> None:
@@ -357,7 +358,7 @@ def test_on_a_mac_the_start_says_applying_does_not_work_and_a_sends_nothing(
         fake_apply(app, [Outcome("submitted", "sent")], calls)
         async with app.run_test(size=(140, 40)) as pilot:
             await settle(pilot, app)
-            assert "On a Mac AIHawk finds and scores jobs" in " ".join(app.query_one(Said).said)
+            assert "Install Node.js 20+ and Google Chrome" in " ".join(app.query_one(Said).said)
             assert companies(app)[0] == "Bestco", "the jobs are found and scored all the same"
             await pilot.press("a")
             await pilot.pause(0.2)
@@ -2426,6 +2427,20 @@ def test_the_engine_is_brought_in_the_background_once_and_only_when_it_is_not_he
     assert process is not None and not process.ended  # type: ignore[attr-defined]
     session.close()
     assert process.ended  # type: ignore[attr-defined]
+
+
+def test_macos_chrome_backend_never_fetches_the_unsupported_invisible_engine(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
+    import aihawk.apply as apply_module
+
+    monkeypatch.setattr(apply_module, "PLATFORM", "darwin")
+    monkeypatch.setattr(apply_module, "mac_browser_setup_issue", lambda: "")
+    monkeypatch.setattr(Session, "engine_here", staticmethod(lambda: pytest.fail("macOS must not probe or fetch the invisible Firefox engine")))
+    session = Session(home)
+    try:
+        session.bring_engine()
+        assert session.engine is None
+    finally:
+        session.close()
 
 
 def test_the_engine_is_not_brought_while_a_browser_is_open_or_opening(monkeypatch: pytest.MonkeyPatch, home: Path, resume: Path) -> None:

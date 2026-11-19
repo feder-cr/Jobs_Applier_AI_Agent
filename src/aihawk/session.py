@@ -14,7 +14,7 @@ from pathlib import Path
 from openai import AsyncOpenAI
 
 from aihawk import errors
-from aihawk.apply import MAILBOXES, NOTE, BrowserDidNotOpen, Outcome, apply_to_job, no_browser_here, signed_in, site_of
+from aihawk.apply import MAILBOXES, NOTE, BrowserDidNotOpen, Outcome, apply_to_job, no_browser_here, signed_in, site_of, uses_mac_chrome
 from aihawk.apply import sign_in as sign_in_browser
 from aihawk.chatgpt_provider import ChatGPTProvider, ModelInfo
 from aihawk.config import DEFAULT_BASE_URL, KEY_ENV, Config, ConfigError, load_config
@@ -92,7 +92,7 @@ class Session:
         download of the same engine ends by clearing the folder the first one is starting the browser from (the core removes the
         engine's folder and moves its own copy in, and on Windows it deletes what is not in use). The jobs finishing in the middle
         of the first application is how that happened on 2026-11-12. The application downloads it, so nothing is lost."""
-        if self.engine is not None or self.browsers or no_browser_here() or self.engine_here():
+        if self.engine is not None or self.browsers or no_browser_here() or uses_mac_chrome() or self.engine_here():
             return
         flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         try:

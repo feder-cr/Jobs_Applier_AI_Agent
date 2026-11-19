@@ -53,6 +53,45 @@ def test_the_browser_is_given_the_environment_without_the_model_key(tmp_path: Pa
     assert "ORCAROUTER_API_KEY" not in environment and environment["PATH_ALIKE"] == "kept"
 
 
+def test_macos_uses_pinned_headed_playwright_chrome_with_the_existing_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(apply_module, "PLATFORM", "darwin")
+    monkeypatch.setattr(apply_module.shutil, "which", lambda command: f"/mock/bin/{command}")
+    monkeypatch.setattr(apply_module.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="v22.1.0"))
+    monkeypatch.setattr(apply_module, "_mac_chrome_installed", lambda: True)
+    monkeypatch.setenv("ORCAROUTER_API_KEY", "test-secret")
+    monkeypatch.setenv("OPENAI_API_KEY", "other-test-secret")
+    profile = tmp_path / "profile"
+
+    params = server_parameters(tmp_path, tmp_path, profile)
+
+    assert params.command == "/mock/bin/npx"
+    assert params.args == ["--yes", "@playwright/mcp@0.0.86", "--browser=chrome", "--user-data-dir", str(profile)]
+    assert "--headless" not in params.args
+    assert params.env["PLAYWRIGHT_MCP_USER_DATA_DIR"] == str(profile)
+    assert "ORCAROUTER_API_KEY" not in params.env
+    assert "OPENAI_API_KEY" not in params.env
+
+
+@pytest.mark.parametrize(
+    ("node", "npx", "version", "chrome", "expected"),
+    [
+        (None, None, "", True, "Node.js 20+"),
+        ("/node", None, "v22.1.0", True, "npx"),
+        ("/node", "/npx", "v18.20.0", True, "Node.js 20+"),
+        ("/node", "/npx", "v22.1.0", False, "Google Chrome"),
+    ],
+)
+def test_macos_reports_missing_playwright_requirements(
+    monkeypatch: pytest.MonkeyPatch, node: str | None, npx: str | None, version: str, chrome: bool, expected: str
+) -> None:
+    monkeypatch.setattr(apply_module, "PLATFORM", "darwin")
+    monkeypatch.setattr(apply_module.shutil, "which", lambda command: {"node": node, "npx": npx}.get(command))
+    monkeypatch.setattr(apply_module.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=version))
+    monkeypatch.setattr(apply_module, "_mac_chrome_installed", lambda: chrome)
+
+    assert expected in apply_module.no_browser_here()
+
+
 @pytest.fixture(autouse=True)
 def no_wait_for_a_send(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(apply_module, "SEND_POLL_S", 0)
@@ -863,11 +902,12 @@ def test_on_linux_without_the_gtk_library_the_person_is_told_the_packages_for_de
     assert apply_module.missing_for_the_browser() is None
 
 
-def test_on_a_mac_or_a_linux_of_another_kind_the_browser_has_no_version_and_the_person_is_told(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_on_a_mac_missing_node_chrome_or_an_unsupported_linux_arch_the_person_is_told(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(apply_module, "PLATFORM", "darwin")
+    monkeypatch.setattr(apply_module, "mac_browser_setup_issue", lambda: "To fill applications on macOS, install Node.js 20+ and Google Chrome.")
     reason, words = apply_module.missing_for_the_browser() or ("", "")
-    assert reason == "no_browser_here" and words.startswith("On a Mac AIHawk finds and scores jobs, but cannot send applications yet")
-    assert apply_module.why_not_sent("no_browser_here") == "the browser has no version for this computer"
+    assert reason == "mac_browser_requirements" and "Node.js 20+" in words
+    assert apply_module.why_not_sent("mac_browser_requirements") == "the macOS browser needs Node.js 20+, npx, and Google Chrome"
     monkeypatch.setattr(apply_module, "PLATFORM", "linux")
     monkeypatch.setattr(apply_module, "MACHINE", "aarch64")
     assert (apply_module.missing_for_the_browser() or ("", ""))[0] == "no_browser_here"

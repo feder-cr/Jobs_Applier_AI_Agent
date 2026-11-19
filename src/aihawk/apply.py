@@ -14,6 +14,8 @@ import json
 import os
 import platform
 import re
+import shutil
+import subprocess
 import sys
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -88,6 +90,7 @@ WHY_NOT_SENT = {
     "model_not_allowed": "this key is not allowed to use the models AIHawk needs",
     "refused_other": "OrcaRouter refused this key for the request",
     "no_browser_here": "the browser has no version for this computer",
+    "mac_browser_requirements": "the macOS browser needs Node.js 20+, npx, and Google Chrome",
     "no_display": "the browser needs a desktop",
     "browser_libraries": "the browser needs a few system packages",
 }
@@ -100,14 +103,51 @@ APT_LINE = (
     "sudo apt-get install -y libgtk-3-0t64 libasound2t64 libx11-xcb1 libdbus-glib-1-2"
     " || sudo apt-get install -y libgtk-3-0 libasound2 libx11-xcb1 libdbus-glib-1-2"
 )
+MAC_PLAYWRIGHT_MCP = "@playwright/mcp@0.0.86"
+AI_CREDENTIAL_ENV = {KEY_ENV, "OPENAI_API_KEY"}
+
+
+def uses_mac_chrome() -> bool:
+    """Whether this machine uses the standard headed Chrome MCP backend."""
+    return PLATFORM == "darwin"
+
+
+def _mac_chrome_installed() -> bool:
+    paths = (
+        Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+        Path.home() / "Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    )
+    return any(path.is_file() for path in paths)
+
+
+def mac_browser_setup_issue() -> str:
+    """Return a setup message when this Mac lacks a supported Node/npx/Chrome runtime."""
+    if not uses_mac_chrome():
+        return ""
+    node = shutil.which("node")
+    if not node:
+        return "To fill applications on macOS, install Node.js 20+ (which includes npx) and Google Chrome. Search and scoring still work without them."
+    npx = shutil.which("npx")
+    if not npx:
+        return "To fill applications on macOS, install npx with Node.js 20+ and Google Chrome. Search and scoring still work without them."
+    try:
+        version = subprocess.run([node, "--version"], capture_output=True, text=True, check=False, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        version = None
+    match = re.match(r"v?(\d+)", version.stdout.strip() if version else "")
+    if not match or int(match.group(1)) < 20:
+        return "To fill applications on macOS, upgrade to Node.js 20+ and install Google Chrome. Search and scoring still work without them."
+    if not _mac_chrome_installed():
+        return "To fill applications on macOS, install Google Chrome. Search and scoring still work without it."
+    return ""
 
 
 def no_browser_here() -> str:
     """What to tell a person whose computer the browser has no version for; empty when it has one. The engine is built for
     Windows and for Linux on x86-64: on a Mac, or a Linux of another kind, AIHawk finds and scores the jobs and cannot
     send an application."""
-    if PLATFORM == "darwin":
-        return "On a Mac AIHawk finds and scores jobs, but cannot send applications yet: its browser has no Mac version."
+    if uses_mac_chrome():
+        return mac_browser_setup_issue()
     if PLATFORM.startswith("linux") and MACHINE.lower() not in ("x86_64", "amd64"):
         return "On this computer AIHawk finds and scores jobs, but cannot send applications yet: its browser has no version for it."
     return ""
@@ -118,7 +158,7 @@ def missing_for_the_browser() -> tuple[str, str] | None:
     computers. On Linux it opens a window: with no desktop, or without the libraries a window needs, it cannot, and trying
     would only wait for a download and then fail."""
     if words := no_browser_here():
-        return "no_browser_here", words
+        return ("mac_browser_requirements" if uses_mac_chrome() else "no_browser_here"), words
     if not PLATFORM.startswith("linux"):
         return None
     if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
@@ -803,27 +843,35 @@ async def _open_browser(session: Browser, profile: Path) -> None:
         await asyncio.sleep(OPEN_RETRY_S)
 
 
-def server_parameters(upload_dir: Path, home: Path) -> StdioServerParameters:
+def server_parameters(upload_dir: Path, home: Path, profile: Path | None = None) -> StdioServerParameters:
     # The browser is given the environment without the model's key: nothing it does needs that key.
-    environment = {
-        **{name: value for name, value in os.environ.items() if name != KEY_ENV},
+    environment = {name: value for name, value in os.environ.items() if name not in AI_CREDENTIAL_ENV}
+    if uses_mac_chrome():
+        user_data_dir = profile or home / "profile"
+        environment["PLAYWRIGHT_MCP_USER_DATA_DIR"] = str(user_data_dir)
+        return StdioServerParameters(
+            command=shutil.which("npx") or "npx",
+            args=["--yes", MAC_PLAYWRIGHT_MCP, "--browser=chrome", "--user-data-dir", str(user_data_dir)],
+            env=environment,
+        )
+    environment.update({
         "INVISIBLE_MCP_HOST_MANAGED": "1",
         "INVISIBLE_MCP_UPLOAD_DIRS": str(upload_dir),
         "INVISIBLE_MCP_HOME": str(home),
         # The person sees the window: what is done in their name happens in front of them.
         "STEALTHFOX_HEADLESS": "0",
-    }
+    })
     return StdioServerParameters(command=sys.executable, args=["-m", "invisible_playwright_mcp"], env=environment)
 
 
 @asynccontextmanager
-async def _server(upload_dir: Path, home: Path) -> AsyncIterator[tuple[ClientSession, str]]:
+async def _server(upload_dir: Path, home: Path, profile: Path | None = None) -> AsyncIterator[tuple[ClientSession, str]]:
     """The browser server, started: a session on it, and the instructions it gives about driving a page."""
     home.mkdir(parents=True, exist_ok=True)
     try:
         # The server's own messages go to a file: on the person's terminal they would draw over the screen.
         with (home / "server.log").open("a", encoding="utf-8") as server_log:
-            async with stdio_client(server_parameters(upload_dir, home), errlog=server_log) as (read, write), ClientSession(read, write) as session:
+            async with stdio_client(server_parameters(upload_dir, home, profile), errlog=server_log) as (read, write), ClientSession(read, write) as session:
                 started = await session.initialize()
                 yield session, started.instructions or ""
     except ExceptionGroup as group:
@@ -850,7 +898,7 @@ async def apply_to_job(
     if (missing := missing_for_the_browser()) is not None:
         return Outcome("blocked", missing[1], reason=missing[0])
     shot = data_dir / "proofs" / f"{safe_name(job.id)}.png"
-    async with _server(cv_file.parent, data_dir / "browser") as (session, page_rules):
+    async with _server(cv_file.parent, data_dir / "browser", profile) as (session, page_rules):
         listed = await session.list_tools()
         tools = [
             {"type": "function", "function": {"name": tool.name, "description": tool.description or tool.name, "parameters": tool.inputSchema}}
@@ -903,7 +951,7 @@ async def sign_in(profile: Path, home: Path, wait: Callable[[], Awaitable[None]]
     Returns where the page is once `url` is opened again after the wait, so a mailbox that sent the browser to its own
     sign-in page shows that the person is not signed in.
     """
-    async with _server(home, home) as (session, _):
+    async with _server(home, home, profile) as (session, _):
         try:
             await _open_browser(session, profile)
             await session.call_tool("browser_navigate", {"url": url})
