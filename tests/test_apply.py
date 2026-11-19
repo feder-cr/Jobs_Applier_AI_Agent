@@ -92,6 +92,86 @@ def test_macos_reports_missing_playwright_requirements(
     assert expected in apply_module.no_browser_here()
 
 
+def test_macos_internal_browser_calls_use_playwright_mcp_arguments(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(apply_module, "PLATFORM", "darwin")
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    class Browser:
+        async def call_tool(self, name: str, arguments: dict[str, Any]) -> SimpleNamespace:
+            calls.append((name, arguments))
+            return SimpleNamespace(isError=False, content=[SimpleNamespace(text="2")])
+
+    async def run() -> None:
+        await apply_module.browser_evaluate(Browser(), "1 + 1")
+
+    asyncio.run(run())
+    assert calls == [("browser_evaluate", {"function": "() => (1 + 1)"})]
+    assert apply_module.browser_click_target("#submit") == {"target": "#submit"}
+
+
+def test_macos_browser_starts_with_server_and_skips_missing_browser_open_tool(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(apply_module, "PLATFORM", "darwin")
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    class Browser:
+        async def call_tool(self, name: str, arguments: dict[str, Any]) -> SimpleNamespace:
+            calls.append((name, arguments))
+            return SimpleNamespace(isError=False, content=[])
+
+    asyncio.run(apply_module._open_browser(Browser(), tmp_path))
+    assert calls == [("browser_navigate", {"url": "about:blank"})]
+
+
+@pytest.mark.parametrize("tool_name", ["browser_file_upload", "browser_drop"])
+def test_macos_blocks_out_of_resume_upload_before_calling_mcp(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tool_name: str) -> None:
+    monkeypatch.setattr(apply_module, "PLATFORM", "darwin")
+    resume_dir = tmp_path / "resume"
+    resume_dir.mkdir()
+    resume = resume_dir / "cv.pdf"
+    resume.write_text("cv", encoding="utf-8")
+    secret_dir = tmp_path / "private"
+    secret_dir.mkdir()
+    secret = secret_dir / "private.txt"
+    secret.write_text("private", encoding="utf-8")
+    browser = SimpleNamespace(calls=[])
+
+    async def call_tool(name: str, arguments: dict[str, Any]) -> SimpleNamespace:
+        browser.calls.append((name, arguments))
+        return SimpleNamespace(isError=False, content=[SimpleNamespace(text="uploaded")])
+
+    browser.call_tool = call_tool
+    model = ScriptedModel([tool_call(tool_name, paths=[str(secret)])], [tool_call("finish_form", status="blocked", summary="upload rejected", blocked_by="missing_info", submit_selector="", made_account=False)])
+
+    async def run() -> Report:
+        return await fill_form(browser, [], model, "model", "brief", upload_directory=resume_dir)  # type: ignore[arg-type]
+
+    asyncio.run(run())
+    assert browser.calls == []
+    tool_results = [item for item in model.requests[1]["messages"] if item.get("role") == "tool"]
+    assert tool_results and "only the selected resume" in tool_results[-1]["content"]
+
+
+@pytest.mark.parametrize("tool_name", ["browser_file_upload", "browser_drop"])
+def test_macos_upload_guard_allows_only_real_files_under_resume_directory(tmp_path: Path, tool_name: str) -> None:
+    resume_dir = tmp_path / "resume"
+    resume_dir.mkdir()
+    cv = resume_dir / "cv.pdf"
+    cv.write_text("cv", encoding="utf-8")
+    sibling = tmp_path / "cv-copy.pdf"
+    sibling.write_text("other", encoding="utf-8")
+    secret = tmp_path / "private" / "secret.txt"
+    secret.parent.mkdir()
+    secret.write_text("private", encoding="utf-8")
+    link = resume_dir / "linked.pdf"
+    link.symlink_to(secret)
+
+    assert apply_module.upload_paths_allowed({"paths": [str(cv)]}, resume_dir)
+    assert not apply_module.upload_paths_allowed({"paths": [str(sibling)]}, resume_dir)
+    assert not apply_module.upload_paths_allowed({"paths": [str(resume_dir / ".." / "private" / "secret.txt")]}, resume_dir)
+    assert not apply_module.upload_paths_allowed({"paths": [str(secret)]}, resume_dir)
+    assert not apply_module.upload_paths_allowed({"paths": [str(link)]}, resume_dir)
+
+
 @pytest.fixture(autouse=True)
 def no_wait_for_a_send(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(apply_module, "SEND_POLL_S", 0)

@@ -24,6 +24,7 @@ from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
@@ -375,9 +376,35 @@ def _images(result: Any) -> list[dict[str, Any]]:
 PAGE = "({url: location.href, text: document.body ? document.body.innerText : ''})"
 
 
+async def browser_evaluate(session: Browser, expression: str) -> Any:
+    """Call the selected server's private page-reading tool with its expected argument name."""
+    if uses_mac_chrome():
+        return await session.call_tool("browser_evaluate", {"function": f"() => ({expression})"})
+    return await session.call_tool("browser_evaluate", {"expression": expression})
+
+
+def browser_click_target(selector: str) -> dict[str, str]:
+    """Build the click arguments for the selected browser server."""
+    return {"target" if uses_mac_chrome() else "selector": selector}
+
+
+def upload_paths_allowed(arguments: dict[str, Any], resume_directory: Path | None) -> bool:
+    """Keep every requested upload inside the selected resume's directory, including through symlinks."""
+    paths = arguments.get("paths", [])
+    if paths is None or paths == []:
+        return True
+    if resume_directory is None or not isinstance(paths, list) or not all(isinstance(path, str) for path in paths):
+        return False
+    try:
+        root = resume_directory.resolve(strict=True)
+        return all((candidate := Path(path).resolve(strict=True)).is_file() and candidate.is_relative_to(root) for path in paths)
+    except (OSError, RuntimeError):
+        return False
+
+
 async def _page(session: Browser) -> dict[str, str] | None:
     """The page's address and text, as the server reads them; None when they cannot be read."""
-    result = await session.call_tool("browser_evaluate", {"expression": PAGE})
+    result = await browser_evaluate(session, PAGE)
     try:
         page = None if result.isError else json.loads(tool_text(result))
     except ValueError:
@@ -508,7 +535,7 @@ async def _not_one(session: Browser, selector: str) -> str:
         f"(() => {{ try {{ return document.querySelectorAll({json.dumps(selector)}).length; }} catch (error) {{ return 0; }} }})()"
     )
     try:
-        count = json.loads(tool_text(await session.call_tool("browser_evaluate", {"expression": expression})))
+        count = json.loads(tool_text(await browser_evaluate(session, expression)))
     except Exception:  # noqa: BLE001  A selector the page's own CSS cannot read, or one in a shadow root: the click decides.
         return ""
     if not isinstance(count, int) or count < 2:
@@ -516,7 +543,16 @@ async def _not_one(session: Browser, selector: str) -> str:
     return f"{selector} matches {count} elements on this page, and a click sends only the first. Name the one control that sends the form, then call finish_form again."
 
 
-async def fill_form(session: Browser, tools: list[dict[str, Any]], client: AsyncOpenAI | ChatGPTProvider, model: str, brief: str, guidance: str = "", page_rules: str = "") -> Report:
+async def fill_form(
+    session: Browser,
+    tools: list[dict[str, Any]],
+    client: AsyncOpenAI | ChatGPTProvider,
+    model: str,
+    brief: str,
+    guidance: str = "",
+    page_rules: str = "",
+    upload_directory: Path | None = None,
+) -> Report:
     """The model works on the open page until it calls finish_form; returns how it ended. There is no limit on steps:
     a form takes the steps it needs, and the watch ends a run that goes nowhere."""
     messages: list[Any] = [{"role": "system", "content": instructions(guidance, page_rules)}, {"role": "user", "content": brief}]
@@ -553,7 +589,13 @@ async def fill_form(session: Browser, tools: list[dict[str, Any]], client: Async
             # The plugins say two visits to the mailbox; the code holds the model to it, whatever it reasons.
             if name == "browser_navigate" and watch.one_visit_too_many(str(arguments.get("url", ""))):
                 return _blocked(NO_CODE, NO_CODE_REASON, watch.turns)
-            result = await session.call_tool(name, arguments)
+            if name in {"browser_file_upload", "browser_drop"} and not upload_paths_allowed(arguments, upload_directory):
+                result = SimpleNamespace(
+                    isError=True,
+                    content=[SimpleNamespace(text="Upload rejected. Use only the selected resume file from AIHawk.")],
+                )
+            else:
+                result = await session.call_tool(name, arguments)
             if name == "browser_navigate" and watch.in_mailbox and not _is_mailbox(await _address_now(session)):
                 # The mailbox sent the browser to its sign-in page: that is the person's to do, once.
                 return _blocked(MAIL_NOT_SIGNED_IN, MAILBOX_SIGNED_OUT, watch.turns)
@@ -625,7 +667,7 @@ INVALID_FIELDS = """(() => Array.from(document.querySelectorAll(':invalid'))
 async def _invalid_fields(session: Browser) -> str:
     """The fields the page's own validation refuses, as "Name (Please fill out this field); ..."; empty when there are none or the page cannot say."""
     try:
-        fields = json.loads(tool_text(await session.call_tool("browser_evaluate", {"expression": INVALID_FIELDS})))
+        fields = json.loads(tool_text(await browser_evaluate(session, INVALID_FIELDS)))
     except Exception:  # noqa: BLE001  A page that cannot be asked leaves the verdict as it was.
         return ""
     return "; ".join(field for field in fields if isinstance(field, str)) if isinstance(fields, list) else ""
@@ -640,7 +682,7 @@ async def submit_and_verify(session: Browser, client: AsyncOpenAI, model: str, s
     # may have gone must never be tried again as if it had not, so only the page decides.
     never_clicked = False
     try:
-        click = await session.call_tool("browser_click", {"selector": selector})
+        click = await session.call_tool("browser_click", browser_click_target(selector))
         if click.isError:
             summary = f"{summary}\nThe click answered: {tool_text(click)}"
             # Playwright clicks only once the element is visible, steady and the one under the pointer; "not actionable"
@@ -736,7 +778,7 @@ async def run_on_page(
         traced = _Traced(session, shot.parent.parent / "trace.log", _secrets_in(answers))
         traced.note(f"== {job.company}: {job.title} at {job.apply_url}{' (dry run)' if trial else ''}")
         session = traced
-    report = await fill_form(session, tools, client, model, brief, guidance, page_rules)
+    report = await fill_form(session, tools, client, model, brief, guidance, page_rules, cv_file.parent)
     if tracing:
         traced.note(f"== finish_form: {json.dumps(asdict(report), ensure_ascii=False)[:500]}")
     if report.status != "ready" or not report.submit_selector:
@@ -756,7 +798,7 @@ async def run_on_page(
             "fields, then call finish_form again. A field that would need a fact about the candidate that the CV and the answers do "
             "not give ends the form as blocked, with that field named."
         )
-        again = await fill_form(session, tools, client, model, refusal, guidance, page_rules)
+        again = await fill_form(session, tools, client, model, refusal, guidance, page_rules, cv_file.parent)
         report = replace(again, steps=report.steps + again.steps, made_account=report.made_account or again.made_account)
         if tracing:
             traced.note(f"== finish_form again: {json.dumps(asdict(report), ensure_ascii=False)[:500]}")
@@ -826,6 +868,13 @@ async def _open_browser(session: Browser, profile: Path) -> None:
     # While the engine downloads, the server answers with its progress instead of a browser. Its words are its own to
     # change: the browser is ready when it can go to a page, and an action on one that is not open is an error.
     # The profile keeps the sign-ins between opens, and the server keeps the seed with it: the same person each time.
+    if uses_mac_chrome():
+        ready = await session.call_tool("browser_navigate", {"url": "about:blank"})
+        if ready.isError:
+            raise BrowserDidNotOpen(BROWSER_DID_NOT_OPEN, f"the browser did not open: {tool_text(ready)}")
+        if told := NOTE.get():
+            told("")
+        return
     deadline = time.monotonic() + OPEN_DEADLINE_S
     while True:
         result = await session.call_tool("browser_open", {"profile": str(profile)})
