@@ -57,7 +57,7 @@ packages = ["src/aihawk"]
 testpaths = ["tests"]
 pythonpath = ["tests"]
 markers = [
-    "browser: runs the real invisible-playwright-mcp and its Firefox",
+    "browser: runs a real browser backend against a local test form",
 ]
 
 [tool.ruff]

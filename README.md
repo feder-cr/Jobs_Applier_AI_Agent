@@ -31,7 +31,7 @@ Give it your resume. The job search finds the postings that fit, you pick, and i
 | **2. Searches** | Millions of postings of the last 30 days from 37 public sources, rebuilt every five hours, searched on your computer. |
 | **3. Scores** | Asks of every posting, against your resume, one question: is it in line with you? How sure the answer is makes the score, from 1 to 5. 50 jobs to a page, the next one ready while you read this one. |
 | **4. You pick** | Select the jobs you want and say yes once. |
-| **5. Applies** | First a quick check that the posting is still open, on the sites where that can be told without a browser. Then a real Firefox opens the company's form, fills every required field, attaches your CV and sends. |
+| **5. Applies** | First a quick check that the posting is still open, on the sites where that can be told without a browser. Then a browser opens the company's form, fills every required field, attaches your CV and sends. |
 | **6. Keeps the answer** | What each page said, with a screenshot, for every application. |
 
 ---
@@ -44,11 +44,19 @@ Windows, in PowerShell:
 irm https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/run.ps1 | iex
 ```
 
-Linux, and macOS (on a Mac AIHawk finds and scores the jobs, but cannot send applications yet: its browser has no Mac version):
+Linux:
 
 ```bash
 curl -LsSf https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/run.sh | sh
 ```
+
+macOS, with [Node.js 20 or later](https://nodejs.org/) and [Google Chrome](https://www.google.com/chrome/) installed:
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/run.sh | sh
+```
+
+On macOS, applications run in a visible Chrome window. The first application downloads the pinned Playwright browser connector through `npx`; keep an internet connection for that first launch. AIHawk keeps Chrome sign-ins in `~/.aihawk/browser-profile` (or the configured AIHawk workspace). This uses regular Chrome, which some job sites may detect more readily than AIHawk's patched Firefox on Windows and Linux.
 
 You need a key: [get one from OrcaRouter](https://www.orcarouter.ai/ref/ref_accd17afb78fc95ac4d7). Signing up is free, and a new account starts with no credit: add a few dollars there before the first start, or AIHawk cannot read your resume. An application costs a few cents.
 

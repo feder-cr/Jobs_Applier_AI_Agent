@@ -66,6 +66,7 @@ def test_macos_uses_pinned_headed_playwright_chrome_with_the_existing_profile(tm
 
     assert params.command == "/mock/bin/npx"
     assert params.args == ["--yes", "@playwright/mcp@0.0.86", "--browser=chrome", "--user-data-dir", str(profile)]
+    assert params.cwd == tmp_path
     assert "--headless" not in params.args
     assert params.env["PLAYWRIGHT_MCP_USER_DATA_DIR"] == str(profile)
     assert "ORCAROUTER_API_KEY" not in params.env
@@ -107,6 +108,33 @@ def test_macos_internal_browser_calls_use_playwright_mcp_arguments(monkeypatch: 
     asyncio.run(run())
     assert calls == [("browser_evaluate", {"function": "() => (1 + 1)"})]
     assert apply_module.browser_click_target("#submit") == {"target": "#submit"}
+
+
+def test_macos_page_and_submission_readers_extract_the_mcp_evaluate_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(apply_module, "PLATFORM", "darwin")
+
+    class Browser:
+        async def call_tool(self, name: str, arguments: dict[str, Any]) -> SimpleNamespace:
+            expression = arguments["function"]
+            value = '{"url":"https://example.test/apply","text":"Application form"}' if "location.href" in expression else '"Thank you, your application was received"'
+            return SimpleNamespace(
+                isError=False,
+                content=[SimpleNamespace(text=f"### Result\n{value}\n### Ran Playwright code ```js page.evaluate(...) ```")],
+            )
+
+    async def structured(*_: Any, **__: Any) -> dict[str, str]:
+        return {"outcome": "submitted", "evidence": "thank you"}
+
+    monkeypatch.setattr(apply_module, "structured", structured)
+
+    async def run() -> None:
+        browser = Browser()
+        assert await apply_module._page(browser) == {"url": "https://example.test/apply", "text": "Application form"}
+        text, verdict = await apply_module._read_result(browser, object(), "model", "", "https://example.test/apply")  # type: ignore[arg-type]
+        assert text == "Thank you, your application was received"
+        assert verdict["outcome"] == "submitted"
+
+    asyncio.run(run())
 
 
 def test_macos_browser_starts_with_server_and_skips_missing_browser_open_tool(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

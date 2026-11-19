@@ -133,7 +133,7 @@ class Config:
 
     @property
     def browser_profile(self) -> Path:
-        """The one Firefox profile for everything the browser does: the person's sign-ins and the applications."""
+        """The persistent browser profile for mailbox sign-ins and job applications."""
         return self.workspace / "browser-profile"
 
     def api_key(self) -> str:

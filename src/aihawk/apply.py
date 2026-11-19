@@ -144,9 +144,7 @@ def mac_browser_setup_issue() -> str:
 
 
 def no_browser_here() -> str:
-    """What to tell a person whose computer the browser has no version for; empty when it has one. The engine is built for
-    Windows and for Linux on x86-64: on a Mac, or a Linux of another kind, AIHawk finds and scores the jobs and cannot
-    send an application."""
+    """What to tell a person whose computer lacks a supported browser setup; empty when it has one."""
     if uses_mac_chrome():
         return mac_browser_setup_issue()
     if PLATFORM.startswith("linux") and MACHINE.lower() not in ("x86_64", "amd64"):
@@ -379,7 +377,14 @@ PAGE = "({url: location.href, text: document.body ? document.body.innerText : ''
 async def browser_evaluate(session: Browser, expression: str) -> Any:
     """Call the selected server's private page-reading tool with its expected argument name."""
     if uses_mac_chrome():
-        return await session.call_tool("browser_evaluate", {"function": f"() => ({expression})"})
+        result = await session.call_tool("browser_evaluate", {"function": f"() => ({expression})"})
+        if result.isError:
+            return result
+        text = tool_text(result)
+        rendered = re.search(r"### Result\s+(.*?)\s+### Ran Playwright code", text, re.DOTALL)
+        if rendered:
+            return SimpleNamespace(isError=False, content=[SimpleNamespace(text=rendered.group(1))])
+        return result
     return await session.call_tool("browser_evaluate", {"expression": expression})
 
 
@@ -619,7 +624,12 @@ async def _where(session: Browser, shot: Path) -> tuple[str, str]:
     screenshot = ""
     url = await _address_now(session)
     with suppress(Exception):
-        picture = next(part.data for part in (await session.call_tool("browser_take_screenshot")).content if getattr(part, "type", "") == "image")
+        arguments = {"scale": "css"} if uses_mac_chrome() else None
+        picture = next(
+            part.data
+            for part in (await session.call_tool("browser_take_screenshot", arguments)).content
+            if getattr(part, "type", "") == "image"
+        )
         shot.parent.mkdir(parents=True, exist_ok=True)
         shot.write_bytes(base64.b64decode(picture))
         screenshot = str(shot)
@@ -648,7 +658,15 @@ async def _address_now(session: Browser) -> str:
 
 async def _read_result(session: Browser, client: AsyncOpenAI, model: str, guidance: str, address: str) -> tuple[str, dict[str, Any]]:
     """The page's text, and what the verifying model makes of it after a send."""
-    text = tool_text(await session.call_tool("browser_read_text", {"selector": "body"}))
+    if uses_mac_chrome():
+        result = await browser_evaluate(session, "document.body ? document.body.innerText : ''")
+        text = tool_text(result)
+        with suppress(ValueError):
+            decoded = json.loads(text)
+            if isinstance(decoded, str):
+                text = decoded
+    else:
+        text = tool_text(await session.call_tool("browser_read_text", {"selector": "body"}))
     return text, await patiently(lambda: structured(client, model, verify_system(guidance), f"The page's address: {address}\n\n{text}", "submit_outcome", VERIFY_SCHEMA))
 
 
@@ -902,6 +920,7 @@ def server_parameters(upload_dir: Path, home: Path, profile: Path | None = None)
             command=shutil.which("npx") or "npx",
             args=["--yes", MAC_PLAYWRIGHT_MCP, "--browser=chrome", "--user-data-dir", str(user_data_dir)],
             env=environment,
+            cwd=upload_dir,
         )
     environment.update({
         "INVISIBLE_MCP_HOST_MANAGED": "1",

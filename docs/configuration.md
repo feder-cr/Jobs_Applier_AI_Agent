@@ -12,7 +12,11 @@ With the environment variable `AIHAWK_DRY_RUN` set to anything, an application s
 
 The default provider is OrcaRouter, which uses the three model settings below and an OrcaRouter API key. To use an eligible ChatGPT plan, open Settings (`e`), turn on **Use ChatGPT plan**, then choose **ChatGPT account** and connect in the browser. The sign-in asks permission for AIHawk to use plan usage. After connecting, choose a model visible to that account under **ChatGPT model**. The same selected model handles resume parsing, job scoring, and form filling. AIHawk does not fall back to OrcaRouter if ChatGPT usage is unavailable or reaches its limit; it stops and tells you how to reconnect or manage usage. **Manage ChatGPT usage** opens [ChatGPT Settings](https://chatgpt.com/settings/usage).
 
-Credentials are kept in the operating system's secure credential store. The connection is local to this AIHawk installation; it does not reuse Codex's private session. Disconnect from **ChatGPT account** in Settings. The subscription-backed integration is subject to account eligibility, model availability, and usage limits; it does not turn on macOS job application submission, which remains unsupported.
+Credentials are kept in the operating system's secure credential store. The connection is local to this AIHawk installation; it does not reuse Codex's private session. Disconnect from **ChatGPT account** in Settings. The subscription-backed integration is subject to account eligibility, model availability, and usage limits.
+
+## macOS application browser
+
+On macOS, application flows use a visible Google Chrome window through the pinned Microsoft Playwright MCP package. Install Node.js 20 or later (which includes `npx`) and Google Chrome. AIHawk downloads the connector with `npx` the first time it applies, so that first application needs an internet connection. Browser sign-ins persist in `~/.aihawk/browser-profile`, or in `browser-profile` inside a custom AIHawk workspace. This is regular Chrome; job sites may detect it more readily than the patched Firefox backend used on Windows and Linux. Search and scoring do not need these browser prerequisites.
 
 ## What it costs
 
