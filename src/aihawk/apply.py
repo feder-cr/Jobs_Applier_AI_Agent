@@ -16,6 +16,7 @@ import platform
 import re
 import sys
 import time
+from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
@@ -30,7 +31,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from openai import AsyncOpenAI
 
-from aihawk.config import DRY_RUN_ENV, KEY_ENV, dry_run
+from aihawk.config import DEFAULT_BASE_URL, DEFAULT_MODEL, DRY_RUN_ENV, KEY_ENV, dry_run
 from aihawk.database import Job
 from aihawk.llm import SPEND, chat, not_answering, structured
 from aihawk.store import Proof, safe_name
@@ -295,6 +296,9 @@ class Outcome:
     # The fields the page's own validation refused, each with its message, when the form stayed as it was after the click for
     # that reason: the form goes back to the model once with them.
     invalid: str = ""
+    # When the watch stopped the run for going round in circles: how (repeat | judge), at which turn, and the count of each tool
+    # name in its last calls. For the makers, with nothing of the person, the job or the page: see _Watch._stopped.
+    stuck: dict[str, Any] | None = None
 
     @property
     def needs_mail(self) -> bool:
@@ -312,6 +316,7 @@ class Report:
     blocked_by: str = ""
     made_account: bool = False
     steps: int = 0
+    stuck: dict[str, Any] | None = None
 
 
 def instructions(guidance: str, page_rules: str = "") -> str:
@@ -382,9 +387,25 @@ def _trim_readings(messages: list[Any]) -> None:
         message["content"] = message["content"][:READING_HEAD] + EARLIER_READING
 
 
-def _blocked(summary: str, reason: str, steps: int) -> Report:
+def _blocked(summary: str, reason: str, steps: int, stuck: dict[str, Any] | None = None) -> Report:
     """A run that ends before the form is ready, as finish_form would report it, with why in one word."""
-    return Report("blocked", summary, blocked_by=reason, steps=steps)
+    return Report("blocked", summary, blocked_by=reason, steps=steps, stuck=stuck)
+
+
+def judge_model(client_base_url: object, model: str) -> str:
+    """The model that reads a run's last calls to say whether it is stuck. On OrcaRouter it is DEFAULT_MODEL, whatever model
+    fills the form: a weak forms model judging its own loop did not see it (242 of the 281 applications that ended stuck came
+    from one computer on a small model, which judged its own runs). The client's own address decides, not a constant: where it
+    points elsewhere DEFAULT_MODEL may not exist, and a check that fails ends nothing, so there the person's model, the only
+    one known to exist, judges."""
+    host = urlsplit(str(client_base_url)).hostname
+    return DEFAULT_MODEL if host and host == urlsplit(DEFAULT_BASE_URL).hostname else model
+
+
+def _tool_name(name: str) -> str:
+    """A tool's name as it may be counted for the makers: only the browser server's own kind of name, since a model can call
+    anything, and a name it made up could hold what it should not."""
+    return name if name == "finish_form" or re.fullmatch(r"browser_[a-z0-9_]{1,40}", name) else "other"
 
 
 @dataclass
@@ -402,6 +423,8 @@ class _Watch:
         self.calls: list[_Call] = []
         self.idle = self.turns = self.visits = 0
         self.warned = self.in_mailbox = False
+        # Where a run that this watch stopped went round in circles, for the makers: see _stopped.
+        self.stuck: dict[str, Any] | None = None
 
     def talked(self) -> str:
         """A reply with no tool call; why the run ends, or ""."""
@@ -435,12 +458,20 @@ class _Watch:
                 return cycle
         return 0
 
+    def _stopped(self, by: str) -> None:
+        """Notes how the run was stopped, `by` the exact repeat or the judge, with the turn and how many calls of each tool the
+        last LOOP_CHECK_CALLS were. Tool names only: no argument, selector, value or answer, and nothing from a page."""
+        counts = Counter(_tool_name(call.name) for call in self.calls[-LOOP_CHECK_CALLS:])
+        self.stuck = {"by": by, "turn": self.turns, "calls": dict(counts.most_common())}
+
     async def after(self, client: AsyncOpenAI, model: str) -> tuple[str, str]:
         """At the end of a turn: why the run ends, and what the model is told; each "" when there is nothing."""
         if cycle := self._repeats(LOOP_STOP):
+            self._stopped("repeat")
             calls = ", ".join(call.name for call in self.calls[-cycle:])
             return f"Stopped going round in circles: {calls}, the same {cycle} call(s) {LOOP_STOP} times in a row with the same results.", ""
         if self.turns >= LOOP_CHECK_AFTER and (self.turns - LOOP_CHECK_AFTER) % LOOP_CHECK_EVERY == 0 and (why := await self._stuck(client, model)):
+            self._stopped("judge")
             return f"Stopped going round in circles: {why}", ""
         cycle = self._repeats(LOOP_WARN)
         warning = "" if self.warned or not cycle else (
@@ -454,7 +485,8 @@ class _Watch:
         """Why the run is going round in circles, when a model reading its last calls is sure of it; "" otherwise."""
         lines = "\n".join(call.line for call in self.calls[-LOOP_CHECK_CALLS:])
         try:
-            verdict = await patiently(lambda: structured(client, model, LOOP_CHECK_SYSTEM, lines, "loop_check", LOOP_CHECK_SCHEMA))
+            judge = judge_model(getattr(client, "base_url", ""), model)
+            verdict = await patiently(lambda: structured(client, judge, LOOP_CHECK_SYSTEM, lines, "loop_check", LOOP_CHECK_SCHEMA))
         except Exception:  # noqa: BLE001  A check that fails leaves the run to go on.
             return ""
         return str(verdict.get("reason", "")) if verdict.get("stuck") and float(verdict.get("confidence", 0)) >= LOOP_CHECK_SURE else ""
@@ -522,7 +554,7 @@ async def fill_form(session: Browser, tools: list[dict[str, Any]], client: Async
         _trim_readings(messages)
         why, warning = await watch.after(client, model)
         if why:
-            return _blocked(why, STUCK, watch.turns)
+            return _blocked(why, STUCK, watch.turns, watch.stuck)
         if warning:
             messages.append({"role": "user", "content": warning})
         if seen:
@@ -699,7 +731,7 @@ async def run_on_page(
         traced.note(f"== finish_form: {json.dumps(asdict(report), ensure_ascii=False)[:500]}")
     if report.status != "ready" or not report.submit_selector:
         reason = "other" if report.blocked_by in ("", "none") else report.blocked_by
-        return Outcome("blocked", report.summary, made_account=report.made_account, reason=reason, steps=report.steps)
+        return Outcome("blocked", report.summary, made_account=report.made_account, reason=reason, steps=report.steps, stuck=report.stuck)
     if trial:
         # A trial of the flow: the form is filled and the send control named, and nothing leaves for the employer.
         url, screenshot = await _where(session, shot)
@@ -720,7 +752,7 @@ async def run_on_page(
             traced.note(f"== finish_form again: {json.dumps(asdict(report), ensure_ascii=False)[:500]}")
         if report.status != "ready" or not report.submit_selector:
             reason = "other" if report.blocked_by in ("", "none") else report.blocked_by
-            return replace(sent, status="blocked", summary=report.summary, reason=reason, made_account=report.made_account, steps=report.steps, invalid="")
+            return replace(sent, status="blocked", summary=report.summary, reason=reason, made_account=report.made_account, steps=report.steps, invalid="", stuck=report.stuck)
         sent = await submit_and_verify(session, client, model, report.submit_selector, report.summary, guidance, shot)
     return replace(sent, made_account=report.made_account, steps=report.steps, invalid="")
 

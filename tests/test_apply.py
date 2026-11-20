@@ -23,11 +23,12 @@ from aihawk.apply import (
     apply_to_job,
     fill_form,
     instructions,
+    judge_model,
     run_on_page,
     server_parameters,
     sign_in,
 )
-from aihawk.config import DRY_RUN_ENV
+from aihawk.config import DEFAULT_BASE_URL, DEFAULT_MODEL, DRY_RUN_ENV
 from aihawk.database import Job
 from fakes import ScriptedBrowser, ScriptedModel, tool_call
 
@@ -237,6 +238,88 @@ def test_a_loop_no_fingerprint_sees_is_stopped_when_a_model_is_sure_of_it(monkey
     report = asyncio.run(fill_form(_MovingList(), [], model, "m", "brief"))  # type: ignore[arg-type]
     assert (report.summary == "Stopped going round in circles: uploads the CV and fills the fields again") is stopped
     assert (report.summary == "went on") is not stopped
+
+
+WEAK = "qwen2.5-coder-14b-instruct"
+
+
+@pytest.mark.parametrize(
+    ("base_url", "judge"),
+    [
+        (DEFAULT_BASE_URL, DEFAULT_MODEL),
+        (DEFAULT_BASE_URL + "/", DEFAULT_MODEL),
+        ("https://openrouter.ai/api/v1", WEAK),
+        ("http://localhost:11434/v1", WEAK),
+        ("", WEAK),
+    ],
+)
+def test_the_judge_is_the_default_model_on_orcarouter_and_the_persons_model_anywhere_else(base_url: str, judge: str) -> None:
+    assert judge_model(base_url, WEAK) == judge
+
+
+def _judged_run(base_url: str | None) -> ScriptedModel:
+    """A run that reaches the loop check, whose client is at `base_url` (none: a client that says nothing of where it is)."""
+    verdict = json.dumps({"stuck": False, "confidence": 0.1, "reason": "progress"})
+    steps = [[tool_call("browser_press_key", key="ArrowDown")], [tool_call("browser_press_key", key="ArrowDown")], verdict]
+    model = ScriptedModel(*steps, [tool_call("finish_form", status="blocked", summary="went on", submit_selector="")])
+    if base_url is not None:
+        model.base_url = base_url  # type: ignore[attr-defined]
+    asyncio.run(fill_form(_MovingList(), [], model, WEAK, "brief"))  # type: ignore[arg-type]
+    return model
+
+
+def test_the_loop_check_asks_the_default_model_when_the_client_is_on_orcarouter(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(apply_module, "LOOP_CHECK_AFTER", 2)
+    model = _judged_run(DEFAULT_BASE_URL + "/")
+    # The turns that fill the form use the person's model; only the check is asked of the default one.
+    assert [request["model"] for request in model.requests] == [WEAK, WEAK, DEFAULT_MODEL, WEAK]
+
+
+@pytest.mark.parametrize("base_url", ["https://example.test/v1", None])
+def test_the_loop_check_asks_the_persons_model_when_the_client_is_elsewhere(monkeypatch: pytest.MonkeyPatch, base_url: str | None) -> None:
+    monkeypatch.setattr(apply_module, "LOOP_CHECK_AFTER", 2)
+    assert {request["model"] for request in _judged_run(base_url).requests} == {WEAK}
+
+
+def test_a_run_stopped_for_the_exact_repeat_says_so_with_the_tool_names_and_nothing_of_their_arguments() -> None:
+    email = "ada.rossi@example.test"
+    steps = [[tool_call("browser_fill", selector="#email", value=email)] for _ in range(LOOP_STOP)]
+    report = asyncio.run(fill_form(ScriptedBrowser(), [], ScriptedModel(*steps), "m", "brief"))  # type: ignore[arg-type]
+    assert report.blocked_by == apply_module.STUCK
+    assert report.stuck == {"by": "repeat", "turn": LOOP_STOP, "calls": {"browser_fill": LOOP_STOP}}
+    assert email not in json.dumps(report.stuck)
+
+
+def test_a_run_stopped_by_the_judge_says_so_with_the_count_of_each_tool_in_its_last_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(apply_module, "LOOP_CHECK_AFTER", 4)
+    monkeypatch.setattr(apply_module, "LOOP_CHECK_CALLS", 3)
+    email = "ada.rossi@example.test"
+    verdict = json.dumps({"stuck": True, "confidence": 0.95, "reason": "fills the same fields again"})
+    steps = [
+        [tool_call("browser_press_key", key="ArrowDown")],
+        [tool_call("browser_click", selector="#a")],
+        [tool_call("browser_fill", selector="#email", value=email)],
+        # A name a model made up is counted as "other": it could hold anything.
+        [tool_call(f"fill {email}", value=email)],
+        verdict,
+    ]
+    report = asyncio.run(fill_form(_MovingList(), [], ScriptedModel(*steps), "m", "brief"))  # type: ignore[arg-type]
+    assert report.blocked_by == apply_module.STUCK
+    # Only the last three calls are counted: the key press before them is not.
+    assert report.stuck == {"by": "judge", "turn": 4, "calls": {"browser_click": 1, "browser_fill": 1, "other": 1}}
+    assert email not in json.dumps(report.stuck)
+
+
+def test_a_form_that_ends_without_going_round_in_circles_carries_no_stuck_note(tmp_path: Path) -> None:
+    outcome = run(ScriptedModel(ready(), VERIFIED), ScriptedBrowser({"#send": SUBMIT}), tmp_path / "proof.png")
+    assert outcome.status == "submitted" and outcome.stuck is None
+
+
+def test_a_stuck_run_reaches_the_outcome(tmp_path: Path) -> None:
+    steps = [[tool_call("browser_press_key", key="End")] for _ in range(LOOP_STOP)]
+    outcome = run(ScriptedModel(*steps), ScriptedBrowser(), tmp_path / "proof.png")
+    assert outcome.status == "blocked" and outcome.reason == apply_module.STUCK
+    assert outcome.stuck == {"by": "repeat", "turn": LOOP_STOP, "calls": {"browser_press_key": LOOP_STOP}}
 
 
 class SignedOutMailbox(ScriptedBrowser):

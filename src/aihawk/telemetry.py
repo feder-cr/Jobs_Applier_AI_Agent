@@ -19,7 +19,10 @@ same list:
   opened, never the browser server's own words), the kind of site (the
   plugin's name, or the vendor's name when the form's host is a known application site, else "other": never the host),
   the models, the gateway, the steps, the seconds, and the tokens each model took in and gave out. No price and no
-  currency: the owner turns tokens into money himself.
+  currency: the owner turns tokens into money himself. When the run ended stuck, where it went round in circles: `stuck_by`
+  (the exact repeat of the same calls, or the model's verdict), `stuck_turn`, and `stuck_calls`, how many times each tool's
+  name was called in its last twenty calls. Tool names only, the browser's own: never an argument, selector, value, answer,
+  address or anything a page said.
 
 The owner's decisions: it cannot be turned off (2026-11-11), and this list is kept here, not in the README (2026-11-12).
 A dry run is not counted. The project
@@ -60,7 +63,7 @@ EVENTS: dict[str, tuple[str, ...]] = {
     "jobs_scored": ("postings", "answered", "seconds", "scoring_model"),
     "application": (
         "outcome", "reason", "site", "plugin", "forms_model", "scoring_model", "gateway", "steps", "seconds", "models",
-        "input_tokens", "output_tokens", "tokens_by_model",
+        "input_tokens", "output_tokens", "tokens_by_model", "stuck_by", "stuck_turn", "stuck_calls",
     ),
 }  # fmt: skip
 
@@ -166,7 +169,8 @@ class Telemetry:
             "event": event,
             "distinct_id": self._id,
             "properties": {
-                **properties,
+                # A property that has no value is not sent: `application` names the stuck ones always, and a run that was not stuck has none.
+                **{name: value for name, value in properties.items() if value is not None},
                 "version": __version__,
                 "os": platform.system(),
                 # No person profile: the id only counts people, and an event with no profile costs PostHog less.
@@ -195,16 +199,19 @@ class Telemetry:
 
     def application(
         self, outcome: str, reason: str, steps: int, seconds: float, plugin: str | None, host: str,
-        forms_model: str, scoring_model: str, tokens: dict[str, tuple[int, int]],
+        forms_model: str, scoring_model: str, tokens: dict[str, tuple[int, int]], stuck: dict[str, Any] | None = None,
     ) -> None:
         """How an application went. `tokens` is what each model took in and gave out on it, as the gateway counted them. The
-        site is the plugin's name, or the vendor of the form's host: the host itself stays here."""
+        site is the plugin's name, or the vendor of the form's host: the host itself stays here. `stuck`, for a run
+        the watch stopped, is how (by), at which turn and the count of each tool's name in its last calls: sent only when there is one."""
+        where = stuck or {}
         self.track(
             "application", outcome=outcome, reason=reason, site=plugin or vendor_of(host), plugin=plugin is not None,
             forms_model=forms_model, scoring_model=scoring_model, gateway=GATEWAY, steps=steps, seconds=seconds,
             models=sorted(tokens), input_tokens=sum(taken for taken, _ in tokens.values()),
             output_tokens=sum(given for _, given in tokens.values()),
             tokens_by_model={model: {"input": taken, "output": given} for model, (taken, given) in tokens.items()},
+            stuck_by=where.get("by"), stuck_turn=where.get("turn"), stuck_calls=where.get("calls"),
         )
 
     def closed(self) -> None:
