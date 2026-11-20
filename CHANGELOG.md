@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The mail is asked about again at the start, once each time AIHawk opens, until a mailbox is connected (one left for later is asked about again the next time): asked only after a batch, the question came when no one was there. A code that cannot be read still asks after the batch if the mailbox was set up and its sign-in lapsed.
 - The check that stops a run going round in circles is read by a stronger model: on OrcaRouter it asks the default model, not the one that fills the form, so a small forms model no longer judges its own loop. Anywhere else it asks the model you chose, as before.
 - An application that ends stuck tells its makers where it went round in circles: how it was stopped, at which turn, and how many times each browser tool was called in its last 20 calls. Tool names only, nothing about the person, the job or the page.
 - An application to a posting that is clearly closed ends in seconds, without the browser: AIHawk asks the posting's own site first, with one plain request, for Lever, Ashby, Greenhouse, Workable, BambooHR, Paylocity and Workday, and the list says "the posting is closed". The other sites, and any check that does not answer clearly, are tried as before.
