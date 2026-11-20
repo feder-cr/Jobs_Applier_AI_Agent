@@ -236,6 +236,39 @@ def test_each_application_reports_only_the_tokens_it_used_and_the_models_that_to
     assert second["tokens_by_model"] == {"forms": {"input": 7, "output": 3}}
 
 
+def _applied_with(tmp_path: Path, tracked: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch, outcome: Outcome) -> dict[str, Any]:
+    """The properties of the application event that an application ending as `outcome` sends."""
+    (tmp_path / "cv.md").write_text("# Ada Rossi\n", encoding="utf-8")
+    (tmp_path / "data" / "cvs").mkdir(parents=True)
+    (tmp_path / "data" / "cvs" / "original-cv.txt").write_text("Ada Rossi", encoding="utf-8")
+    session = Session(tmp_path)
+    session._client = SimpleNamespace()  # type: ignore[assignment]
+
+    async def apply_to_job(*_: Any, **__: Any) -> Outcome:
+        return outcome
+
+    monkeypatch.setattr(session_module, "apply_to_job", apply_to_job)
+    job = Job("https://jobs.lever.co/acme/1", "Acme", "Engineer", "Rome", "https://jobs.lever.co/acme/1", "a", "")
+    session.store.add_all([job])
+    item = session.store.get(job.id)
+    assert item is not None
+    asyncio.run(session.apply(item, lambda line: None))
+    (properties,) = [event["properties"] for event in tracked if event["event"] == "application"]
+    return properties
+
+
+def test_a_stuck_application_says_where_it_went_round_in_circles(tmp_path: Path, tracked: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch) -> None:
+    stuck = {"by": "judge", "turn": 40, "calls": {"browser_fill": 8, "browser_click": 6, "browser_snapshot": 4}}
+    properties = _applied_with(tmp_path, tracked, monkeypatch, Outcome("blocked", "stuck", reason="stuck", steps=40, stuck=stuck))
+    assert (properties["stuck_by"], properties["stuck_turn"]) == ("judge", 40)
+    assert properties["stuck_calls"] == {"browser_fill": 8, "browser_click": 6, "browser_snapshot": 4}
+
+
+def test_an_application_that_was_not_stuck_sends_none_of_it(tmp_path: Path, tracked: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch) -> None:
+    properties = _applied_with(tmp_path, tracked, monkeypatch, Outcome("submitted", "sent", steps=2))
+    assert not [name for name in properties if name.startswith("stuck_")]
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows' own settings")
 def test_windows_tells_a_country_of_two_capital_letters() -> None:
     assert re.fullmatch(r"[A-Z]{2}", telemetry.windows_country())

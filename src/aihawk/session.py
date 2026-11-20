@@ -354,7 +354,7 @@ class Session:
         # model took in and gave out on this application, as the gateway counted them: no price, no currency.
         self.telemetry.application(
             outcome.status, outcome.reason, outcome.steps, round(time.monotonic() - started, 1), plugin.name if plugin else None, host,
-            self.config.model, self.config.decision_model, used,
+            self.config.model, self.config.decision_model, used, outcome.stuck,
         )
         # The file for the person outside the app. One that another program holds open must not stop the next send.
         try:
