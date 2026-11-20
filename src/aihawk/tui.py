@@ -172,6 +172,8 @@ class AIHawk(App[None]):
         self.signing_in = False
         # Whether the person left the mail for later in this run: a site's code is asked about once, not at every application.
         self.mail_left = False
+        # Whether the mail was asked about at the start of this run: a start made again (a new resume, a setting) does not ask twice.
+        self.mail_asked = False
         # Why the key is being asked for again, for the question to say; and whether the start stopped for want of one.
         self.key_problem = ""
         self.sending = ""
@@ -338,6 +340,14 @@ class AIHawk(App[None]):
                 return
             if (self.resume or session.needs_resume()) and not await self.read_resume():
                 return
+            # The mail is asked about once each time AIHawk opens, until a mailbox is connected, and not later: asked only after a
+            # batch, it came when no one was there. One left for later in an earlier run is asked about again.
+            if session.mail()[1] not in MAILBOXES and not self.mail_asked:
+                self.mail_asked = True
+                session.telemetry.step("mail_asked")
+                ready = await self.set_up_mail()
+                session.telemetry.step("mail_ready" if ready else "mail_later")
+                self.mail_left = not ready
             # The jobs scored before, by an earlier search: the first pages, sorted as they are. While the jobs still come
             # there is the one page, the best so far, which each round of scoring makes again.
             scored = [item.job.id for item in session.store.all() if item.score is not None]

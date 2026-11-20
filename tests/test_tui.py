@@ -80,9 +80,9 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     folder = tmp_path / "home"
     folder.mkdir()
     (folder / "aihawk.yaml").write_text(f"database: {published(tmp_path)}\n", encoding="utf-8")
-    # A home where the mail was already left for later: the first-run question about it has its own tests.
+    # A home where a mailbox is already set up, so the start does not ask about it: the question has its own tests.
     store = Store(folder / "data" / "jobs.db")
-    store.set_answer("mail_provider", "later")
+    store.set_answer("mail_provider", "gmail")
     store.close()
     return folder
 
@@ -1077,12 +1077,10 @@ def steps_sent(tracked: list[dict[str, Any]]) -> list[str]:
     return [event["properties"]["step"] for event in tracked if event["event"] == "start_step"]
 
 
-def test_the_mail_is_not_asked_at_the_start_and_is_asked_at_the_first_application_that_needs_a_code_and_that_one_is_sent_again(
+def test_a_mailbox_set_up_is_not_asked_at_the_start_and_a_code_it_cannot_read_asks_after_the_batch_and_that_one_is_sent_again(
     home: Path, resume: Path, restored_apply: Any, tracked: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store = Store(home / "data" / "jobs.db")
-    store.set_answer("mail_provider", "")
-    store.close()
+    # The mailbox is set up, as the home's is, but its sign-in has lapsed: only a code it cannot read asks again.
     server = ScriptedServer(page={"url": "https://mail.google.com/mail/u/0/#inbox", "text": "Inbox"})
     scripted_server(monkeypatch, server)
     calls: list[Any] = []
@@ -1114,7 +1112,7 @@ def test_the_mail_is_not_asked_at_the_start_and_is_asked_at_the_first_applicatio
     assert [step for step in steps_sent(tracked) if step.startswith("mail")] == ["mail_asked", "mail_ready"]
 
 
-def test_the_mail_left_for_later_is_not_asked_again_by_the_next_application_of_the_same_run(
+def test_the_mail_left_for_later_at_the_start_is_not_asked_again_by_a_batch_with_a_code_in_the_same_run(
     home: Path, resume: Path, restored_apply: Any, tracked: list[dict[str, Any]]
 ) -> None:
     store = Store(home / "data" / "jobs.db")
@@ -1125,25 +1123,94 @@ def test_the_mail_left_for_later_is_not_asked_again_by_the_next_application_of_t
     async def run() -> None:
         app = scripted_app(home, resume)
         async with app.run_test(size=(140, 40)) as pilot:
-            await apply_to_the_first_job(pilot, app, [NO_MAIL, NO_MAIL], calls)
+            await settle(pilot, app)
+            assert app.screen.question == "Some job sites email a code to confirm it is you. Which email do you apply with?"
             await pilot.press("escape")
-            await wait_for_apply(pilot, app)
-            assert "Mail left for later: e, then Your mail." in app.query_one(Said).said
-            assert app.session.mail()[1] == "later" and len(calls) == 1
-            # The next application that needs a code says so and goes on: there is no second question in this run.
+            await settle(pilot, app)
+            assert app.session.mail()[1] == "later" and companies(app) == ["Bestco", "Lowly", "Noplugin"]
+            assert app.query_one(Said).said.count("Mail left for later: e, then Your mail.") == 1
+            fake_apply(app, [NO_MAIL], calls)
             await pilot.press("space", "a")
             await wait_for_screen(pilot, SendBatch)
             await pilot.press("enter")
             await wait_for_apply(pilot, app)
-            assert not isinstance(app.screen, TextPrompt) and len(calls) == 2
+            # The batch's code says the mail was left and goes on: there is no second question in this run.
+            assert not isinstance(app.screen, TextPrompt) and len(calls) == 1
             assert app.query_one(Said).said.count("Mail left for later: e, then Your mail.") == 2
 
     asyncio.run(run())
     assert [step for step in steps_sent(tracked) if step.startswith("mail")] == ["mail_asked", "mail_later"]
 
 
+def test_the_mail_is_asked_at_the_start_after_the_resume_and_before_the_jobs_when_no_mailbox_is_set_up(
+    home: Path, resume: Path, tracked: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = Store(home / "data" / "jobs.db")
+    store.set_answer("mail_provider", "")
+    store.close()
+    scripted_server(monkeypatch, ScriptedServer(page={"url": "https://mail.google.com/mail/u/0/#inbox", "text": "Inbox"}))
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
+            # The resume is read; the jobs are not shown yet.
+            assert app.screen.question == "Some job sites email a code to confirm it is you. Which email do you apply with?"
+            assert app.session.config.cv.is_file() and companies(app) == []
+            assert steps_sent(tracked).count("mail_asked") == 1 and "mail_ready" not in steps_sent(tracked)
+            app.screen.query_one(Input).value = "ada@gmail.com"
+            await pilot.press("enter")
+            await wait_for_screen(pilot, SignIn)
+            await pilot.press("enter")
+            await settle(pilot, app)
+            assert companies(app) == ["Bestco", "Lowly", "Noplugin"] and not app.mail_left
+
+    asyncio.run(run())
+    assert answers_of(load_config(home))["mail_provider"] == "gmail"
+    assert [step for step in steps_sent(tracked) if step.startswith("mail")] == ["mail_asked", "mail_ready"]
+
+
+def test_the_mail_left_for_later_in_an_earlier_launch_is_asked_again_in_a_new_one(home: Path, resume: Path, tracked: list[dict[str, Any]]) -> None:
+    store = Store(home / "data" / "jobs.db")
+    store.set_answer("mail_provider", "later")
+    store.close()
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
+            assert isinstance(app.screen, TextPrompt) and app.screen.question == "Some job sites email a code to confirm it is you. Which email do you apply with?"
+            await pilot.press("escape")
+            await settle(pilot, app)
+            assert app.mail_left and app.session.mail()[1] == "later"
+
+    asyncio.run(run())
+    assert [step for step in steps_sent(tracked) if step.startswith("mail")] == ["mail_asked", "mail_later"]
+
+
+def test_the_mail_is_not_asked_twice_in_one_launch_when_the_start_runs_again(home: Path, resume: Path, tracked: list[dict[str, Any]]) -> None:
+    store = Store(home / "data" / "jobs.db")
+    store.set_answer("mail_provider", "")
+    store.close()
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
+            assert isinstance(app.screen, TextPrompt)
+            await pilot.press("escape")
+            await settle(pilot, app)
+            # The start made again in the same launch, as a new resume or a setting does, does not ask a second time.
+            app.start()
+            await settle(pilot, app)
+            assert not isinstance(app.screen, TextPrompt) and companies(app) == ["Bestco", "Lowly", "Noplugin"]
+
+    asyncio.run(run())
+    assert [step for step in steps_sent(tracked) if step.startswith("mail")] == ["mail_asked", "mail_later"]
+
+
 def test_the_mail_question_is_plain_and_an_address_that_is_neither_gmail_nor_outlook_is_asked_once_then_left(
-    home: Path, resume: Path, restored_apply: Any
+    home: Path, resume: Path
 ) -> None:
     store = Store(home / "data" / "jobs.db")
     store.set_answer("mail_provider", "")
@@ -1152,8 +1219,8 @@ def test_the_mail_question_is_plain_and_an_address_that_is_neither_gmail_nor_out
     async def run() -> None:
         app = scripted_app(home, resume)
         async with app.run_test(size=(80, 24)) as pilot:
-            await apply_to_the_first_job(pilot, app, [NO_MAIL])
-            assert app.screen.question == "A site sent a code to your email. Which email is it, so AIHawk can read it?"
+            await settle(pilot, app)
+            assert app.screen.question == "Some job sites email a code to confirm it is you. Which email do you apply with?"
             assert str(app.screen.query_one(".hint", Static).content) == "AIHawk opens that inbox in its browser only to read those codes · Enter · Esc later"
             app.screen.query_one(Input).value = "ada@yahoo.com"
             await pilot.press("enter")
@@ -1174,9 +1241,6 @@ def test_the_mail_question_is_plain_and_an_address_that_is_neither_gmail_nor_out
 def test_a_mailbox_that_still_shows_its_sign_in_page_is_a_question_with_no_empty_input(
     home: Path, resume: Path, restored_apply: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store = Store(home / "data" / "jobs.db")
-    store.set_answer("mail_provider", "")
-    store.close()
     server = ScriptedServer(page={"url": "https://accounts.google.com/signin", "text": "Sign in"})
 
     async def stuck(name: str, arguments: dict[str, Any] | None = None) -> Any:
@@ -1207,9 +1271,6 @@ def test_a_mailbox_that_still_shows_its_sign_in_page_is_a_question_with_no_empty
 
 
 def test_escape_on_the_sign_in_is_later_not_done(home: Path, resume: Path, restored_apply: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    store = Store(home / "data" / "jobs.db")
-    store.set_answer("mail_provider", "")
-    store.close()
     # The inbox would show if it were looked at: Escape must not count as having signed in.
     server = ScriptedServer(page={"url": "https://mail.google.com/mail/u/0/#inbox", "text": "Inbox"})
     scripted_server(monkeypatch, server)
