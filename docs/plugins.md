@@ -43,7 +43,7 @@ Start with what the model will see. Say whether the form is on the same page as 
 
 The last paragraph starts with `After sending:`. It says how the site shows that the application was received, which e-mail usually follows, and the rule that decides it:
 
-> After sending: read the page: if the form is still there, the application was not received.
+> After sending: read the page: the form still on the page with no error on it is not a confirmation but unknown, as a send can take seconds to leave it; only a validation error or a failure message means rejected.
 
 No code reads this paragraph; the model does. Say what the confirmation looks like for this site, and say that the form still being on the page means nothing was received. Do not rely on one exact phrase, because the wording is set per job board.
 
@@ -105,7 +105,7 @@ Some forms show a captcha when sending, from an hCaptcha widget with no size tha
 
 The submit control is `#btn-submit`, "Submit application".
 
-After sending: the "Success!" shown after the CV upload is the upload, not the send, so read the page after submitting. After a send the address moves to one ending in `/thanks` and says "Application submitted!". It can take more than a few seconds to appear. If the form is still on the page, the application was not received.
+After sending: the "Success!" shown after the CV upload is the upload, not the send, so read the page after submitting. After a send the address moves to one ending in `/thanks` and says "Application submitted!". It can take more than a few seconds to appear. The form still on the page with no error on it is not a confirmation but unknown, as a send can take seconds to leave it; only a validation error or a failure message means rejected.
 ```
 
 ## Try a plugin without touching the repository

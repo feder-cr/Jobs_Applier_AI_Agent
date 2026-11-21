@@ -21,4 +21,4 @@ The submit control is `form > button[type='submit']`, the button "Submit applica
 
 A Cloudflare box "verifying you are not a robot" can sit above the submit button. Tick it before the form is sent. The one real send on this site died there, with the button left on "Submitting…" beside an unticked box. If the button reads "Submitting…", do not click it again: find that box, click its centre with browser_click_at because it sits in a frame, and read the page. If the button still reads "Submitting…" after two reads, call finish_form with status blocked and name the Cloudflare check. Whether ticking it releases the send is not known.
 
-After sending: read the page: if the form is still there, the application was not received.
+After sending: read the page: the form still on the page with no error on it is not a confirmation but unknown, as a send can take seconds to leave it; only a validation error or a failure message means rejected.

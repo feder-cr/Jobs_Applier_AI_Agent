@@ -22,4 +22,4 @@ The "Preliminary questions" step often asks for the right to work, sponsorship, 
 
 The last step's footer control sends the application: `[data-test='footer-submit']`, labelled "Submit". Its label is what the page says, for example "Submit application". Never click it. Name it as the submit control only when a plain CSS selector matches that control alone.
 
-After sending: read the page: if the form is still there, the application was not received.
+After sending: read the page: the form still on the page with no error on it is not a confirmation but unknown, as a send can take seconds to leave it; only a validation error or a failure message means rejected.

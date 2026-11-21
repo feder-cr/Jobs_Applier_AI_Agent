@@ -17,4 +17,4 @@ A required field has a * with the title "This field is required and can not be l
 
 The submit control has `data-testid="submit-application-form-button"`, labelled "Send", "Versturen" or "Senden".
 
-After sending: the page says "Fertig!" and "Danke für deine Bewerbung!" on a German form, at an address ending in `/applied`. Read the page: if the form is still there, the application was not received.
+After sending: the page says "Fertig!" and "Danke für deine Bewerbung!" on a German form, at an address ending in `/applied`. Read the page: the form still on the page with no error on it is not a confirmation but unknown, as a send can take seconds to leave it; only a validation error or a failure message means rejected.

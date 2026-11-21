@@ -17,4 +17,4 @@ Race, gender and veteran questions (`race_ethnicity`, `gender`, `eeoc.veteran_st
 
 The send control is the form's last button, labelled "Invia candidatura" on an Italian page. On some forms it is `button[type='submit']`; on others it is `type='button'`, and `button[type='button']` then matches several buttons, the first of them hidden: seen on a real form, where the click went to a hidden button and nothing was sent. Name it by its text.
 
-After sending: the page says "Application Submitted" and "Your application has been submitted successfully. Good luck!", at an address ending in `/apply/submitted`. Read the page: if the form is still there, the application was not received.
+After sending: the page says "Application Submitted" and "Your application has been submitted successfully. Good luck!", at an address ending in `/apply/submitted`. Read the page: the form still on the page with no error on it is not a confirmation but unknown, as a send can take seconds to leave it; only a validation error or a failure message means rejected.

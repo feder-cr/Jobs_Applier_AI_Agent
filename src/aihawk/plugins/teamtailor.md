@@ -13,4 +13,4 @@ A tag field (Skills, for example) turns each typed skill into a chip when Enter 
 
 Upload the CV to `#candidate_resume_remote_url` ("Upload resume"). Do not click "Apply with LinkedIn". The cookie banner's decline button is found by its `aria-label` in the page's language, such as `[aria-label='Rifiuta tutti i cookie non necessari']`. The banner is open on the page: decline or leave it, do not treat it as a question. Sign-in is not needed. The send control is `input[name=commit]`, "Submit application": report ready only on the page before it.
 
-After sending: the address gains `/thanks/` and the page says it received the application, in Spanish "Gracias por la solicitud" and "Hemos recibido tu solicitud". Read the page: if the form is still there, the application was not received.
+After sending: the address gains `/thanks/` and the page says it received the application, in Spanish "Gracias por la solicitud" and "Hemos recibido tu solicitud". Read the page: the form still on the page with no error on it is not a confirmation but unknown, as a send can take seconds to leave it; only a validation error or a failure message means rejected.
