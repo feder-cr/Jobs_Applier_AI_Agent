@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A form stopped because its model only talked, three answers in a row with no tool call, also tells its makers where it stopped (`idle`), as the other two stops do.
 - On every site with a plugin, a form still on the page after the send, with no error, is read again as unknown instead of being taken for a refusal: twelve plugins, and the plugin template in docs/plugins.md, said the opposite of the rule every site follows, and a send still leaving the page could be recorded as refused by the form (#1560).
 - The mail is asked about again at the start, once each time AIHawk opens, until a mailbox is connected (one left for later is asked about again the next time): asked only after a batch, the question came when no one was there. A code that cannot be read still asks after the batch if the mailbox was set up and its sign-in lapsed.
 - The check that stops a run going round in circles is read by a stronger model: on OrcaRouter it asks the default model, not the one that fills the form, so a small forms model no longer judges its own loop. Anywhere else it asks the model you chose, as before.

@@ -20,7 +20,7 @@ same list:
   plugin's name, or the vendor's name when the form's host is a known application site, else "other": never the host),
   the models, the gateway, the steps, the seconds, and the tokens each model took in and gave out. No price and no
   currency: the owner turns tokens into money himself. When the run ended stuck, where it went round in circles: `stuck_by`
-  (the exact repeat of the same calls, or the model's verdict), `stuck_turn`, and `stuck_calls`, how many times each tool's
+  (the exact repeat of the same calls, the model's verdict, or idle: answers with no tool call), `stuck_turn`, and `stuck_calls`, how many times each tool's
   name was called in its last twenty calls. Tool names only, the browser's own: never an argument, selector, value, answer,
   address or anything a page said.
 

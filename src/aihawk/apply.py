@@ -459,8 +459,8 @@ class _Watch:
         return 0
 
     def _stopped(self, by: str) -> None:
-        """Notes how the run was stopped, `by` the exact repeat or the judge, with the turn and how many calls of each tool the
-        last LOOP_CHECK_CALLS were. Tool names only: no argument, selector, value or answer, and nothing from a page."""
+        """Notes how the run was stopped, `by` the exact repeat, the judge, or idle (IDLE_STOP answers with no tool call in a
+        row), with the turn and how many calls of each tool the last LOOP_CHECK_CALLS were. Tool names only: no argument, selector, value or answer, and nothing from a page."""
         counts = Counter(_tool_name(call.name) for call in self.calls[-LOOP_CHECK_CALLS:])
         self.stuck = {"by": by, "turn": self.turns, "calls": dict(counts.most_common())}
 
@@ -519,7 +519,8 @@ async def fill_form(session: Browser, tools: list[dict[str, Any]], client: Async
         messages.append(message.model_dump(exclude_none=True))
         if not message.tool_calls:
             if why := watch.talked():
-                return _blocked(why, STUCK, watch.turns)
+                watch._stopped("idle")
+                return _blocked(why, STUCK, watch.turns, watch.stuck)
             messages.append({"role": "user", "content": "Use the tools, and end with finish_form."})
             continue
         watch.turn()
