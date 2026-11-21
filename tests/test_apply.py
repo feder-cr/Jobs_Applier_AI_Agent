@@ -219,6 +219,8 @@ def test_a_model_that_only_talks_is_stopped() -> None:
     model = ScriptedModel("thinking", "still thinking", "nearly")
     report = asyncio.run(fill_form(ScriptedBrowser(), [], model, "m", "brief"))  # type: ignore[arg-type]
     assert report.status == "blocked" and "without using the tools" in report.summary
+    # Where it stopped goes to the makers as for the other stops: idle, at turn 0, with no call made.
+    assert report.blocked_by == "stuck" and report.stuck == {"by": "idle", "turn": 0, "calls": {}}
 
 
 def test_waiting_for_a_code_that_never_comes_ends_at_the_fifth_look_with_nothing_new() -> None:
