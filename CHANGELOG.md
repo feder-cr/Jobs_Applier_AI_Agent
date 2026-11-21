@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The rules every form gets now say their own exceptions, since they win over a site's instructions: a required field the page refuses after three tries, or a stop a site's instructions name (a button that stays disabled, a phone number refused twice), ends the form, where the rules said a required field is left only when it asks for a fact nobody gave. The form's own report no longer lists a login as a reason to stop without saying when.
 - A sign-in or Create Account page is no longer a reason to stop by itself: the rules every site follows said to block on any login wall, and they win over a site's own instructions, so on Workday and iCIMS a model could stop instead of making the account those instructions describe. It blocks only when it cannot get past by signing in or making the account (#1563).
 - A form stopped because its model only talked, three answers in a row with no tool call, also tells its makers where it stopped (`idle`), as the other two stops do.
 - On every site with a plugin, a form still on the page after the send, with no error, is read again as unknown instead of being taken for a refusal: twelve plugins, and the plugin template in docs/plugins.md, said the opposite of the rule every site follows, and a send still leaving the page could be recorded as refused by the form (#1560).

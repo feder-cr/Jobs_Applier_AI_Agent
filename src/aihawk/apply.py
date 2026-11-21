@@ -188,7 +188,7 @@ FINISH_TOOL = {
                     "type": "string",
                     "enum": ["ready", "blocked"],
                     "description": "ready: every required field is filled. blocked: the form cannot be used (a puzzle "
-                    "captcha, a login, a closed posting, a broken page).",
+                    "captcha, a sign-in you cannot get past, a closed posting, a broken page).",
                 },
                 "blocked_by": {
                     "type": "string",
@@ -218,7 +218,8 @@ You fill in one job application form in a browser, for the candidate, from the C
   answer empty.
 - That fallback never invents a fact about the candidate: a reference's name, a licence or certificate number, a
   qualification they do not claim. A required field that asks for one ends the form: call finish_form with status blocked
-  and name that field. This is the one case where a required field is left for the person.
+  and name that field. Of the fields you have no answer for, this is the one case where a required one is left for the
+  person.
 - Tick the boxes the form requires.
 - Decline optional demographic questions (gender, ethnicity, disability, veteran status) with the form's "prefer not
   to say" option unless the answers text gives an answer.
@@ -229,6 +230,8 @@ You fill in one job application form in a browser, for the candidate, from the C
   CSS selector of the submit control. Status ready needs that selector: with no selector for it, report blocked.
 - An action that leaves the page as it was will not work the second time: never repeat it, do something else. A key that
   scrolls nothing means the form scrolls inside its own container: read and reach its fields with browser_evaluate.
+- A required field or control the page still refuses after three different tries, or a stop the instructions for that
+  site name, ends the form: call finish_form with status blocked and name it. Going on trying is worse than stopping.
 - A captcha shown as a box to tick: click it. A puzzle or image challenge, a closed posting, or a sign-in page you
   cannot get past by signing in or making the account as the next rule and the instructions for that site say: call
   finish_form with status blocked.
