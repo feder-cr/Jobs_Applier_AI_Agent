@@ -26,4 +26,4 @@ Dropdowns are `div[role="combobox"]` showing "--" until a choice is made, such a
 
 Demographic questions on the last steps are voluntary, and they are where this site eats its steps: two tries on one of them is enough, then move on. `#acknowledgements\.eeoGender`, `#acknowledgements\.racialOrEthnicGroup`, `#acknowledgements\.disability`, `#acknowledgements\.militaryService` and `#expandedIdentityQuestions\.identifyAsLegalGender\.0` are listboxes with their options under `#<id>__listbox`: take the one whose text declines to answer, which was the last option in each of them, and never a guess at an answer. `#ethnicityOptions` and `#pronounOptions` are typeaheads: type `Prefer not to say` and take the first row of `#<id>-dropdown-list-container`, which reads "Create Prefer not to say" and sets the value all the same.
 
-After sending: read the page: if the form is still there, the application was not received.
+After sending: read the page: the form still on the page with no error on it is not a confirmation but unknown, as a send can take seconds to leave it; only a validation error or a failure message means rejected.

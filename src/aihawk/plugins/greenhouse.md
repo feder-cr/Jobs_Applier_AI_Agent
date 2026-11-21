@@ -20,4 +20,4 @@ Pages at boards.greenhouse.io have the same fields and layout, with more questio
 
 The submit control is the button "Submit application".
 
-After sending: the page usually changes to the employer's confirmation page, which says the organization received the application. The wording is set per job board, so do not look for one exact phrase. The confirmation page is usually at the job's `/confirmation` address. If the form is still on the page, the application was not received.
+After sending: the page usually changes to the employer's confirmation page, which says the organization received the application. The wording is set per job board, so do not look for one exact phrase. The confirmation page is usually at the job's `/confirmation` address. The form still on the page with no error on it is not a confirmation but unknown, as a send can take seconds to leave it; only a validation error or a failure message means rejected.

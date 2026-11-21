@@ -14,4 +14,4 @@ The submit control is `form button[type="submit"]`, labelled "Bewerbung senden" 
 
 A Cloudflare Turnstile box can sit above the send control, and it passed on two postings of four. If the send control stays disabled with every required field filled, call finish_form with status blocked and say whether a Turnstile box was there and whether it was ticked.
 
-After sending: read the page: if the form is still there, the application was not received.
+After sending: read the page: the form still on the page with no error on it is not a confirmation but unknown, as a send can take seconds to leave it; only a validation error or a failure message means rejected.

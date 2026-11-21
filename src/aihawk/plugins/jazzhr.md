@@ -14,4 +14,4 @@ The send control is `#resumator-submit-resume` (`input[type=button]`, value "Sub
 
 A reCAPTCHA box may sit just above the send control, inside a frame, so it is clicked from a screenshot. A tick goes stale in a couple of minutes, so it is the last thing done, and a second tick undoes the first. A puzzle in its place ends the form: call finish_form with status blocked and say the captcha became a puzzle.
 
-After sending: read the page: if the form is still there, the application was not received.
+After sending: read the page: the form still on the page with no error on it is not a confirmation but unknown, as a send can take seconds to leave it; only a validation error or a failure message means rejected.

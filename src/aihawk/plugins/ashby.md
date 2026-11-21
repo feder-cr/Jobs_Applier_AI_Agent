@@ -15,4 +15,4 @@ A consent checkbox `#<uuid>__systemfield_data_consent_ack-labeled-checkbox` is r
 
 The submit control is the button "Submit Application", which no id names: on a real form `#form > button:last-of-type` matched it alone. On two forms in the trials it stayed disabled and the click did not land, so nothing was sent: read the page for a required field still empty, fill it, and read the page again. If it stays disabled, call finish_form with status blocked and name the fields the page marks as missing. Why it stays disabled on a form that looks complete is not known.
 
-After sending: a real send showed "Your application was successfully submitted. We'll contact you if there are next steps!". Read the page: if the form is still there, the application was not received.
+After sending: a real send showed "Your application was successfully submitted. We'll contact you if there are next steps!". Read the page: the form still on the page with no error on it is not a confirmation but unknown, as a send can take seconds to leave it; only a validation error or a failure message means rejected.

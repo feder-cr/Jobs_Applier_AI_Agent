@@ -20,4 +20,4 @@ A reCAPTCHA box may sit just above the send button. A tick goes stale in a coupl
 
 The send control is the `button[type=submit]` labelled "Submit Application".
 
-After sending: read the page: if the form is still there, the application was not received.
+After sending: read the page: the form still on the page with no error on it is not a confirmation but unknown, as a send can take seconds to leave it; only a validation error or a failure message means rejected.
