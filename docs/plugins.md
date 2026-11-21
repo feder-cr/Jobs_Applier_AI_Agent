@@ -47,7 +47,7 @@ The last paragraph starts with `After sending:`. It says how the site shows that
 
 No code reads this paragraph; the model does. Say what the confirmation looks like for this site, and say that the form still being on the page means nothing was received. Do not rely on one exact phrase, because the wording is set per job board.
 
-The model reports one of two results when it finishes a form: `ready`, every required field filled, or `blocked`. Status `ready` needs the send control's selector, so always name that control. The rules every form gets already cover a captcha puzzle, a login wall, a closed posting and a required fact about the candidate that the CV does not give, so say `blocked` only for what is this site's own.
+The model reports one of two results when it finishes a form: `ready`, every required field filled, or `blocked`. Status `ready` needs the send control's selector, so always name that control. The rules every form gets already cover a captcha puzzle, a sign-in page that cannot be passed by signing in or making the account, a closed posting and a required fact about the candidate that the CV does not give, so say `blocked` only for what is this site's own.
 
 ## When the model is stuck
 
