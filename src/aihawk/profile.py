@@ -12,7 +12,7 @@ from typing import Any
 from xml.etree import ElementTree
 
 import yaml
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, BadRequestError, InternalServerError, NotFoundError
 from pypdf import PdfReader
 from pypdf.errors import PyPdfError
 
@@ -169,10 +169,28 @@ def read_resume(path: Path) -> str:
     return text
 
 
+# The quick model's route refusing the request (400), not knowing the model (404) or not answering (5xx): the resume is
+# read again with the forms model. On 2026-11-21 OrcaRouter's route for google/gemini-3.5-flash refused the profile's schema
+# every time ("Unknown name additionalProperties" in its nested lists), then answered 503: 23 computers stopped there in a
+# week, 11 of them for good, while deepseek-v4.1-flash read the same resume with the same schema.
+FALLBACK_ERRORS = (BadRequestError, NotFoundError, InternalServerError)
+
+
+async def read_profile(client: AsyncOpenAI, config: Config, cv: str) -> dict[str, Any]:
+    """What the search needs from the resume: asked of the quick model, and of the forms model when the quick one's route
+    refuses or does not answer. A refused key or an empty account is not that: it fails the same way on any model."""
+    try:
+        return await structured(client, config.quick_model, PROFILE_SYSTEM, cv, "search_profile", PROFILE_SCHEMA)
+    except FALLBACK_ERRORS:
+        if config.model == config.quick_model:
+            raise
+        return await structured(client, config.model, PROFILE_SYSTEM, cv, "search_profile", PROFILE_SCHEMA)
+
+
 async def install_resume(client: AsyncOpenAI, config: Config, path: Path, store: Store) -> dict[str, Any]:
     """Read the resume and write what the search needs. What the person already answered stays."""
     cv = read_resume(path)
-    profile = await structured(client, config.quick_model, PROFILE_SYSTEM, cv, "search_profile", PROFILE_SCHEMA)
+    profile = await read_profile(client, config, cv)
     config.workspace.mkdir(parents=True, exist_ok=True)
     config.cv.write_text(cv, encoding="utf-8")
     # The file as the person gave it: the CV every application sends.

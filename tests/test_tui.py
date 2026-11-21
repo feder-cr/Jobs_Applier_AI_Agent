@@ -15,7 +15,17 @@ import duckdb
 import httpx
 import pytest
 from click.testing import CliRunner
-from openai import APIConnectionError, APIStatusError, APITimeoutError, AuthenticationError, InternalServerError, PermissionDeniedError, RateLimitError
+from openai import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    AuthenticationError,
+    BadRequestError,
+    InternalServerError,
+    NotFoundError,
+    PermissionDeniedError,
+    RateLimitError,
+)
 from pypdf import PdfWriter
 from textual.widgets import DataTable, Input, RichLog, Static
 
@@ -641,6 +651,37 @@ def test_a_new_resume_never_invents_a_contact_detail(home: Path, resume: Path) -
     config = load_config(home)
     asyncio.run(install_resume(ScriptedModelForApp(), config, resume, Store(config.store_file)))  # type: ignore[arg-type]
     assert "phone" not in answers_of(config)
+
+
+class QuickRouteRefuses(ScriptedModelForApp):
+    """The quick model's route answers as `error` says; every other model answers as a model would."""
+
+    def __init__(self, quick: str, error: Exception) -> None:
+        super().__init__()
+        self.quick, self.error = quick, error
+
+    async def _create(self, **request: Any) -> Any:
+        if request.get("model") == self.quick:
+            self.requests.append(request)
+            raise self.error
+        return await super()._create(**request)
+
+
+@pytest.mark.parametrize("kind, code", [(BadRequestError, 400), (NotFoundError, 404), (InternalServerError, 503)])
+def test_a_resume_the_quick_models_route_refuses_is_read_by_the_forms_model(home: Path, resume: Path, kind: type, code: int) -> None:
+    config = load_config(home)
+    model = QuickRouteRefuses(config.quick_model, status_error(kind, code))
+    asyncio.run(install_resume(model, config, resume, Store(config.store_file)))  # type: ignore[arg-type]
+    assert [request["model"] for request in model.requests] == [config.quick_model, config.model]
+    assert load_config(home).filters.include, "the plan was written from the forms model's answer"
+
+
+def test_an_empty_account_at_the_resume_is_not_asked_of_another_model(home: Path, resume: Path) -> None:
+    config = load_config(home)
+    model = QuickRouteRefuses(config.quick_model, status_error(APIStatusError, 402, {"code": "insufficient_user_quota"}))
+    with pytest.raises(APIStatusError):
+        asyncio.run(install_resume(model, config, resume, Store(config.store_file)))  # type: ignore[arg-type]
+    assert [request["model"] for request in model.requests] == [config.quick_model]
 
 
 def test_a_new_resume_replaces_the_plan_and_keeps_what_the_person_excluded(home: Path, resume: Path) -> None:
