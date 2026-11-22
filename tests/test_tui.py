@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import webbrowser
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -40,7 +41,7 @@ from aihawk.database import Job
 from aihawk.library import Library
 from aihawk.llm import cause, error_name, explain, refused
 from aihawk.profile import import_answers_file, install_resume, read_resume
-from aihawk.screens import Confirm, JobDetails, Said, SendBatch, SentDetails, SentList, Settings, SignIn, StopSending, TextPrompt
+from aihawk.screens import Choice, Confirm, JobDetails, Said, SendBatch, SentDetails, SentList, Settings, SignIn, StopSending, TextPrompt
 from aihawk.session import Session
 from aihawk.store import Proof, Store, Stored
 from aihawk.tui import AIHawk
@@ -143,9 +144,17 @@ async def settle(pilot: Any, app: AIHawk) -> None:
     for _ in range(200):
         await pilot.pause(0.05)
         running = [worker for worker in app.workers if worker.is_running and worker.group in ("flow", "library", "find")]
-        if not running or isinstance(app.screen, (TextPrompt, SendBatch)):
+        if not running or isinstance(app.screen, (TextPrompt, SendBatch, Choice)):
             return
     raise AssertionError("the flow never settled")
+
+
+async def key_input(pilot: Any, app: AIHawk) -> None:
+    """Past the choice a person with no key meets first, to the input where a key is pasted: "I have a key"."""
+    await settle(pilot, app)
+    assert isinstance(app.screen, Choice)
+    await pilot.press("down", "enter")
+    await settle(pilot, app)
 
 
 def test_a_scored_posting_with_no_text_keeps_its_score_and_the_row_carries_no_status(home: Path) -> None:
@@ -211,7 +220,7 @@ def test_no_key_asks_for_one_and_keeps_it_on_this_computer(home: Path, resume: P
     async def run() -> None:
         app = AIHawk(home, resume)
         async with app.run_test(size=(140, 40)) as pilot:
-            await settle(pilot, app)
+            await key_input(pilot, app)
             assert isinstance(app.screen, TextPrompt)
             assert app.screen.query_one(Input).password is True
             app.screen.query_one(Input).value = "sk-orca-typed"
@@ -812,7 +821,7 @@ def test_ctrl_c_at_the_key_prompt_leaves(home: Path, monkeypatch: pytest.MonkeyP
     async def run() -> None:
         app = AIHawk(home, None)
         async with app.run_test(size=(80, 24)) as pilot:
-            await settle(pilot, app)
+            await key_input(pilot, app)
             assert isinstance(app.screen, TextPrompt)
             assert "Enter saves" in str(app.screen.query_one(".hint", Static).content)
             await pilot.press("ctrl+c")
@@ -828,7 +837,7 @@ def test_leaving_while_a_prompt_is_open_raises_nothing(home: Path, monkeypatch: 
     async def run() -> None:
         app = AIHawk(home, None)
         async with app.run_test(size=(80, 24)) as pilot:
-            await settle(pilot, app)
+            await key_input(pilot, app)
             assert isinstance(app.screen, TextPrompt)
 
     asyncio.run(run())
@@ -1506,7 +1515,157 @@ def test_nothing_is_said_about_no_jobs_while_the_jobs_are_still_coming(home: Pat
     asyncio.run(run())
 
 
-def test_with_no_key_the_line_says_the_next_key_and_it_works(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_later_on_the_key_choice_replaces_the_list_with_one_line_and_the_settings_still_take_the_key(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ORCAROUTER_API_KEY")
+
+    async def run() -> None:
+        app = AIHawk(home, None)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            assert isinstance(app.screen, Choice)
+            await pilot.press("escape")
+            await settle(pilot, app)
+            assert not isinstance(app.screen, Choice)
+            assert str(app.query_one("#no-key", Static).content) == "AIHawk needs an OrcaRouter key to start. Press k to add it."
+            assert app.query_one("#no-key").display and not app.query_one("#jobs").display
+            await pilot.press("e")
+            await wait_for_screen(pilot, Settings)
+            assert ("key", "OrcaRouter key", "none yet") in app.setting_rows()
+
+    asyncio.run(run())
+
+
+def choice_rows(app: AIHawk) -> list[str]:
+    return [str(app.screen.query_one(DataTable).get_row(key.value)[0]) for key in app.screen.query_one(DataTable).rows]
+
+
+def test_with_no_key_the_first_screen_is_a_choice_that_says_what_it_is_for_and_what_it_costs(home: Path, monkeypatch: pytest.MonkeyPatch, tracked: list[dict[str, Any]]) -> None:
+    monkeypatch.delenv("ORCAROUTER_API_KEY")
+
+    async def run() -> None:
+        app = AIHawk(home, None)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            assert isinstance(app.screen, Choice) and not isinstance(app.screen, TextPrompt)
+            assert app.screen.question == "AIHawk needs an OrcaRouter key"
+            assert app.screen.body == (
+                "OrcaRouter is the AI service that reads your resume and fills the forms. Signing up is free; add about $5 there, "
+                "and each application costs a few cents."
+            )
+            assert choice_rows(app) == ["Open the sign-up page", "I have a key", "Later"]
+            # The address is on the screen whole, for a computer where no browser opens.
+            assert "https://www.orcarouter.ai/ref/ref_accd17afb78fc95ac4d7" in str(app.screen.query_one(".hint", Static).content)
+            # Nothing is said about the key before the person chooses, and no input is open.
+            assert not app.screen.query(Input)
+            await pilot.press("escape")
+
+    asyncio.run(run())
+    assert steps_of(tracked)[:2] == ["key_asked", "key_missing"]
+
+
+def test_i_have_a_key_goes_to_the_masked_input_and_the_key_is_kept(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch, tracked: list[dict[str, Any]]) -> None:
+    monkeypatch.delenv("ORCAROUTER_API_KEY")
+    opened: list[str] = []
+    monkeypatch.setattr(webbrowser, "open", lambda url: opened.append(url) or True)
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        with_billing(app, Billing(5.0))
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            assert isinstance(app.screen, Choice)
+            await pilot.press("down", "enter")
+            await settle(pilot, app)
+            assert isinstance(app.screen, TextPrompt) and app.screen.query_one(Input).password is True
+            app.screen.query_one(Input).value = "sk-orca-mine"
+            await pilot.press("enter")
+            await settle(pilot, app)
+            assert companies(app) == ["Bestco", "Lowly", "Noplugin"]
+            assert not app.query_one("#no-key").display and app.query_one("#jobs").display
+
+    asyncio.run(run())
+    assert opened == []
+    assert (home / "key").read_text(encoding="utf-8") == "sk-orca-mine"
+    assert steps_of(tracked)[:2] == ["key_asked", "key_saved"]
+
+
+def test_open_the_sign_up_page_opens_the_browser_and_goes_on_to_the_input(home: Path, monkeypatch: pytest.MonkeyPatch, tracked: list[dict[str, Any]]) -> None:
+    monkeypatch.delenv("ORCAROUTER_API_KEY")
+    opened: list[str] = []
+    monkeypatch.setattr(webbrowser, "open", lambda url: opened.append(url) or True)
+
+    async def run() -> None:
+        app = AIHawk(home, None)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            # The first answer is the sign-up page, where the cursor starts.
+            await pilot.press("enter")
+            await settle(pilot, app)
+            assert opened == ["https://www.orcarouter.ai/ref/ref_accd17afb78fc95ac4d7"]
+            assert isinstance(app.screen, TextPrompt) and app.screen.query_one(Input).password is True
+            assert "https://www.orcarouter.ai/ref/ref_accd17afb78fc95ac4d7" in str(app.screen.query_one(".hint", Static).content)
+            await pilot.press("escape")
+            await settle(pilot, app)
+            assert app.query_one("#no-key").display
+
+    asyncio.run(run())
+    assert steps_of(tracked)[:3] == ["key_asked", "key_page_opened", "key_missing"]
+
+
+def test_later_then_k_brings_the_choice_back_and_a_key_ends_the_message(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch, tracked: list[dict[str, Any]]) -> None:
+    monkeypatch.delenv("ORCAROUTER_API_KEY")
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        with_billing(app, Billing(5.0))
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            # Later, by the third answer this time and not by Esc.
+            await pilot.press("down", "down", "enter")
+            await settle(pilot, app)
+            assert not isinstance(app.screen, Choice) and app.query_one("#no-key").display
+            assert ("k", "add_key", "Key") in [(binding.key, binding.action, binding.description) for binding in app.BINDINGS]
+            assert "add_key" in {action for _, binding in app.active_bindings.items() for action in [binding.binding.action]}
+            await pilot.press("k")
+            await settle(pilot, app)
+            assert isinstance(app.screen, Choice)
+            await pilot.press("down", "enter")
+            await settle(pilot, app)
+            app.screen.query_one(Input).value = "sk-orca-late"
+            await pilot.press("enter")
+            await settle(pilot, app)
+            assert companies(app) == ["Bestco", "Lowly", "Noplugin"]
+            assert not app.query_one("#no-key").display
+            # With a key, k is not in the footer and does nothing.
+            assert "add_key" not in {binding.binding.action for binding in app.active_bindings.values()}
+            await pilot.press("k")
+            await pilot.pause(0.1)
+            assert not isinstance(app.screen, Choice)
+
+    asyncio.run(run())
+    assert steps_of(tracked)[:5] == ["key_asked", "key_missing", "key_asked", "key_saved", "resume_read"]
+
+
+def test_a_key_that_was_refused_goes_straight_to_the_input_with_its_problem_and_not_to_the_choice(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ORCAROUTER_API_KEY")
+    (home / "key").write_text("sk-orca-wrong", encoding="utf-8")
+
+    async def run() -> None:
+        app = AIHawk(home, resume)
+        app.session._client = RefusingModel()  # type: ignore[assignment]
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot, app)
+            assert isinstance(app.screen, TextPrompt) and not isinstance(app.screen, Choice)
+            assert app.screen.query_one("#problem").display and "forgot it" in str(app.screen.query_one("#problem", Static).content)
+            await pilot.press("escape")
+            await settle(pilot, app)
+            # Esc at the input is later too: the same line stands in place of the list.
+            assert app.query_one("#no-key").display
+
+    asyncio.run(run())
+
+
+def test_a_key_asked_again_from_the_settings_goes_straight_to_the_input(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ORCAROUTER_API_KEY")
 
     async def run() -> None:
@@ -1515,10 +1674,13 @@ def test_with_no_key_the_line_says_the_next_key_and_it_works(home: Path, monkeyp
             await settle(pilot, app)
             await pilot.press("escape")
             await settle(pilot, app)
-            assert last_line(app) == "No key yet. Press e, then OrcaRouter key."
             await pilot.press("e")
             await wait_for_screen(pilot, Settings)
-            assert ("key", "OrcaRouter key", "none yet") in app.setting_rows()
+            app.screen.query_one(DataTable).move_cursor(row=[key.value for key in app.screen.query_one(DataTable).rows].index("key"))
+            await pilot.press("enter")
+            await wait_for_screen(pilot, TextPrompt)
+            assert not isinstance(app.screen, Choice)
+            await pilot.press("escape")
 
     asyncio.run(run())
 
@@ -1868,12 +2030,12 @@ def test_the_key_prompt_says_what_orcarouter_is_that_it_costs_and_that_esc_is_al
     async def run() -> None:
         app = AIHawk(home, None)
         async with app.run_test(size=(80, 24)) as pilot:
-            await settle(pilot, app)
+            await key_input(pilot, app)
             assert app.screen.question == "Paste your OrcaRouter key"
             hint = str(app.screen.query_one(".hint", Static).content).splitlines()
             assert hint[0] == "AIHawk uses OrcaRouter, a paid AI service, to read your resume and fill the forms: a few cents per application."
             # The address on a line of its own, whole, the referral path in it.
-            assert hint[1] == "Get a key at orcarouter.ai/ref/ref_accd17afb78fc95ac4d7"
+            assert hint[1] == "Get a key at https://www.orcarouter.ai/ref/ref_accd17afb78fc95ac4d7"
             assert hint[2] == "Ctrl+O opens it in your browser · It stays on this computer"
             assert hint[3] == "Enter saves · Esc later"
             rows = [row.rstrip() for row in ["".join(segment.text for segment in strip) for strip in app.screen._compositor.render_strips()]]
@@ -2223,7 +2385,7 @@ def test_a_key_the_service_refuses_is_asked_for_again_with_why_in_the_question(h
         app.session.key_accepted = accepting(False, True)  # type: ignore[method-assign]
         app.session.save_key = lambda key: (type(app.session.config).save_key(app.session.config, key), setattr(app.session, "_client", ScriptedModelForApp()))  # type: ignore[method-assign]
         async with app.run_test(size=(80, 24)) as pilot:
-            await settle(pilot, app)
+            await key_input(pilot, app)
             app.screen.query_one(Input).value = "sk-orca-wrong"
             await pilot.press("enter")
             await pilot.pause(0.3)
@@ -2371,7 +2533,7 @@ def test_ctrl_o_at_the_key_question_opens_the_address_in_the_browser_and_the_hin
     async def run() -> None:
         app = AIHawk(home, None)
         async with app.run_test(size=(80, 24)) as pilot:
-            await settle(pilot, app)
+            await key_input(pilot, app)
             assert "Ctrl+O opens it in your browser" in str(app.screen.query_one(".hint", Static).content)
             await pilot.press("ctrl+o")
             await pilot.pause(0.1)
@@ -2404,7 +2566,7 @@ def test_with_no_credit_the_jobs_stay_new_scoring_stops_and_says_what_to_do_and_
         async with app.run_test(size=(80, 24)) as pilot:
             await settle(pilot, app)
             assert model.attempts == 1, "not retried in a loop"
-            assert last_line(app) == "Your OrcaRouter account has no credit yet. Add a few dollars at orcarouter.ai, then press → to go on."
+            assert last_line(app) == "Your OrcaRouter account has no credit yet. Add about $5 at orcarouter.ai, then press → to go on."
             assert len(app.session.store.with_status("new")) == 3 and not app.session.store.with_status("passed_over")
             # The line is not covered by the count of the jobs coming, and nothing says there are no more.
             assert "No more jobs" not in logged(app) and "No jobs found" not in logged(app)
@@ -2439,7 +2601,7 @@ def test_an_application_that_fails_for_want_of_credit_says_so_and_the_batch_stop
             assert calls == ["Bestco"], "the second one was not tried"
             (item,) = app.session.store.sent()
             assert item.status == "failed" and item.reason == "no_credit"
-            assert item.note == "Your OrcaRouter account has no credit yet. Add a few dollars at orcarouter.ai, then press → to go on."
+            assert item.note == "Your OrcaRouter account has no credit yet. Add about $5 at orcarouter.ai, then press → to go on."
 
     asyncio.run(run())
 
@@ -2722,7 +2884,7 @@ def refusal(code: int, message: str, service_code: str = "", kind: type = APISta
     return status_error(kind, code, body)
 
 
-NO_CREDIT_WORDS = "Your OrcaRouter account has no credit yet. Add a few dollars at orcarouter.ai, then {}"
+NO_CREDIT_WORDS = "Your OrcaRouter account has no credit yet. Add about $5 at orcarouter.ai, then {}"
 GO_ON = "press → to go on."
 REFUSALS = [
     (refusal(402, "insufficient quota", "insufficient_user_quota"), "no_credit", NO_CREDIT_WORDS.format(GO_ON)),
@@ -3026,7 +3188,7 @@ def test_a_key_with_no_credit_says_so_before_the_resume_and_enter_checks_again_u
         app = scripted_app(home, resume)
         with_billing(app, billing)
         async with app.run_test(size=(80, 24)) as pilot:
-            await settle(pilot, app)
+            await key_input(pilot, app)
             app.screen.query_one(Input).value = "sk-orca-new"
             await pilot.press("enter")
             await wait_for_screen(pilot, Confirm)
@@ -3057,7 +3219,7 @@ def test_escape_on_the_credit_question_goes_on_with_the_resume_without_credit(ho
         app = scripted_app(home, resume)
         with_billing(app, Billing(0))
         async with app.run_test(size=(80, 24)) as pilot:
-            await settle(pilot, app)
+            await key_input(pilot, app)
             app.screen.query_one(Input).value = "sk-orca-new"
             await pilot.press("enter")
             await wait_for_screen(pilot, Confirm)
@@ -3089,7 +3251,7 @@ def test_the_credit_question_is_never_asked_when_the_service_says_there_is_some_
         app = scripted_app(home, resume)
         with_billing(app, Billing(answer))
         async with app.run_test(size=(80, 24)) as pilot:
-            await settle(pilot, app)
+            await key_input(pilot, app)
             app.screen.query_one(Input).value = "sk-orca-new"
             await pilot.press("enter")
             await settle(pilot, app)
@@ -3149,7 +3311,7 @@ def test_every_cause_about_the_account_has_its_words_in_the_list_of_applications
     assert {"no_credit", "key_limit", "spend_limit", "model_not_allowed"} <= llm.ACCOUNT_CAUSES
 
 
-FREE_PLAN_WORDS = "OrcaRouter is limiting this account: its free plan is not enough for AIHawk. Add a few dollars at orcarouter.ai, then try again."
+FREE_PLAN_WORDS = "OrcaRouter is limiting this account: its free plan is not enough for AIHawk. Add about $5 at orcarouter.ai, then try again."
 
 
 def test_a_resume_refused_as_too_many_requests_says_the_free_plan_is_not_enough_and_enter_reads_it_again(

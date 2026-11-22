@@ -123,6 +123,46 @@ class TextPrompt(ModalScreen[str | None]):
             webbrowser.open(self.link)
 
 
+class Choice(ModalScreen[str | None]):
+    """A question with a few answers to pick from: the arrows move, Enter picks, Escape picks none (None)."""
+
+    BINDINGS: ClassVar = [Binding("escape", "skip", "Later")]
+
+    def __init__(self, question: str, body: str, options: list[tuple[str, str]], hint: str, footnote: str = "") -> None:
+        super().__init__()
+        self.question = question
+        self.body = body
+        # Each answer's key, which dismisses the screen, and the words the person reads.
+        self.options = options
+        self.hint = hint
+        # A line under the answers that is always shown, such as an address for a computer where no browser opens.
+        self.footnote = footnote
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Static(self.question, id="question", markup=False)
+            yield Static(self.body, markup=False)
+            yield Rows(id="choices", cursor_type="row", show_header=False)
+            if self.footnote:
+                yield Static(self.footnote, classes="hint", markup=False)
+            yield Static(self.hint, classes="hint", markup=False)
+
+    def on_mount(self) -> None:
+        table = self.query_one(DataTable)
+        table.add_column("Answer", key="answer", width=max(20, *(len(label) for _, label in self.options)) + 2)
+        for key, label in self.options:
+            table.add_row(Text(label), key=key)
+        table.focus()
+
+    @on(DataTable.RowSelected)
+    def chosen(self, event: DataTable.RowSelected) -> None:
+        event.stop()
+        self.dismiss(event.row_key.value)
+
+    def action_skip(self) -> None:
+        self.dismiss(None)
+
+
 class SendBatch(ModalScreen[bool]):
     """The one question before anything is sent: these jobs, now. Enter sends them all, Escape cancels."""
 

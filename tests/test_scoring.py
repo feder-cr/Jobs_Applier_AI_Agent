@@ -209,4 +209,4 @@ def test_an_account_with_no_credit_is_told_in_plain_words_and_what_to_do() -> No
     from aihawk.llm import explain
 
     error = APIStatusError("Error code: 402", response=http.Response(402, request=http.Request("POST", "https://x.example")), body=None)
-    assert explain(error) == "Your OrcaRouter account has no credit yet. Add a few dollars at orcarouter.ai, then press → to go on."
+    assert explain(error) == "Your OrcaRouter account has no credit yet. Add about $5 at orcarouter.ai, then press → to go on."

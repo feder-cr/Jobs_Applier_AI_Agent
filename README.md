@@ -41,6 +41,8 @@ Give it your resume. The job search finds the postings that fit, you pick, and i
 
 ## Install
 
+**What you need:** an OrcaRouter key ([free sign-up](https://www.orcarouter.ai/ref/ref_accd17afb78fc95ac4d7); add about $5 there, and each application costs a few cents). It pays the AI that reads your resume and fills the forms.
+
 Windows, in PowerShell:
 
 ```powershell
@@ -52,8 +54,6 @@ Linux, and macOS (on a Mac AIHawk finds and scores the jobs, but cannot send app
 ```bash
 curl -LsSf https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/run.sh | sh
 ```
-
-You need a key: [get one from OrcaRouter](https://www.orcarouter.ai/ref/ref_accd17afb78fc95ac4d7). Signing up is free, and a new account starts with no credit: add a few dollars there before the first start, or AIHawk cannot read your resume. An application costs a few cents.
 
 The first start downloads about 250 MB and takes a minute or two; after that it opens in seconds, also without a connection. Nothing else needs installing first (on Linux, `curl`). The first application brings the browser, about 430 MB more, and opens it in a window: on Linux that needs a desktop.
 
