@@ -25,7 +25,7 @@ from aihawk.database import DatabaseError
 from aihawk.library import LibraryError, Stopped
 from aihawk.llm import account_problem, error_name, explain, not_answering, refused
 from aihawk.scoring import NotAnswering
-from aihawk.screens import WIDE_ENOUGH, Confirm, JobDetails, Rows, Said, SendBatch, SentList, Settings, SignIn, StopSending, TextPrompt, clipped
+from aihawk.screens import WIDE_ENOUGH, Choice, Confirm, JobDetails, Rows, Said, SendBatch, SentList, Settings, SignIn, StopSending, TextPrompt, clipped
 from aihawk.session import Session
 from aihawk.store import OWN_ANSWERS, SENT_MARKS, SENT_WORDS, SUBMITTED, Stored
 
@@ -52,25 +52,35 @@ RESUME_PLACEHOLDER = "Drag your resume file into this window, or type where it i
 MAIL_QUESTION = "Some job sites email a code to confirm it is you. Which email do you apply with?"
 MAIL_CODE_QUESTION = "A site sent a code to your email. Which email is it, so AIHawk can read it?"
 MAIL_HINT = "AIHawk opens that inbox in its browser only to read those codes · Enter · Esc later"
+# The first thing a person with no key meets: a choice, not an input. 47 of the 176 computers asked for the key pressed Esc at the
+# bare input, which said nothing of what the key is for or what it costs.
+KEY_CHOICE_QUESTION = "AIHawk needs an OrcaRouter key"
+KEY_CHOICE_BODY = (
+    "OrcaRouter is the AI service that reads your resume and fills the forms. Signing up is free; add about $5 there, "
+    "and each application costs a few cents."
+)
+KEY_CHOICES = [("open", "Open the sign-up page"), ("have", "I have a key"), ("later", "Later")]
+KEY_CHOICE_HINT = "↑ ↓ choose · Enter picks · Esc later"
+KEY_CHOICE_ADDRESS = f"Sign-up page: {KEY_URL}"
 KEY_QUESTION = "Paste your OrcaRouter key"
 KEY_HINT = (
     "AIHawk uses OrcaRouter, a paid AI service, to read your resume and fill the forms: a few cents per application.\n"
-    f"Get a key at {KEY_URL.removeprefix('https://www.')}\n"
+    f"Get a key at {KEY_URL}\n"
     "Ctrl+O opens it in your browser · It stays on this computer\n"
     "Enter saves · Esc later"
 )
 KEY_REFUSED = "OrcaRouter did not accept that key. Check it and paste it again."
 NO_CREDIT_QUESTION = (
-    "This key works, but its OrcaRouter account has no credit yet. AIHawk needs a few dollars there to read your resume and the jobs: "
+    "This key works, but its OrcaRouter account has no credit yet. AIHawk needs about $5 there to read your resume and the jobs: "
     "add them at orcarouter.ai."
 )
-NO_CREDIT_AGAIN = "Still no credit on that account. AIHawk needs a few dollars there to read your resume and the jobs: add them at orcarouter.ai."
+NO_CREDIT_AGAIN = "Still no credit on that account. AIHawk needs about $5 there to read your resume and the jobs: add them at orcarouter.ai."
 NO_CREDIT_HINT = "Enter checks again · Ctrl+O opens orcarouter.ai · Esc goes on without"
 # Reading the resume refused as too many requests is told as OrcaRouter's free plan being too little, the owner's decision of
 # 2026-11-12: the person is told what to do about it, and the resume is read again on Enter. It can also come to an account
 # with credit when the service is busy; the question then still says where credit is added.
 FREE_PLAN_QUESTION = (
-    "OrcaRouter is limiting this account: its free plan is not enough for AIHawk. Add a few dollars at orcarouter.ai, then try again."
+    "OrcaRouter is limiting this account: its free plan is not enough for AIHawk. Add about $5 at orcarouter.ai, then try again."
 )
 FREE_PLAN_HINT = "Enter tries again · Ctrl+O opens orcarouter.ai · Esc later"
 # What to press after a failure at the resume, whose file is remembered.
@@ -80,7 +90,8 @@ MAIL_NAMES = {"gmail": "Gmail", "outlook": "Outlook"}
 RESUME_HINT = "PDF, .docx or text · Enter reads it · Esc later"
 MAIL_UNREADABLE = "Only Gmail and Outlook can be read for now; the rest works without."
 SENDING = "Applications are being sent: wait for them to finish."
-NO_KEY = "No key yet. Press e, then OrcaRouter key."
+# Shown in place of the list while the key is left for later, and until one is given.
+NO_KEY = "AIHawk needs an OrcaRouter key to start. Press k to add it."
 NO_RESUME = "No resume yet. Press r and give the file."
 NO_JOBS = "No jobs found for these places and days. Press e to change them."
 # How long scoring waits after each request that got no answer, in seconds, before it asks again. After the last wait one more
@@ -112,11 +123,12 @@ class AIHawk(App[None]):
     #heading { width: 1fr; padding: 0 1; text-style: bold; }
     #count { width: auto; padding: 0 1; }
     #jobs { height: 1fr; }
+    #no-key { height: 1fr; content-align: center middle; text-align: center; padding: 0 2; }
     #log { height: 4; border-top: solid $primary; padding: 0 1; scrollbar-size-vertical: 0; }
     ModalScreen { align: center middle; background: $background 60%; }
     #dialog { width: 80%; max-width: 100; height: auto; max-height: 85%; padding: 1 2; background: $surface; border: thick $primary; }
     #wide { width: 95%; height: auto; max-height: 85%; padding: 1 2; background: $surface; border: thick $primary; }
-    #sent, #settings { height: auto; max-height: 24; }
+    #sent, #settings, #choices { height: auto; max-height: 24; }
     #question { text-style: bold; margin-bottom: 1; }
     #summary { height: auto; max-height: 24; margin: 1 0; }
     #reader { width: 90%; max-width: 110; height: 90%; padding: 1 2; background: $surface; border: thick $primary; }
@@ -133,6 +145,8 @@ class AIHawk(App[None]):
         Binding("s", "sent", "Sent"),
         Binding("o", "open_link", show=False),
         Binding("e", "settings", "Settings"),
+        # k is in the footer only while the key is left for later: it brings the choice back.
+        Binding("k", "add_key", "Key"),
         # r is in the footer only while there is no resume: it is the next step then, and a key that always shows is noise.
         Binding("r", "give_resume", "Resume"),
         Binding("r", "new_resume", show=False),
@@ -191,6 +205,7 @@ class AIHawk(App[None]):
             yield Static("AIHawk", id="heading", markup=False)
             yield Static("", id="count", markup=False)
         yield Pages(id="jobs", cursor_type="row", zebra_stripes=True)
+        yield Static(NO_KEY, id="no-key", markup=False)
         # min_width=1: RichLog wraps at 78 columns by default, under its own scrollbar, so the last words were hidden.
         yield Said(id="log", wrap=True, min_width=1, markup=False)
         yield Footer()
@@ -198,6 +213,7 @@ class AIHawk(App[None]):
     def on_mount(self) -> None:
         self.query_one(DataTable).focus()
         self.show_heading()
+        self.show_key_needed(False)
         self.session.telemetry.started()
         if words := no_browser_here():
             # Said before the person spends an evening choosing jobs they cannot apply to from here.
@@ -231,8 +247,10 @@ class AIHawk(App[None]):
         # the other r, the one that always works, is not listed. Both keep working.
         if action == "give_resume":
             return self.session.needs_resume()
+        if action == "add_key":
+            return self.waiting_for_key
         if action in ("toggle", "details", "apply"):
-            return not self.session.needs_resume()
+            return not self.session.needs_resume() and not self.waiting_for_key
         return True
 
     def on_unmount(self) -> None:
@@ -409,19 +427,40 @@ class AIHawk(App[None]):
             self.session.telemetry.step("start_error", error=error_name(error))
 
     async def ask_key(self) -> bool:
-        """The key asked for and kept; False when the person has none for now."""
+        """The key asked for and kept; False when the person has none for now. A person with no key first chooses: the sign-up
+        page, a key they have, or later. A key that was refused goes straight to the input, with its problem."""
         telemetry = self.session.telemetry
         telemetry.step("key_asked")
-        key = await self.take_key()
+        if self.key_problem:
+            choice = "have"
+        else:
+            choice = await self.push_screen_wait(Choice(KEY_CHOICE_QUESTION, KEY_CHOICE_BODY, KEY_CHOICES, KEY_CHOICE_HINT, KEY_CHOICE_ADDRESS))
+            if choice == "open":
+                telemetry.step("key_page_opened")
+                webbrowser.open(KEY_URL)
+        key = await self.take_key() if choice in ("open", "have") else None
         if not key:
             telemetry.step("key_missing")
-            self.say(NO_KEY, again=True)
             self.waiting_for_key = True
+            self.show_key_needed(True)
             return False
         self.session.save_key(key)
         telemetry.step("key_saved")
+        self.waiting_for_key = False
+        self.show_key_needed(False)
         await self.check_credit(key)
         return True
+
+    def show_key_needed(self, needed: bool) -> None:
+        """In place of the list, the one thing to do while the key is left for later; k is in the footer meanwhile."""
+        if not self.is_running:
+            return
+        self.query_one("#no-key").display = needed
+        self.query_one("#jobs").display = not needed
+        self.refresh_bindings()
+
+    def action_add_key(self) -> None:
+        self.start()
 
     async def check_credit(self, key: str) -> None:
         """A new OrcaRouter account has a key that works and no credit, and the first call, reading the resume, would be refused.
@@ -951,6 +990,7 @@ class AIHawk(App[None]):
         key = await self.take_key()
         if key:
             self.session.save_key(key)
+            self.show_key_needed(False)
             await self.check_credit(key)
             if self.waiting_for_key:
                 # The start stopped for want of a key: with one, it goes on with the resume and the rest.

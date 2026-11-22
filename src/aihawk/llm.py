@@ -243,7 +243,7 @@ def explain(error: Exception, step: str = "press → to go on.") -> str:
     for the place the call failed in. The error's own text stays out, but for a refusal nothing explains: the key can be in it."""
     why = cause(error)
     if why == "no_credit":
-        return f"Your OrcaRouter account has no credit yet. Add a few dollars at orcarouter.ai, then {step}"
+        return f"Your OrcaRouter account has no credit yet. Add about $5 at orcarouter.ai, then {step}"
     if why == "free_calls_used":
         return f"The free calls for today are used up. Add credit at orcarouter.ai, then {step}"
     after = f" Then {step}"

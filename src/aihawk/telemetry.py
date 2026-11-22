@@ -7,7 +7,7 @@ same list:
 - `app_started`: AIHawk's version, the operating system, and the country the computer is set to (two letters, read from its own
   settings with no network; empty when they say none). Every event asks PostHog not to look up where its IP address is, which it
   would do on arrival, down to the city: the country is the only place that is known.
-- `start_step`: each step of a start, not only the first one (the key, whether its account has no credit or the free plan is too little, and what the person
+- `start_step`: each step of a start, not only the first one (the key, asked, whether the sign-up page was opened, saved or left for later, whether its account has no credit or the free plan is too little, and what the person
   did about it, the resume, the jobs' download, the first job on the screen, and the mail, asked about when a form needs a site's code),
   and the seconds since AIHawk opened;
   an `error` is the error's name with the status and the service's code when it has them, so that a 402 and a 403 are told
