@@ -189,6 +189,18 @@ def test_the_servers_way_of_driving_a_page_comes_after_the_rules_and_before_the_
     assert text.index(SYSTEM) < text.index("Try selectors first.") < text.index("About a site.")
 
 
+def test_the_rules_stop_for_three_missing_answers_only_and_work_out_the_usual_ones() -> None:
+    rules = " ".join(SYSTEM.split())
+    blocking = rules[rules.index("Only three things are never guessed"):rules.index("Tick the boxes")]
+    for named in ("An identifying number, code or street address", "tax code", "passport", "a third person's details", "a reference's name",
+                  "a qualification, licence, clearance or past employer they do not claim", "else no, and stops nothing"):
+        assert named in blocking
+    worked_out = rules[rules.index("Where they say nothing"):rules.index("Only three things")]
+    for usual in ("a salary", "notice", "start", "relocating", "how they heard of the job", "cover letter", "prefer not to say", "postal code"):
+        assert usual in worked_out
+    assert "Employers, titles, dates and degrees come from the CV as written" in rules
+
+
 def test_the_same_call_with_the_same_answer_is_warned_then_stopped_and_nothing_is_sent() -> None:
     browser = ScriptedBrowser()
     model = ScriptedModel(*[[tool_call("browser_press_key", key="End")] for _ in range(LOOP_STOP)])
