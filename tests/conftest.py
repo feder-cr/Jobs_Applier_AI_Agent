@@ -33,11 +33,11 @@ def no_engine_download(monkeypatch: pytest.MonkeyPatch) -> None:
 def a_computer_the_browser_can_open_on(monkeypatch: pytest.MonkeyPatch) -> None:
     """A test's browser is a scripted one: on a Linux machine with no desktop, as the ones that run these tests are, the
     check for one would stop every application before it. A test of that check names its own system."""
-    from aihawk import apply
+    from aihawk import readiness
 
-    monkeypatch.setattr(apply, "PLATFORM", "a test")
+    monkeypatch.setattr(readiness, "PLATFORM", "a test")
     # The processor too: a test that names Linux means the kind the browser is built for, whatever machine runs it.
-    monkeypatch.setattr(apply, "MACHINE", "x86_64")
+    monkeypatch.setattr(readiness, "MACHINE", "x86_64")
 
 
 @pytest.fixture(autouse=True)

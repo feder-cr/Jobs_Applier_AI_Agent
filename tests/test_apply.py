@@ -14,6 +14,7 @@ import anyio
 import pytest
 
 from aihawk import apply as apply_module
+from aihawk import readiness
 from aihawk.apply import (
     LOOP_STOP,
     PAGE_CHARS,
@@ -912,10 +913,9 @@ def test_a_browser_that_is_never_ready_is_named_too(monkeypatch: pytest.MonkeyPa
     assert apply_module.why_not_sent("browser_not_ready") == "the browser took too long to start"
 
 
-def test_on_linux_with_no_desktop_the_browser_is_not_tried_and_the_person_is_told(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(apply_module, "PLATFORM", "linux")
+def test_a_computer_the_browser_cannot_open_on_is_not_tried_and_the_application_carries_the_cause_name(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(readiness, "PLATFORM", "linux")
     monkeypatch.delenv("DISPLAY", raising=False)
-    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
 
     @asynccontextmanager
     async def never(upload_dir: Path, home: Path) -> AsyncIterator[Any]:
@@ -925,47 +925,31 @@ def test_on_linux_with_no_desktop_the_browser_is_not_tried_and_the_person_is_tol
     monkeypatch.setattr(apply_module, "_server", never)
     outcome = asyncio.run(apply_to_job(ScriptedModel(), "m", JOB, "cv", "answers", tmp_path / "cv.pdf", tmp_path, tmp_path / "profile"))
     assert outcome.status == "blocked" and outcome.reason == "no_display"
-    assert outcome.summary == "The browser needs a desktop: run AIHawk on a computer with a screen."
+    assert outcome.summary == readiness.INSTRUCTIONS["no_display"]
     assert apply_module.why_not_sent("no_display") == "the browser needs a desktop"
 
 
-def test_on_linux_without_the_gtk_library_the_person_is_told_the_packages_for_debian_and_ubuntu(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(apply_module, "PLATFORM", "linux")
-    monkeypatch.setenv("DISPLAY", ":0")
-    monkeypatch.setattr(apply_module.ctypes.util, "find_library", lambda name: None)
-    reason, words = apply_module.missing_for_the_browser() or ("", "")
-    assert reason == "browser_libraries"
-    # One line that works on both: the names with t64 of Ubuntu 24.04 first, the names before it after.
-    assert words == (
-        "The browser needs a few system packages. On Debian or Ubuntu: sudo apt-get install -y libgtk-3-0t64 libasound2t64 libx11-xcb1 libdbus-glib-1-2"
-        " || sudo apt-get install -y libgtk-3-0 libasound2 libx11-xcb1 libdbus-glib-1-2"
-    )
-    assert apply_module.why_not_sent("browser_libraries") == "the browser needs a few system packages"
-    monkeypatch.setattr(apply_module.ctypes.util, "find_library", lambda name: "libgtk-3.so.0")
-    assert apply_module.missing_for_the_browser() is None
-    monkeypatch.setenv("DISPLAY", "")
-    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
-    assert apply_module.missing_for_the_browser() is None
+@pytest.mark.parametrize("cause", readiness.CAUSES)
+def test_every_cause_has_its_words_in_the_list_of_why_not_sent(cause: str) -> None:
+    assert apply_module.why_not_sent(cause) == readiness.WHY_NOT_SENT[cause] != ""
 
 
-def test_on_a_mac_or_a_linux_of_another_kind_the_browser_has_no_version_and_the_person_is_told(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(apply_module, "PLATFORM", "darwin")
-    reason, words = apply_module.missing_for_the_browser() or ("", "")
-    assert reason == "no_browser_here" and words.startswith("On a Mac AIHawk finds and scores jobs, but cannot send applications yet")
-    assert apply_module.why_not_sent("no_browser_here") == "the browser has no version for this computer"
-    monkeypatch.setattr(apply_module, "PLATFORM", "linux")
-    monkeypatch.setattr(apply_module, "MACHINE", "aarch64")
-    assert (apply_module.missing_for_the_browser() or ("", ""))[0] == "no_browser_here"
-    monkeypatch.setattr(apply_module, "MACHINE", "x86_64")
-    monkeypatch.setenv("DISPLAY", ":0")
-    monkeypatch.setattr(apply_module.ctypes.util, "find_library", lambda name: "libgtk-3.so.0")
-    assert apply_module.missing_for_the_browser() is None
+def test_a_cause_the_browser_server_names_in_its_structured_answer_is_the_reason_and_its_sentences_are_never_read() -> None:
+    def failed(**fields: Any) -> Any:
+        return SimpleNamespace(isError=True, content=[SimpleNamespace(text="no_display: it said so")], **fields)
 
+    assert apply_module.server_cause(failed(structuredContent={"cause": "profile_locked"})) == "profile_locked"
+    assert apply_module.server_cause(failed(structuredContent={"cause": "a cause nobody here knows"})) == ""
+    assert apply_module.server_cause(failed(structuredContent=None)) == ""
+    assert apply_module.server_cause(failed()) == "", "its sentence names a cause and is still not read"
 
-def test_on_windows_nothing_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(apply_module, "PLATFORM", "win32")
-    monkeypatch.delenv("DISPLAY", raising=False)
-    assert apply_module.missing_for_the_browser() is None
+    class Server:
+        async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
+            return failed(structuredContent={"cause": "sandbox_blocked"})
+
+    with pytest.raises(apply_module.BrowserDidNotOpen) as raised:
+        asyncio.run(apply_module._open_browser(Server(), Path("profile")))  # type: ignore[arg-type]
+    assert raised.value.reason == "sandbox_blocked"
 
 
 class Readings(ScriptedBrowser):

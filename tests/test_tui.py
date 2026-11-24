@@ -366,9 +366,9 @@ def test_escape_on_the_batch_sends_none_and_the_selection_stays(home: Path, resu
 def test_on_a_mac_the_start_says_applying_does_not_work_and_a_sends_nothing(
     home: Path, resume: Path, restored_apply: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import aihawk.apply as apply_module
+    import aihawk.readiness as readiness_module
 
-    monkeypatch.setattr(apply_module, "PLATFORM", "darwin")
+    monkeypatch.setattr(readiness_module, "PLATFORM", "darwin")
     calls: list[Any] = []
 
     async def run() -> None:
@@ -384,6 +384,58 @@ def test_on_a_mac_the_start_says_applying_does_not_work_and_a_sends_nothing(
 
     asyncio.run(run())
     assert calls == []
+
+
+def test_a_linux_with_no_desktop_says_so_at_the_start_and_before_a_batch_and_sends_nothing_and_tells_only_the_cause_name(
+    home: Path, resume: Path, restored_apply: Any, tracked: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import aihawk.readiness as readiness_module
+
+    monkeypatch.setattr(readiness_module, "PLATFORM", "linux")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.setattr(readiness_module.ctypes.util, "find_library", lambda name: "lib.so")
+    monkeypatch.setattr(readiness_module, "profile_is_held", lambda profile: False)
+    calls: list[Any] = []
+    words = "AIHawk needs a desktop to open its browser. Open it from a terminal on the computer's own desktop, not over a remote connection."
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        fake_apply(app, [Outcome("submitted", "sent")], calls)
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
+            assert app.query_one(Said).said.count(words) == 1, "said at the start"
+            assert companies(app)[0] == "Bestco", "the jobs are found and scored all the same"
+            await pilot.press("a")
+            await pilot.pause(0.2)
+            assert not isinstance(app.screen, SendBatch)
+            assert app.query_one(Said).said.count(words) == 2, "and again when the person asks to send"
+
+    asyncio.run(run())
+    assert calls == []
+    named = [event["properties"] for event in tracked if event["event"] == "start_step" and event["properties"]["step"] == "no_display"]
+    assert len(named) == 2
+    assert all(properties.get("error") is None and properties.get("kind") is None and properties.get("chunks") is None for properties in named)
+
+
+def test_on_windows_the_start_and_a_say_nothing_about_a_desktop_and_a_opens_the_batch(
+    home: Path, resume: Path, restored_apply: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import aihawk.readiness as readiness_module
+
+    monkeypatch.setattr(readiness_module, "PLATFORM", "win32")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    calls: list[Any] = []
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        fake_apply(app, [Outcome("submitted", "sent")], calls)
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
+            assert "desktop" not in " ".join(app.query_one(Said).said)
+            await pilot.press("a")
+            await wait_for_screen(pilot, SendBatch)
+
+    asyncio.run(run())
 
 
 def test_a_with_nothing_selected_asks_about_the_current_row_alone(home: Path, resume: Path, restored_apply: Any) -> None:
