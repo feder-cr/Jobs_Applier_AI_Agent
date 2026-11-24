@@ -853,7 +853,9 @@ async def apply_to_job(
     account: tuple[str, str] | None = None,
 ) -> Outcome:
     """Open the browser on the person's profile, fill the job's form and send it: the person's selection and Enter came before."""
-    if blockers := browser_blockers(profile):
+    # Without the profile: the application before this one closed the browser a moment ago, and its lock may not be gone yet. The
+    # profile is the browser server's to judge when it opens, and a refusal comes back as its cause (server_cause).
+    if blockers := browser_blockers():
         return Outcome("blocked", blockers[0].words, reason=blockers[0].name)
     shot = data_dir / "proofs" / f"{safe_name(job.id)}.png"
     async with _server(cv_file.parent, data_dir / "browser") as (session, page_rules):

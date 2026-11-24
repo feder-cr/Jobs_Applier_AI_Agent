@@ -1034,7 +1034,8 @@ class AIHawk(App[None]):
 
     def browser_ready(self) -> bool:
         """Whether the browser can open here; if not, each cause is said with the one thing to do, and told to the makers by its name."""
-        blockers = browser_blockers(self.session.config.browser_profile)
+        # The profile is asked about only while AIHawk's own browser is not open: then a lock is another window's.
+        blockers = browser_blockers(None if self.session.browsers else self.session.config.browser_profile)
         for blocker in blockers:
             self.say(blocker.words)
             self.session.telemetry.step(blocker.name)

@@ -929,6 +929,26 @@ def test_a_computer_the_browser_cannot_open_on_is_not_tried_and_the_application_
     assert apply_module.why_not_sent("no_display") == "the browser needs a desktop"
 
 
+def test_two_applications_in_a_row_are_not_blocked_by_the_lock_the_first_ones_browser_has_not_yet_let_go(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(readiness, "PLATFORM", "linux")
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setattr(readiness.ctypes.util, "find_library", lambda name: "lib.so")
+    monkeypatch.setattr(readiness, "profile_is_held", lambda profile: True)
+    reached = []
+
+    @asynccontextmanager
+    async def server(upload_dir: Path, home: Path) -> AsyncIterator[Any]:
+        reached.append(1)
+        raise RuntimeError("the server was reached")
+        yield
+
+    monkeypatch.setattr(apply_module, "_server", server)
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="the server was reached"):
+            asyncio.run(apply_to_job(ScriptedModel(), "m", JOB, "cv", "answers", tmp_path / "cv.pdf", tmp_path, tmp_path / "profile"))
+    assert len(reached) == 2
+
+
 @pytest.mark.parametrize("cause", readiness.CAUSES)
 def test_every_cause_has_its_words_in_the_list_of_why_not_sent(cause: str) -> None:
     assert apply_module.why_not_sent(cause) == readiness.WHY_NOT_SENT[cause] != ""
