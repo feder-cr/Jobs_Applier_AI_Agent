@@ -27,6 +27,7 @@ from urllib.parse import urlsplit
 import openai
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from mcp.types import CallToolResult, TextContent
 from openai import AsyncOpenAI
 
 from aihawk.config import DEFAULT_BASE_URL, DEFAULT_MODEL, DRY_RUN_ENV, KEY_ENV, dry_run
@@ -119,6 +120,12 @@ LOOP_CYCLE, LOOP_WARN, LOOP_STOP = 5, 3, 5
 # after LOOP_CHECK_AFTER turns, every LOOP_CHECK_EVERY, it reads the last LOOP_CHECK_CALLS calls and the run stops when it
 # is sure, at LOOP_CHECK_SURE or more. On iCIMS a form went round a cycle of some 25 calls, filling, uploading and wiping.
 LOOP_CHECK_AFTER, LOOP_CHECK_EVERY, LOOP_CHECK_CALLS, LOOP_CHECK_SURE = 30, 10, 20, 0.9
+# The browser types at a human pace, about 3 characters a second (250-380 ms each), so a long text outlives the 45 seconds one
+# answer may wait: the server answers that it goes on in the background and refuses actions until it ends. A model left to poll
+# for that spent minutes on screenshots and status, and the loop check stopped the run as stuck (20 of 28 stuck runs). _Patient waits
+# for it, reading only the server's structured typing state. It waits at most TYPING_S_PER_CHAR for each character of the
+# text (the slowest pace measured is 0.38) and TYPING_MARGIN_S over, never past TYPING_MAX_S; 2,000 characters take 8 to 13 minutes.
+TYPING_POLL_S, TYPING_S_PER_CHAR, TYPING_MARGIN_S, TYPING_MAX_S = 3.0, 0.5, 60.0, 900.0
 LOOP_CHECK_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -642,12 +649,90 @@ async def submit_and_verify(session: Browser, client: AsyncOpenAI, model: str, s
     return Outcome("unconfirmed", f"{summary}\nClicked, not confirmed by the page: {verdict['evidence']}", proof=proof)
 
 
+def _typing(result: Any) -> dict[str, Any] | None:
+    """The browser server's structured account of its typing in this answer, or None when the answer has none."""
+    structured = getattr(result, "structuredContent", None)
+    state = structured.get("typing") if isinstance(structured, dict) else None
+    return state if isinstance(state, dict) else None
+
+
+def _said(text: str, result: Any = None) -> CallToolResult:
+    """An answer of ours in the server's shape: `text` first, then what `result` had, as it was."""
+    parts = [TextContent(type="text", text=text), *(result.content if result is not None else [])]
+    return CallToolResult(content=parts, structuredContent=getattr(result, "structuredContent", None), isError=bool(getattr(result, "isError", False)))
+
+
+class _Patient:
+    """The browser as every caller sees it: a call returns when the browser has finished what it was asked. The server answers
+    a typing too long for one call early, and refuses actions until it ends (the invisible-playwright-mcp's `typing` state, in
+    structuredContent). That wait is here, not left to the model, which polled and was stopped as stuck. The polls are not seen
+    by the model, nor counted by the watch; `on_wait` tells the trace, one line at each end."""
+
+    def __init__(self, session: Browser) -> None:
+        self.session = session
+        self.on_wait: Callable[[str], None] = lambda line: None
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.session, name)
+
+    async def call_tool(self, name: str, arguments: dict[str, Any] | None = None, _retry: bool = True) -> Any:
+        result = await self.session.call_tool(name, arguments)
+        state = _typing(result)
+        if state is None and result.isError and name != "browser_status":
+            # Only browser_type says it is refused for a typing; any other refusal may be one, and the status says.
+            state = _typing(await self.session.call_tool("browser_status", self._which(arguments)))
+        if not state or state.get("state") != "typing" or (result.isError and not _retry):
+            return result
+        ended, status = await self._until_ended(state, arguments)
+        if not ended:  # the ceiling, or a status that cannot be read: the server's last word, as it is
+            return status
+        outcome = self._outcome(_typing(status))
+        if not result.isError:  # a typing that outlived the call that started it: this is that call's answer
+            return _said(outcome)
+        return _said(outcome, await self.call_tool(name, arguments, _retry=False))  # the action it refused, now the browser is free
+
+    @staticmethod
+    def _which(arguments: dict[str, Any] | None) -> dict[str, Any]:
+        return {"browser": arguments["browser"]} if arguments and arguments.get("browser") else {}
+
+    async def _until_ended(self, state: dict[str, Any], arguments: dict[str, Any] | None) -> tuple[bool, Any]:
+        """Whether the typing ended, and the last status: the one that says so, or the one at the ceiling or that could not be read."""
+        total = state.get("total")
+        ceiling = min(TYPING_MAX_S, total * TYPING_S_PER_CHAR + TYPING_MARGIN_S) if total else TYPING_MAX_S
+        started = time.monotonic()
+        self.on_wait(f"typing into {state.get('selector')}: waiting for the browser, at most {ceiling:.0f}s")
+        while True:
+            status = await self.session.call_tool("browser_status", self._which(arguments))
+            now = _typing(status)
+            ended = now is not None and now.get("state") != "typing"
+            if ended or now is None or time.monotonic() - started >= ceiling:
+                break
+            await asyncio.sleep(TYPING_POLL_S)
+        self.on_wait(f"typing: {'ended' if ended else 'status unreadable' if now is None else 'not ended at the ceiling'} after {time.monotonic() - started:.0f}s")
+        return ended, status
+
+    @staticmethod
+    def _outcome(state: dict[str, Any] | None) -> str:
+        """What the model is told once the typing has ended, from the server's numbers only."""
+        state = state or {}
+        if state.get("state") == "idle":
+            return "The browser is no longer typing."
+        into = f"into {state['selector']} " if state.get("selector") else ""
+        if state.get("state") == "stopped":
+            return f"The typing {into}stopped before it finished: read the field to see what it holds."
+        if state.get("kept") is None or state.get("total") is None:
+            return f"The browser has finished typing {into}but could not read the field back."
+        return f"The browser has finished typing {into}: {state['kept']} of {state['total']} characters are in the field."
+
+
 class _Traced:
     """The browser with every call written to a file: what a dry run is for, to see what the model did on a site."""
 
     def __init__(self, session: Browser, path: Path, secrets: tuple[str, ...]) -> None:
         self.session, self.path, self.secrets = session, path, tuple(secret for secret in secrets if secret)
         self.started = time.monotonic()
+        if isinstance(session, _Patient):
+            session.on_wait = self.note
 
     def _hide(self, text: str) -> str:
         for secret in self.secrets:
@@ -827,7 +912,7 @@ def server_parameters(upload_dir: Path, home: Path) -> StdioServerParameters:
 
 
 @asynccontextmanager
-async def _server(upload_dir: Path, home: Path) -> AsyncIterator[tuple[ClientSession, str]]:
+async def _server(upload_dir: Path, home: Path) -> AsyncIterator[tuple[Browser, str]]:
     """The browser server, started: a session on it, and the instructions it gives about driving a page."""
     home.mkdir(parents=True, exist_ok=True)
     try:
@@ -835,7 +920,7 @@ async def _server(upload_dir: Path, home: Path) -> AsyncIterator[tuple[ClientSes
         with (home / "server.log").open("a", encoding="utf-8") as server_log:
             async with stdio_client(server_parameters(upload_dir, home), errlog=server_log) as (read, write), ClientSession(read, write) as session:
                 started = await session.initialize()
-                yield session, started.instructions or ""
+                yield _Patient(session), started.instructions or ""
     except ExceptionGroup as group:
         # The client's task groups wrap whatever happens inside them, and the caller must see a refused key as itself.
         error: BaseException = group

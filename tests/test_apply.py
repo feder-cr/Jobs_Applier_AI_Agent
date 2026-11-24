@@ -12,6 +12,7 @@ from typing import Any
 
 import anyio
 import pytest
+from mcp.types import CallToolResult, TextContent
 
 from aihawk import apply as apply_module
 from aihawk import readiness
@@ -1141,3 +1142,128 @@ def test_a_page_that_moved_on_is_never_taken_for_a_refusal_and_never_sent_again(
     browser.call_tool = moves  # type: ignore[method-assign]
     outcome = run(ScriptedModel(ready(), UNCHANGED), browser, tmp_path / "proof.png")
     assert outcome.status == "unconfirmed" and browser.clicks() == ["#send"]
+
+
+def served(text: str, typing: dict[str, Any] | None = None, error: bool = False) -> Any:
+    """An answer of the browser server: its sentence, and its typing as structured content when it gives one."""
+    state = None if typing is None else {"typing": {"state": "idle", "selector": None, "done": None, "total": None, "kept": None, **typing}}
+    return CallToolResult(content=[TextContent(type="text", text=text)], structuredContent=state, isError=error)
+
+
+class Server:
+    """A browser server that answers each tool with the next of its scripted answers (the last one stays)."""
+
+    def __init__(self, **scripts: list[Any]) -> None:
+        self.scripts = scripts
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
+        self.calls.append((name, arguments or {}))
+        script = self.scripts[name]
+        return script.pop(0) if len(script) > 1 else script[0]
+
+    def named(self, name: str) -> int:
+        return sum(call == name for call, _ in self.calls)
+
+
+TYPING = {"state": "typing", "selector": "#cover", "total": 2000}
+TYPED = {"state": "finished", "selector": "#cover", "done": 2000, "total": 2000, "kept": 1990}
+
+
+@pytest.fixture
+def no_pause(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(apply_module, "TYPING_POLL_S", 0)
+
+
+def fill_with(server: Server, *steps: list[Any]) -> Snapshots:
+    model = Snapshots(*steps, ready())
+    asyncio.run(fill_form(apply_module._Patient(server), [], model, "m", "the brief"))  # type: ignore[arg-type]
+    return model
+
+
+@pytest.mark.usefixtures("no_pause")
+def test_a_typing_that_outlives_the_call_is_waited_for_and_the_model_hears_once_that_it_ended() -> None:
+    server = Server(
+        browser_type=[served("still typing into #cover", TYPING)],
+        browser_status=[served("typing", {**TYPING, "done": 10}), served("typing", {**TYPING, "done": 900}), served("finished", TYPED)],
+    )
+    model = fill_with(server, [tool_call("browser_type", selector="#cover", text="x" * 2000)])
+    assert server.named("browser_type") == 1 and server.named("browser_status") == 3
+    answers = tool_answers(model.seen[-1])
+    assert len(answers) == 1 and "finished typing into #cover" in answers[0] and "1990 of 2000 characters" in answers[0]
+    assert len(model.seen) == 2  # the model was asked twice: before the call, and after its one answer
+
+
+@pytest.mark.usefixtures("no_pause")
+def test_an_action_refused_while_typing_waits_for_the_end_and_is_asked_again_once() -> None:
+    refusal = served("the browser is still typing into #cover", error=True)
+    server = Server(
+        browser_click=[refusal, served("clicked #next")],
+        browser_status=[served("typing", TYPING), served("typing", TYPING), served("finished", TYPED)],
+    )
+    model = fill_with(server, [tool_call("browser_click", selector="#next")])
+    assert server.named("browser_click") == 2
+    answers = tool_answers(model.seen[-1])
+    assert len(answers) == 1 and "1990 of 2000" in answers[0] and "clicked #next" in answers[0]
+
+
+@pytest.mark.usefixtures("no_pause")
+def test_a_refusal_that_still_stands_after_the_wait_is_not_asked_a_third_time() -> None:
+    refusal = served("the browser is still typing into #cover", TYPING, error=True)
+    server = Server(browser_type=[refusal], browser_status=[served("finished", TYPED)])
+    result = asyncio.run(apply_module._Patient(server).call_tool("browser_type", {"selector": "#a", "text": "b"}))  # type: ignore[arg-type]
+    assert result.isError and server.named("browser_type") == 2
+
+
+def test_the_wait_ends_at_its_ceiling_with_the_servers_last_status_as_it_is(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(apply_module, "TYPING_POLL_S", 0)
+    monkeypatch.setattr(apply_module, "TYPING_MAX_S", 0.05)
+    last = served("typing on", {**TYPING, "done": 3})
+    server = Server(browser_type=[served("still typing", TYPING)], browser_status=[last])
+    result = asyncio.run(apply_module._Patient(server).call_tool("browser_type", {"selector": "#cover", "text": "x"}))  # type: ignore[arg-type]
+    assert result is last and server.named("browser_status") > 1
+
+
+def test_the_ceiling_is_the_characters_at_a_slow_pace_and_a_margin_and_never_more_than_the_cap() -> None:
+    patient = apply_module._Patient(Server(browser_status=[served("done", TYPED)]))  # type: ignore[arg-type]
+    told: list[str] = []
+    patient.on_wait = told.append
+    asyncio.run(patient._until_ended({**TYPING, "total": 100}, None))
+    asyncio.run(patient._until_ended({**TYPING, "total": 5000}, None))
+    assert "at most 110s" in told[0] and f"at most {apply_module.TYPING_MAX_S:.0f}s" in told[2]
+
+
+@pytest.mark.usefixtures("no_pause")
+def test_a_typing_that_stopped_is_said_so_with_no_number_invented() -> None:
+    stopped = served("stopped", {**TYPING, "state": "stopped"})
+    server = Server(browser_type=[served("still typing", TYPING)], browser_status=[stopped])
+    result = asyncio.run(apply_module._Patient(server).call_tool("browser_type", {"selector": "#cover", "text": "x"}))  # type: ignore[arg-type]
+    assert "stopped before it finished" in result.content[0].text and "of 2000" not in result.content[0].text
+
+
+def test_a_type_that_finished_within_the_call_and_other_errors_pass_through_untouched() -> None:
+    quick = served("all 5 characters are in", {"state": "idle"})
+    broken = served("no such selector", error=True)
+    server = Server(browser_type=[quick], browser_click=[broken], browser_status=[served("ok", {"state": "idle"})])
+    patient = apply_module._Patient(server)  # type: ignore[arg-type]
+    assert asyncio.run(patient.call_tool("browser_type", {"selector": "#a", "text": "hello"})) is quick
+    assert asyncio.run(patient.call_tool("browser_click", {"selector": "#b"})) is broken
+    assert server.named("browser_type") == 1 and server.named("browser_click") == 1
+
+
+def test_a_server_that_gives_no_typing_state_is_left_alone() -> None:
+    plain = SimpleNamespace(isError=False, content=[SimpleNamespace(text="still typing into #x")])
+    server = Server(browser_type=[plain])
+    assert asyncio.run(apply_module._Patient(server).call_tool("browser_type", {}))  is plain  # type: ignore[arg-type]
+    assert server.named("browser_status") == 0
+
+
+@pytest.mark.usefixtures("no_pause")
+def test_the_trace_says_the_wait_in_two_lines_and_not_every_poll(tmp_path: Path) -> None:
+    server = Server(browser_type=[served("still typing", TYPING)], browser_status=[served("t", TYPING), served("t", TYPING), served("f", TYPED)])
+    traced = apply_module._Traced(apply_module._Patient(server), tmp_path / "trace.log", ())  # type: ignore[arg-type]
+    asyncio.run(traced.call_tool("browser_type", {"selector": "#cover", "text": "x"}))
+    lines = (tmp_path / "trace.log").read_text(encoding="utf-8").splitlines()
+    assert server.named("browser_status") == 3
+    assert [line for line in lines if "browser_status" in line] == []
+    assert len([line for line in lines if "typing" in line and "-> " not in line and "<- " not in line]) == 2
