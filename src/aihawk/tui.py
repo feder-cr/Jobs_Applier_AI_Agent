@@ -940,6 +940,9 @@ class AIHawk(App[None]):
                 return False
         session.set_mail(email, provider)
         name = MAIL_NAMES[provider]
+        if not self.browser_ready():
+            # The mailbox opens in the same browser: said, and the sign-in is left for when it can open.
+            return False
         while True:
             self.signing_in = True
             done = True

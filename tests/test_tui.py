@@ -1340,6 +1340,38 @@ def test_the_mail_question_is_plain_and_an_address_that_is_neither_gmail_nor_out
     asyncio.run(run())
 
 
+def test_a_mailbox_is_not_opened_in_a_browser_that_cannot_open_here(home: Path, resume: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import aihawk.readiness as readiness_module
+    import aihawk.session as session_module
+
+    monkeypatch.setattr(readiness_module, "PLATFORM", "linux")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.setattr(readiness_module.ctypes.util, "find_library", lambda name: "lib.so")
+    monkeypatch.setattr(readiness_module, "profile_is_held", lambda profile: False)
+
+    async def never(*args: Any) -> str:
+        raise AssertionError("the browser was opened")
+
+    monkeypatch.setattr(session_module, "sign_in_browser", never)
+    store = Store(home / "data" / "jobs.db")
+    store.set_answer("mail_provider", "")
+    store.close()
+
+    async def run() -> None:
+        app = scripted_app(home, resume)
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot, app)
+            assert isinstance(app.screen, TextPrompt)
+            app.screen.query_one(Input).value = "ada@gmail.com"
+            await pilot.press("enter")
+            await settle(pilot, app)
+            assert not isinstance(app.screen, SignIn)
+            words = readiness_module.INSTRUCTIONS["no_display"]
+            assert app.query_one(Said).said.count(words) == 2, "at the start, and again where the mailbox would open"
+
+    asyncio.run(run())
+
+
 def test_a_mailbox_that_still_shows_its_sign_in_page_is_a_question_with_no_empty_input(
     home: Path, resume: Path, restored_apply: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:

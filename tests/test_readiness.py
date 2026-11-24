@@ -18,7 +18,6 @@ def linux(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.setenv("DISPLAY", ":0")
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     monkeypatch.setattr(readiness.ctypes.util, "find_library", lambda name: f"lib{name}.so")
-    monkeypatch.setattr(readiness, "RESTRICTED_USERNS", tmp_path / "no-such-file")
     monkeypatch.setattr(readiness, "profile_is_held", lambda profile: False)
     return tmp_path
 
@@ -43,32 +42,30 @@ def test_no_desktop_is_a_cause_and_wayland_alone_is_not_a_desktop_the_engine_can
     )
 
 
-@pytest.mark.parametrize("missing", ["gtk-3", "asound", "X11-xcb", "dbus-glib-1"])
-def test_each_of_the_four_libraries_missing_is_a_cause_with_the_packages_to_install(linux: Path, monkeypatch: pytest.MonkeyPatch, missing: str) -> None:
-    monkeypatch.setattr(readiness.ctypes.util, "find_library", lambda name: None if name == missing else "lib.so")
+def test_libgtk_missing_is_a_cause_with_the_packages_to_install(linux: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(readiness.ctypes.util, "find_library", lambda name: None if name == "gtk-3" else "lib.so")
     assert names() == ["missing_libraries"]
     assert browser_blockers()[0].words == f"AIHawk's browser needs a few system packages. Run this once in a terminal, then try again: {APT_LINE}"
 
 
-def test_the_packages_are_one_line_that_works_on_ubuntu_24_04_and_before_it() -> None:
+def test_what_is_known_only_from_a_failed_launch_is_never_a_cause_before_it(linux: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ubuntu 24.04 restricts user namespaces by default and the engine works there; the other packages are not certain for
+    the Firefox it downloads."""
+    monkeypatch.setattr(readiness.ctypes.util, "find_library", lambda name: "lib.so" if name == "gtk-3" else None)
+    assert browser_blockers(linux / "profile") == []
+
+
+def test_the_security_settings_cause_is_said_in_plain_words_with_no_command() -> None:
+    assert readiness.INSTRUCTIONS["sandbox_blocked"] == "Your computer's security settings stopped AIHawk's browser from opening."
+    assert "sudo" not in readiness.INSTRUCTIONS["sandbox_blocked"]
+
+
+def test_the_packages_to_install_are_one_line_that_works_on_ubuntu_24_04_and_before_it() -> None:
     # The names with t64 of Ubuntu 24.04 first, the names before it after.
     assert APT_LINE == (
         "sudo apt-get install -y libgtk-3-0t64 libasound2t64 libx11-xcb1 libdbus-glib-1-2"
         " || sudo apt-get install -y libgtk-3-0 libasound2 libx11-xcb1 libdbus-glib-1-2"
     )
-
-
-def test_the_restriction_on_user_namespaces_is_a_cause_only_when_it_reads_one(linux: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    flag = linux / "restrict"
-    monkeypatch.setattr(readiness, "RESTRICTED_USERNS", flag)
-    assert names() == [], "not readable: nothing known to stop it"
-    flag.write_text("0\n", encoding="ascii")
-    assert names() == []
-    flag.write_text("1\n", encoding="ascii")
-    assert names() == ["sandbox_blocked"]
-    words = browser_blockers()[0].words
-    assert words.startswith("Your computer blocks something AIHawk's browser needs to open. Run this once in a terminal, then try again: ")
-    assert "kernel.apparmor_restrict_unprivileged_userns=0" in words
 
 
 def test_the_profile_held_by_a_live_process_is_a_cause_only_when_a_profile_is_given(linux: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -90,13 +87,10 @@ def test_the_profile_is_asked_of_the_servers_own_reading_of_its_lock(tmp_path: P
 
 
 def test_every_cause_found_is_listed_in_order(linux: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    flag = linux / "restrict"
-    flag.write_text("1", encoding="ascii")
-    monkeypatch.setattr(readiness, "RESTRICTED_USERNS", flag)
     monkeypatch.setattr(readiness, "profile_is_held", lambda profile: True)
     monkeypatch.delenv("DISPLAY")
     monkeypatch.setattr(readiness.ctypes.util, "find_library", lambda name: None)
-    assert names(linux) == ["no_display", "missing_libraries", "sandbox_blocked", "profile_locked"]
+    assert names(linux) == ["no_display", "missing_libraries", "profile_locked"]
 
 
 def test_a_mac_or_a_linux_of_another_kind_has_the_one_cause_that_the_browser_has_no_version(monkeypatch: pytest.MonkeyPatch) -> None:

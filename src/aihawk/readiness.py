@@ -4,6 +4,12 @@ One place answers it, for the start (before the person spends an evening choosin
 and for each application. The causes are named: the name goes to telemetry as the reason an application was not sent and as
 the step at the start, and never a path or a sentence. What the person is told is in plain words, without the names of the
 parts: the instruction is the thing to do.
+
+The rule: a precondition, found before the browser is tried, is only what certainly prevents the launch: no browser for this
+computer (a Mac, or Linux that is not x86-64), no DISPLAY, libgtk-3 missing, the profile held by a live process. Everything else
+(the other system packages, the system's security settings) is known only from a failed launch, through the cause the browser's
+server names (`apply.server_cause`), because a check that guesses would stop computers that send today: Ubuntu 24.04 restricts
+user namespaces by default and the engine works there, and the Firefox it downloads may not need every package APT_LINE lists.
 """
 
 from __future__ import annotations
@@ -24,23 +30,20 @@ MISSING_LIBRARIES = "missing_libraries"
 SANDBOX_BLOCKED = "sandbox_blocked"
 PROFILE_LOCKED = "profile_locked"
 
-# What the browser needs on Linux: the first line is for Ubuntu 24.04, whose libraries have a t64 in their names, and the second
-# for Debian and the Ubuntus before it. Both checked with apt on 2026-11-12. Their names for the finder are in LIBRARIES.
+# The packages to install when the browser's server says some are missing: the first line is for Ubuntu 24.04, whose libraries have
+# a t64 in their names, and the second for Debian and the Ubuntus before it. Both checked with apt on 2026-11-12.
 APT_LINE = (
     "sudo apt-get install -y libgtk-3-0t64 libasound2t64 libx11-xcb1 libdbus-glib-1-2"
     " || sudo apt-get install -y libgtk-3-0 libasound2 libx11-xcb1 libdbus-glib-1-2"
 )
-LIBRARIES = ("gtk-3", "asound", "X11-xcb", "dbus-glib-1")
-# Ubuntu 24.04 lets a program with no profile of its own make no user namespace, which the browser's sandbox needs: 1 is it
-# blocked. Turned off for good by a file in /etc/sysctl.d, and for now by the same line.
-RESTRICTED_USERNS = Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
-SANDBOX_LINE = "echo kernel.apparmor_restrict_unprivileged_userns=0 | sudo tee /etc/sysctl.d/60-aihawk.conf && sudo sysctl --system"
+# The one library that certainly prevents the launch when it is missing (the old check tested it too): the window is drawn with it.
+CERTAIN_LIBRARY = "gtk-3"
 
 # What to tell the person for each cause that does not depend on the computer, and the short phrase for "not sent, <phrase>".
 INSTRUCTIONS = {
     NO_DISPLAY: "AIHawk needs a desktop to open its browser. Open it from a terminal on the computer's own desktop, not over a remote connection.",
     MISSING_LIBRARIES: f"AIHawk's browser needs a few system packages. Run this once in a terminal, then try again: {APT_LINE}",
-    SANDBOX_BLOCKED: f"Your computer blocks something AIHawk's browser needs to open. Run this once in a terminal, then try again: {SANDBOX_LINE}",
+    SANDBOX_BLOCKED: "Your computer's security settings stopped AIHawk's browser from opening.",
     PROFILE_LOCKED: "Close the other AIHawk window or browser that is still open, then try again.",
 }
 WHY_NOT_SENT = {
@@ -85,8 +88,7 @@ def profile_is_held(profile: Path) -> bool:
 def browser_blockers(profile: Path | None = None) -> list[Blocker]:
     """Every reason the browser cannot open here, each with the one thing to do; empty when it can. Windows has none. A computer
     the browser has no version for has that one alone. On Linux it opens a window, drawn through X (the engine asks for it, so
-    a desktop that only speaks Wayland, with no DISPLAY, cannot show it), and needs four system libraries, the sandbox the system
-    may forbid, and the profile free when `profile` is given: a leftover Firefox holding it was how one computer failed six
+    a desktop that only speaks Wayland, with no DISPLAY, cannot show it), and needs libgtk-3 and the profile free when `profile` is given: a leftover Firefox holding it was how one computer failed six
     times in a row."""
     if words := no_version_words():
         return [Blocker(NO_BROWSER_HERE, words)]
@@ -95,13 +97,8 @@ def browser_blockers(profile: Path | None = None) -> list[Blocker]:
     found = []
     if not os.environ.get("DISPLAY"):
         found.append(NO_DISPLAY)
-    if any(ctypes.util.find_library(name) is None for name in LIBRARIES):
+    if ctypes.util.find_library(CERTAIN_LIBRARY) is None:
         found.append(MISSING_LIBRARIES)
-    try:
-        if RESTRICTED_USERNS.read_text(encoding="ascii").strip() == "1":
-            found.append(SANDBOX_BLOCKED)
-    except (OSError, ValueError):
-        pass  # Not Ubuntu 24.04 or later, or not readable: nothing known to stop it.
     if profile is not None and profile_is_held(profile):
         found.append(PROFILE_LOCKED)
     return [Blocker(name, INSTRUCTIONS[name]) for name in found]
