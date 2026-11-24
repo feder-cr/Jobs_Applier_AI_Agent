@@ -8,11 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import ctypes.util
 import hashlib
 import json
 import os
-import platform
 import re
 import sys
 import time
@@ -34,6 +32,8 @@ from openai import AsyncOpenAI
 from aihawk.config import DEFAULT_BASE_URL, DEFAULT_MODEL, DRY_RUN_ENV, KEY_ENV, dry_run
 from aihawk.database import Job
 from aihawk.llm import SPEND, chat, not_answering, structured
+from aihawk.readiness import WHY_NOT_SENT as BLOCKER_WHY
+from aihawk.readiness import browser_blockers, cause_named
 from aihawk.store import Proof, safe_name
 
 OPEN_DEADLINE_S = 900.0
@@ -87,46 +87,8 @@ WHY_NOT_SENT = {
     "budget": "your OrcaRouter budget for this month is used up",
     "model_not_allowed": "this key is not allowed to use the models AIHawk needs",
     "refused_other": "OrcaRouter refused this key for the request",
-    "no_browser_here": "the browser has no version for this computer",
-    "no_display": "the browser needs a desktop",
-    "browser_libraries": "the browser needs a few system packages",
+    **BLOCKER_WHY,
 }
-
-PLATFORM = sys.platform
-MACHINE = platform.machine()
-# What the browser needs on Linux, which the person is told when it is missing: the first line is for Ubuntu 24.04, whose
-# libraries have a t64 in their names, and the second for Debian and the Ubuntus before it. Both checked with apt on 2026-11-12.
-APT_LINE = (
-    "sudo apt-get install -y libgtk-3-0t64 libasound2t64 libx11-xcb1 libdbus-glib-1-2"
-    " || sudo apt-get install -y libgtk-3-0 libasound2 libx11-xcb1 libdbus-glib-1-2"
-)
-
-
-def no_browser_here() -> str:
-    """What to tell a person whose computer the browser has no version for; empty when it has one. The engine is built for
-    Windows and for Linux on x86-64: on a Mac, or a Linux of another kind, AIHawk finds and scores the jobs and cannot
-    send an application."""
-    if PLATFORM == "darwin":
-        return "On a Mac AIHawk finds and scores jobs, but cannot send applications yet: its browser has no Mac version."
-    if PLATFORM.startswith("linux") and MACHINE.lower() not in ("x86_64", "amd64"):
-        return "On this computer AIHawk finds and scores jobs, but cannot send applications yet: its browser has no version for it."
-    return ""
-
-
-def missing_for_the_browser() -> tuple[str, str] | None:
-    """Why the browser cannot open here, and what to tell the person; None when it can. It has no version for some
-    computers. On Linux it opens a window: with no desktop, or without the libraries a window needs, it cannot, and trying
-    would only wait for a download and then fail."""
-    if words := no_browser_here():
-        return "no_browser_here", words
-    if not PLATFORM.startswith("linux"):
-        return None
-    if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
-        return "no_display", "The browser needs a desktop: run AIHawk on a computer with a screen."
-    if ctypes.util.find_library("gtk-3") is None:
-        return "browser_libraries", f"The browser needs a few system packages. On Debian or Ubuntu: {APT_LINE}"
-    return None
-
 
 def why_not_sent(reason: str) -> str:
     """Why a job was not sent, in plain words; empty when no reason was kept (a job tried before reasons were)."""
@@ -821,6 +783,15 @@ class BrowserDidNotOpen(RuntimeError):
         self.reason = reason
 
 
+def server_cause(result: Any) -> str:
+    """The cause the browser's server names when `browser_open` fails, as a structured field and not in its sentences (a
+    separate change in the server is adding it: `structuredContent["cause"]`); one of readiness.CAUSES, so that it is told and
+    counted as the same cause found before the browser was tried. Empty until the server gives one, and for any name not known
+    here. The server's words are never matched."""
+    structured = getattr(result, "structuredContent", None)
+    return cause_named(structured.get("cause")) if isinstance(structured, dict) else ""
+
+
 async def _open_browser(session: Browser, profile: Path) -> None:
     # While the engine downloads, the server answers with its progress instead of a browser. Its words are its own to
     # change: the browser is ready when it can go to a page, and an action on one that is not open is an error.
@@ -829,7 +800,7 @@ async def _open_browser(session: Browser, profile: Path) -> None:
     while True:
         result = await session.call_tool("browser_open", {"profile": str(profile)})
         if result.isError:
-            raise BrowserDidNotOpen(BROWSER_DID_NOT_OPEN, f"the browser did not open: {tool_text(result)}")
+            raise BrowserDidNotOpen(server_cause(result) or BROWSER_DID_NOT_OPEN, f"the browser did not open: {tool_text(result)}")
         ready = await session.call_tool("browser_navigate", {"url": "about:blank"})
         if not ready.isError:
             if told := NOTE.get():
@@ -886,8 +857,10 @@ async def apply_to_job(
     account: tuple[str, str] | None = None,
 ) -> Outcome:
     """Open the browser on the person's profile, fill the job's form and send it: the person's selection and Enter came before."""
-    if (missing := missing_for_the_browser()) is not None:
-        return Outcome("blocked", missing[1], reason=missing[0])
+    # Without the profile: the application before this one closed the browser a moment ago, and its lock may not be gone yet. The
+    # profile is the browser server's to judge when it opens, and a refusal comes back as its cause (server_cause).
+    if blockers := browser_blockers():
+        return Outcome("blocked", blockers[0].words, reason=blockers[0].name)
     shot = data_dir / "proofs" / f"{safe_name(job.id)}.png"
     async with _server(cv_file.parent, data_dir / "browser") as (session, page_rules):
         listed = await session.list_tools()

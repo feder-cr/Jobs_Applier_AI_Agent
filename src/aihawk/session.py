@@ -14,7 +14,7 @@ from pathlib import Path
 from openai import AsyncOpenAI
 
 from aihawk import errors
-from aihawk.apply import MAILBOXES, NOTE, BrowserDidNotOpen, Outcome, apply_to_job, no_browser_here, signed_in, site_of
+from aihawk.apply import MAILBOXES, NOTE, BrowserDidNotOpen, Outcome, apply_to_job, signed_in, site_of
 from aihawk.apply import sign_in as sign_in_browser
 from aihawk.config import DEFAULT_BASE_URL, KEY_ENV, Config, ConfigError, load_config
 from aihawk.database import load_manifest, search
@@ -23,6 +23,7 @@ from aihawk.liveness import posting_is_closed
 from aihawk.llm import ACCOUNT_CAUSES, SPEND, Mark, cause, make_client, no_credit, not_answering, refused
 from aihawk.plugins import Plugin, always_plugins, load_plugins, plugin_for
 from aihawk.profile import CV_NAME_FILE, ensure_account_password, import_answers_file, install_resume, save_setting
+from aihawk.readiness import INSTRUCTIONS, browser_blockers
 from aihawk.scoring import NOT_JUDGED, NotAnswering, fits, question, score
 from aihawk.store import SUBMITTED, Store, Stored, write_applied
 from aihawk.telemetry import Telemetry, vendor_of
@@ -91,7 +92,7 @@ class Session:
         download of the same engine ends by clearing the folder the first one is starting the browser from (the core removes the
         engine's folder and moves its own copy in, and on Windows it deletes what is not in use). The jobs finishing in the middle
         of the first application is how that happened on 2026-11-12. The application downloads it, so nothing is lost."""
-        if self.engine is not None or self.browsers or no_browser_here() or self.engine_here():
+        if self.engine is not None or self.browsers or browser_blockers() or self.engine_here():
             return
         flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         try:
@@ -327,7 +328,7 @@ class Session:
             # One job's failure is reported and recorded; the next job still runs.
             if refused(error):
                 raise
-            outcome = Outcome("failed", errors.explained(error), reason=_why_failed(error))
+            outcome = Outcome("failed", _words_for(error), reason=_why_failed(error))
         finally:
             self.browsers -= 1
             NOTE.reset(told)
@@ -378,6 +379,14 @@ class Session:
             self.store.set_account(host, email)
         self.store.set_status(item.job.id, outcome.status, outcome.summary, outcome.reason)
         self.store.set_proof(item.job.id, outcome.proof)
+
+
+def _words_for(error: Exception) -> str:
+    """What an application's failure says in plain words: the thing to do when the browser's server named its cause, else the
+    error's own explanation."""
+    if isinstance(error, BrowserDidNotOpen) and error.reason in INSTRUCTIONS:
+        return INSTRUCTIONS[error.reason]
+    return errors.explained(error)
 
 
 def _why_failed(error: Exception) -> str:

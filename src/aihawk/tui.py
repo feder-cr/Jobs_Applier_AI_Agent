@@ -19,11 +19,12 @@ from textual.containers import Horizontal
 from textual.widgets import DataTable, Footer, Input, Static
 
 from aihawk import errors
-from aihawk.apply import MAILBOXES, Outcome, mail_provider, no_browser_here, why_not_sent
+from aihawk.apply import MAILBOXES, Outcome, mail_provider, why_not_sent
 from aihawk.config import KEY_ENV, KEY_URL, ConfigError
 from aihawk.database import DatabaseError
 from aihawk.library import LibraryError, Stopped
 from aihawk.llm import account_problem, error_name, explain, not_answering, refused
+from aihawk.readiness import browser_blockers
 from aihawk.scoring import NotAnswering
 from aihawk.screens import WIDE_ENOUGH, Choice, Confirm, JobDetails, Rows, Said, SendBatch, SentList, Settings, SignIn, StopSending, TextPrompt, clipped
 from aihawk.session import Session
@@ -215,9 +216,8 @@ class AIHawk(App[None]):
         self.show_heading()
         self.show_key_needed(False)
         self.session.telemetry.started()
-        if words := no_browser_here():
-            # Said before the person spends an evening choosing jobs they cannot apply to from here.
-            self.say(words)
+        # Said before the person spends an evening choosing jobs they cannot apply to from here.
+        self.browser_ready()
         self.start()
 
     def on_resize(self, event: events.Resize) -> None:
@@ -940,6 +940,9 @@ class AIHawk(App[None]):
                 return False
         session.set_mail(email, provider)
         name = MAIL_NAMES[provider]
+        if not self.browser_ready():
+            # The mailbox opens in the same browser: said, and the sign-in is left for when it can open.
+            return False
         while True:
             self.signing_in = True
             done = True
@@ -1024,12 +1027,19 @@ class AIHawk(App[None]):
             self.say("No resume given." if self.session.needs_resume() else "Your resume was not changed.")
 
     def action_apply(self) -> None:
-        if words := no_browser_here():
-            self.say(words)
-            return
-        if self.busy():
+        # After `busy`: a sign-in of our own holds the browser's profile, and that is not another window.
+        if self.busy() or not self.browser_ready():
             return
         self.apply_selected()
+
+    def browser_ready(self) -> bool:
+        """Whether the browser can open here; if not, each cause is said with the one thing to do, and told to the makers by its name."""
+        # The profile is asked about only while AIHawk's own browser is not open: then a lock is another window's.
+        blockers = browser_blockers(None if self.session.browsers else self.session.config.browser_profile)
+        for blocker in blockers:
+            self.say(blocker.words)
+            self.session.telemetry.step(blocker.name)
+        return not blockers
 
     def busy(self) -> bool:
         """Whether the browser is held, which it says: applications being sent, or a sign-in the person is in the middle of."""

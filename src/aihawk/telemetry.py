@@ -8,15 +8,17 @@ same list:
   settings with no network; empty when they say none). Every event asks PostHog not to look up where its IP address is, which it
   would do on arrival, down to the city: the country is the only place that is known.
 - `start_step`: each step of a start, not only the first one (the key, asked, whether the sign-up page was opened, saved or left for later, whether its account has no credit or the free plan is too little, and what the person
-  did about it, the resume, the jobs' download, the first job on the screen, and the mail, asked about when a form needs a site's code),
+  did about it, the resume, the jobs' download, the first job on the screen, and the mail, asked about when a form needs a site's code; and, when
+  the browser cannot open on this computer, the name of each cause from readiness.py: `no_browser_here`, `no_display`,
+  `missing_libraries`, `profile_locked`, said at the start and again when the person presses a to send),
   and the seconds since AIHawk opened;
   an `error` is the error's name with the status and the service's code when it has them, so that a 402 and a 403 are told
   apart. `app_closed`: the last step reached, whether a search ran, how long AIHawk was open.
 - `search`: how many jobs the search found, and how many of them were new to this computer.
 - `jobs_scored`: how many postings Jev read in a round, how many it answered for, how long the round took.
 - `application`: how it ended (submitted, unconfirmed, refused, blocked, failed), why in one word (a name from apply.py's
-  WHY_NOT_SENT, or the name of the error's class: `browser_did_not_open` and `browser_not_ready` when the browser could not be
-  opened, never the browser server's own words), the kind of site (the
+  WHY_NOT_SENT, or the name of the error's class: a cause from readiness.py when the browser cannot open here (also `sandbox_blocked`, and `missing_libraries` for the packages, when the browser's server names it after a failed launch), `browser_did_not_open` and
+  `browser_not_ready` when it could not be opened for a cause not known, never the browser server's own words), the kind of site (the
   plugin's name, or the vendor's name when the form's host is a known application site, else "other": never the host),
   the models, the gateway, the steps, the seconds, and the tokens each model took in and gave out. No price and no
   currency: the owner turns tokens into money himself. When the run ended stuck, where it went round in circles: `stuck_by`
