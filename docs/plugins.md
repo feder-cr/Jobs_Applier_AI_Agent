@@ -80,7 +80,7 @@ Two things are not road but boundary, and they stay. What the model must not do,
 
 - A form has no limit on steps, and every step costs. A shortcut that saves steps is worth a sentence, with its cost: "seen on a real form, 40 steps lost".
 - A form may reach a mailbox twice. The third arrival ends it. Do not promise the model more looks than that.
-- Every form already gets these rules, so do not write them again: never sign in or register through Google, LinkedIn or another service; stay on the form's own site and the mailbox; a closed posting is reported, not hunted elsewhere; a fact about the candidate that neither the CV nor the answers give is never written, and a required field asking for one ends the form.
+- Every form already gets these rules, so do not write them again: never sign in or register through Google, LinkedIn or another service; stay on the form's own site and the mailbox; a closed posting is reported, not hunted elsewhere; a missing answer is worked out from the CV and the answers, except an identifying number, code or street address, a third person's details, and a qualification or past employer the candidate does not claim, which end the form when required.
 - The plugins with `when: always`, `menus.md`, `gmail.md` and `outlook.md`, are added to every form. A site plugin that contradicts them leaves the model with two answers.
 
 ## A real example
