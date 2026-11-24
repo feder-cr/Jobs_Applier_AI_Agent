@@ -157,8 +157,9 @@ FINISH_TOOL = {
                     "enum": ["none", *BLOCKED_BY],
                     "description": "none when ready. When blocked, what stopped you: captcha (a puzzle or image challenge), "
                     "login (an account you cannot make or sign in to), closed (the posting is closed or gone), broken_page "
-                    "(the page does not work), missing_info (a required answer that neither the CV nor the answers give), "
-                    "other.",
+                    "(the page does not work), missing_info (a required identifying number, code or street address, a third "
+                    "person's details, or a qualification, licence, clearance or past employer that neither the CV nor the answers "
+                    "give: anything else is worked out, never this), other.",
                 },
                 "summary": {"type": "string", "description": "What you wrote in each field, or why you are blocked."},
                 "submit_selector": {"type": "string", "description": "CSS selector of the control that sends the form; empty unless ready."},
@@ -171,17 +172,19 @@ FINISH_TOOL = {
 SYSTEM = """\
 You fill in one job application form in a browser, for the candidate, from the CV and answers given to you.
 
-- Fill every required field. Take what those two texts say, and work out what they imply: years of experience, level,
-  languages, where the candidate can work, a start date. Employers, titles, dates and degrees come from the CV as written.
-- A question of fact about the candidate, such as whether they worked for this company or hold a licence, is answered yes
-  only where the CV or the answers say so. A name that merely resembles another is not an answer.
-- A required field they give you nothing for: a written one says "Please see my attached CV", in the form's language; a
-  list or a yes or no takes the closest option; a number takes the most plausible one. Leave optional fields they do not
-  answer empty.
-- That fallback never invents a fact about the candidate: a reference's name, a licence or certificate number, a
-  qualification they do not claim. A required field that asks for one ends the form: call finish_form with status blocked
-  and name that field. Of the fields you have no answer for, this is the one case where a required one is left for the
-  person.
+- Fill every required field from the CV and the answers, and work out what they imply: years of experience, level,
+  languages, where the candidate can work. Employers, titles, dates and degrees come from the CV as written.
+- Where they say nothing, give the most plausible answer for this candidate, in the form's language, and do not stop for
+  it: the closest list option; a salary that fits the role, seniority and country, or the form's "negotiable" or range
+  option; one month's notice or as soon as possible for notice, start and interview dates; yes to relocating or
+  travelling; the company's careers site as how they heard of the job; a short cover letter from the CV and the
+  posting; city and country from the CV, the city's main postal code; "prefer not to say" for pronouns or a title;
+  otherwise "Please see my attached CV". Leave optional fields empty.
+- Only three things are never guessed, and a required field asking for one ends the form: call finish_form with status
+  blocked, blocked_by missing_info, and name the field. An identifying number, code or street address (national ID, tax
+  code, passport, licence or certificate number); a third person's details (a reference's name or contact); a
+  qualification, licence, clearance or past employer they do not claim. A yes or no about those, or whether they worked
+  for this company, is yes only where the texts say so, else no, and stops nothing.
 - Tick the boxes the form requires.
 - Decline optional demographic questions (gender, ethnicity, disability, veteran status) with the form's "prefer not
   to say" option unless the answers text gives an answer.
@@ -710,8 +713,9 @@ async def run_on_page(
         # Nothing was sent, and the page says which fields it wants: the model gets one more turn on the form, then one more try.
         refusal = (
             f"{brief}\n\nYou filled this form and clicked send, but the page's own validation refused it: {sent.invalid}. Fix those "
-            "fields, then call finish_form again. A field that would need a fact about the candidate that the CV and the answers do "
-            "not give ends the form as blocked, with that field named."
+            "fields, then call finish_form again. A field that asks for an identifying number, code or street address, a third person's "
+            "details, or a qualification, licence, clearance or past employer that the CV and the answers do not give ends the form "
+            "as blocked, with that field named; any other field is worked out."
         )
         again = await fill_form(session, tools, client, model, refusal, guidance, page_rules)
         report = replace(again, steps=report.steps + again.steps, made_account=report.made_account or again.made_account)
