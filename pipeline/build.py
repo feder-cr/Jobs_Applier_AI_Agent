@@ -296,6 +296,24 @@ def _open_jobs_data(repo: str) -> Callable[[Path], str]:
     )  # fmt: skip
 
 
+LANDED_LISTS = (
+    "ai-engineer-jobs", "llm-engineer-jobs", "machine-learning-engineer-jobs", "applied-scientist-and-research-engineer-jobs",
+    "forward-deployed-engineer-jobs", "solutions-engineer-and-architect-jobs", "data-engineer-jobs", "data-scientist-jobs",
+    "ai-robotics-and-embedded-jobs", "gtm-engineer-jobs", "product-manager-jobs", "product-designer-jobs", "software-engineer-jobs",
+    "tech-internships", "new-grad-and-entry-level-tech-jobs", "remote-tech-jobs", "ai-lab-jobs", "visa-sponsorship-tech-jobs",
+    "summer-2027-ai-internships", "yc-startup-jobs", "india-tech-jobs",
+)
+
+
+def _landed(_: Path) -> str:
+    # One jobs.json per list; a role can sit on several lists, so each dedupeKey is kept once.
+    files = [f"{RAW}/landedjobs/{name}/HEAD/jobs.json" for name in LANDED_LISTS]
+    return select(
+        f"(SELECT DISTINCT ON (dedupeKey) * FROM read_json({files!r}, format='array', union_by_name=true, maximum_object_size=100000000))",
+        url="applyUrl", title="role", remote="remote = 'remote'", posted_at="posted",
+    )  # fmt: skip
+
+
 def _headcount(name: str) -> Callable[[Path], str]:
     return lambda _: select(
         f"read_parquet('{HF}/HeadcountLabs/{name}/resolve/main/data/part-0.parquet')",
@@ -422,6 +440,7 @@ SOURCES = (
         _unnested(f"{RAW}/raghavendra81422-boop/remote-jobs-open-to-india/HEAD/data.json", "jobs"),
         url="u.roliva_url", title="u.title", company="u.company", location="u.location", remote="TRUE", posted_at="u.posted_date",
     )),
+    Source("landed", "https://github.com/landedjobs/awesome-ai-native-jobs", "MIT", _landed),
     # Added on 2026-11-08 from Hugging Face, each dataset updated at least a few times a fortnight: see docs/data-sources.md.
     Source("open-apply", "https://huggingface.co/datasets/edwarddgao/open-apply-jobs", "MIT", _open_apply),
     Source("shifat", "https://huggingface.co/datasets/Shifat2110724169/job-market-intel-corpus", "CC-BY-4.0", lambda _: select(
